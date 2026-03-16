@@ -1,7 +1,9 @@
 import math
 from ctypes import c_void_p
-import AppKit
-import objc
+import os
+if os.name != 'nt':
+    import AppKit
+    import objc
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPainter, QColor, QPainterPath, QPen, QPixmap
@@ -106,10 +108,11 @@ class PillWidget(QWidget):
     def showEvent(self, event):
         """Called when the widget is first shown. Sets up native macOS properties."""
         super().showEvent(event)
-        try:
-            self._setup_native_macos()
-        except Exception as e:
-            print(f"Warning: native macOS setup failed: {e}")
+        if os.name != 'nt':
+            try:
+                self._setup_native_macos()
+            except Exception as e:
+                print(f"Warning: native macOS setup failed: {e}")
 
     def set_state(self, state: str):
         self._state = state

@@ -8,7 +8,7 @@ class HotkeyListener(QObject):
     """Global hotkey listener with two modes:
 
     1. Hold Ctrl+Option: press-and-hold recording
-    2. Double-tap Ctrl: hands-free mode (tap Ctrl again to stop)
+    2. Triple-tap Ctrl: hands-free mode (tap Ctrl again to stop)
     """
 
     pressed = pyqtSignal()
@@ -22,7 +22,7 @@ class HotkeyListener(QObject):
         self._hands_free = False
         self._listener: keyboard.Listener | None = None
 
-        # Double-tap detection
+        # Triple-tap detection
         self._last_ctrl_release = 0.0
         self._last_ctrl_press = 0.0
         self._ctrl_tap_count = 0
@@ -56,15 +56,15 @@ class HotkeyListener(QObject):
                 self.released.emit()
                 return
 
-            # Double-tap detection
+            # Triple-tap detection
             if now - self._last_ctrl_press < DOUBLE_TAP_INTERVAL:
                 self._ctrl_tap_count += 1
             else:
                 self._ctrl_tap_count = 1
             self._last_ctrl_press = now
 
-            if self._ctrl_tap_count >= 2 and not self._recording:
-                # Double-tap Ctrl → hands-free mode
+            if self._ctrl_tap_count >= 3 and not self._recording:
+                # Triple-tap Ctrl → hands-free mode
                 self._ctrl_tap_count = 0
                 self._hands_free = True
                 self._recording = True

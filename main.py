@@ -86,10 +86,18 @@ class FirstRunDialog(QDialog):
 # Launch at Login
 # ---------------------------------------------------------------------------
 def _is_launch_at_login() -> bool:
+    if os.name == 'nt':
+        # TODO: Implement Windows Startup folder check or Registry check
+        return False
     return os.path.exists(_PLIST_PATH)
 
 
 def _set_launch_at_login(enabled: bool):
+    if os.name == 'nt':
+        # TODO: Implement Windows Startup folder shortcut creation
+        print("Launch at login for Windows not yet implemented")
+        return
+
     if enabled:
         if getattr(sys, "frozen", False):
             # In .app bundle: executable is Contents/MacOS/SFlow
@@ -144,11 +152,15 @@ def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
     menu.addSeparator()
 
     dashboard = QAction(f"Abrir Dashboard (:{port})", menu)
-    dashboard.triggered.connect(lambda: subprocess.run(["open", f"http://localhost:{port}"], capture_output=True))
+    if os.name == 'nt':
+        dashboard.triggered.connect(lambda: subprocess.run(["cmd", "/c", "start", f"http://localhost:{port}"], capture_output=True))
+    else:
+        dashboard.triggered.connect(lambda: subprocess.run(["open", f"http://localhost:{port}"], capture_output=True))
     menu.addAction(dashboard)
     menu.addSeparator()
 
-    login_action = QAction("Iniciar con macOS", menu)
+    login_label = "Iniciar con Windows" if os.name == 'nt' else "Iniciar con macOS"
+    login_action = QAction(login_label, menu)
     login_action.setCheckable(True)
     login_action.setChecked(_is_launch_at_login())
     login_action.toggled.connect(_set_launch_at_login)
@@ -270,7 +282,8 @@ def main():
     port = start_web_server()
 
     # Request Accessibility permission (shows macOS prompt if not granted)
-    _ensure_accessibility()
+    if os.name != 'nt':
+        _ensure_accessibility()
 
     # Start the app
     sflow = SFlowApp()
@@ -278,6 +291,9 @@ def main():
 
     # System tray icon
     tray = _setup_tray(app, port)  # noqa: F841 — must keep reference alive
+
+    print("\nSFlow running. Ctrl+Alt (hold) to record, triple Ctrl to toggle hands-free.")
+    print(f"Dashboard available at http://localhost:{port}\n")
 
     sys.exit(app.exec())
 
