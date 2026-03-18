@@ -292,7 +292,7 @@ def main():
     # System tray icon
     tray = _setup_tray(app, port)  # noqa: F841 — must keep reference alive
 
-    print("\nSFlow running. Ctrl+Alt (hold) to record, triple Ctrl to toggle hands-free.")
+    print("\nSFlow running. Ctrl+Alt (hold) to record, double Ctrl to toggle hands-free.")
     print(f"Dashboard available at http://localhost:{port}\n")
 
     sys.exit(app.exec())
