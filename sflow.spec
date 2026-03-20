@@ -1,24 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for SFlow — macOS menu bar voice-to-text app."""
+"""PyInstaller spec for SFlow — Windows voice-to-text app."""
 
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
-
-# --- Collect PyObjC frameworks ---
-pyobjc_datas = []
-pyobjc_binaries = []
-pyobjc_hiddenimports = []
-
-for pkg in ['AppKit', 'Foundation', 'Cocoa', 'Quartz', 'CoreFoundation',
-            'objc', 'CoreText', 'ApplicationServices']:
-    try:
-        d, b, h = collect_all(pkg)
-        pyobjc_datas += d
-        pyobjc_binaries += b
-        pyobjc_hiddenimports += h
-    except Exception:
-        pass
 
 # --- Collect sounddevice portaudio binary ---
 sounddevice_datas = collect_data_files('_sounddevice_data')
@@ -32,20 +17,17 @@ datas = [
     ('logo.png', '.'),
 ]
 datas += sounddevice_datas
-datas += pyobjc_datas
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=pyobjc_binaries,
+    binaries=[],
     datas=datas,
     hiddenimports=[
-        # PyObjC
-        *pyobjc_hiddenimports,
         # pynput
         *pynput_hidden,
-        'pynput.keyboard._darwin',
-        'pynput.mouse._darwin',
+        'pynput.keyboard._win32',
+        'pynput.mouse._win32',
         # PyQt6
         'PyQt6.QtWidgets',
         'PyQt6.QtCore',
@@ -103,8 +85,7 @@ exe = EXE(
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    icon='SFlow.ico',
 )
 
 coll = COLLECT(
@@ -116,24 +97,4 @@ coll = COLLECT(
     upx=False,
     upx_exclude=[],
     name='SFlow',
-)
-
-app = BUNDLE(
-    coll,
-    name='SFlow.app',
-    icon='SFlow.icns',
-    bundle_identifier='so.saasfactory.sflow',
-    info_plist={
-        'LSUIElement': True,
-        'NSMicrophoneUsageDescription':
-            'SFlow necesita acceso al microfono para transcribir voz.',
-        'NSAppleEventsUsageDescription':
-            'SFlow usa AppleScript para pegar texto en otras aplicaciones.',
-        'CFBundleDisplayName': 'SFlow',
-        'CFBundleName': 'SFlow',
-        'CFBundleVersion': '1.0.0',
-        'CFBundleShortVersionString': '1.0.0',
-        'LSApplicationCategoryType': 'public.app-category.productivity',
-        'NSHighResolutionCapable': True,
-    },
 )

@@ -15,3 +15,6 @@ start_sflow.sh
 logo-v*.png
 logo-*-clean.png
 *.iconset/
+*.exe
+*.ico
+*.spec.bak

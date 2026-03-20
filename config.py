@@ -11,9 +11,10 @@ def _get_resource_dir() -> str:
 
 
 def _get_data_dir() -> str:
-    """Writable user data (DB, .env). In bundle → ~/Library/Application Support/SFlow/."""
+    """Writable user data (DB, .env). In bundle → %APPDATA%\\SFlow."""
     if getattr(sys, "frozen", False):
-        return os.path.expanduser("~/Library/Application Support/SFlow")
+        appdata = os.environ.get("APPDATA", os.path.expanduser("~"))
+        return os.path.join(appdata, "SFlow")
     return os.path.dirname(os.path.abspath(__file__))
 
 

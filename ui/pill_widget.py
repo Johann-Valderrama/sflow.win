@@ -1,9 +1,4 @@
 import math
-from ctypes import c_void_p
-import os
-if os.name != 'nt':
-    import AppKit
-    import objc
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPainter, QColor, QPainterPath, QPen, QPixmap
@@ -87,32 +82,6 @@ class PillWidget(QWidget):
             x = geo.center().x() - PILL_WIDTH_IDLE // 2
             y = geo.bottom() - 4 - PILL_HEIGHT
             self.move(x, y)
-
-    def _setup_native_macos(self):
-        """Configure native macOS window to float above everything without stealing focus."""
-        ns_view = objc.objc_object(c_void_p=c_void_p(self.winId().__int__()))
-        ns_window = ns_view.window()
-        # Float above all normal windows (like Spotlight does)
-        ns_window.setLevel_(AppKit.NSFloatingWindowLevel)
-        # Never steal focus
-        ns_window.setStyleMask_(ns_window.styleMask() | AppKit.NSWindowStyleMaskNonactivatingPanel)
-        # Don't hide when app loses focus
-        ns_window.setHidesOnDeactivate_(False)
-        # Visible on all Spaces/desktops
-        ns_window.setCollectionBehavior_(
-            AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
-            | AppKit.NSWindowCollectionBehaviorStationary
-            | AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
-        )
-
-    def showEvent(self, event):
-        """Called when the widget is first shown. Sets up native macOS properties."""
-        super().showEvent(event)
-        if os.name != 'nt':
-            try:
-                self._setup_native_macos()
-            except Exception as e:
-                print(f"Warning: native macOS setup failed: {e}")
 
     def set_state(self, state: str):
         self._state = state

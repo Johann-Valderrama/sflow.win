@@ -7,7 +7,7 @@ from config import DOUBLE_TAP_INTERVAL
 class HotkeyListener(QObject):
     """Global hotkey listener with two modes:
 
-    1. Hold Ctrl+Option: press-and-hold recording
+    1. Hold Ctrl+Alt: press-and-hold recording
     2. Double-tap Ctrl: hands-free mode (tap Ctrl again to stop)
     """
 

@@ -53,3 +53,41 @@ class TranscriptionDB:
     def count(self) -> int:
         with sqlite3.connect(self.db_path) as conn:
             return conn.execute("SELECT COUNT(*) FROM transcriptions").fetchone()[0]
+
+    def delete_by_id(self, transcription_id: int) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM transcriptions WHERE id = ?", (transcription_id,))
+            return cursor.rowcount
+
+    def delete_before_date(self, date_str: str) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM transcriptions WHERE date(created_at) <= date(?)", (date_str,))
+            return cursor.rowcount
+
+    def delete_by_date(self, date_str: str) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM transcriptions WHERE date(created_at) = date(?)", (date_str,))
+            return cursor.rowcount
+
+    def delete_since(self, date_str: str) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM transcriptions WHERE created_at >= ?", (date_str,))
+            return cursor.rowcount
+
+    def delete_all(self) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM transcriptions")
+            return cursor.rowcount
+
+    def delete_by_ids(self, ids: list) -> int:
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(f"DELETE FROM transcriptions WHERE id IN ({placeholders})", ids)
+            return cursor.rowcount
+
+    def update_text(self, transcription_id: int, new_text: str) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("UPDATE transcriptions SET text = ? WHERE id = ?", (new_text, transcription_id))
+            return cursor.rowcount

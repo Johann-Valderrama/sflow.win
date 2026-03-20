@@ -6,6 +6,7 @@ import sys
 import signal
 import subprocess
 import threading
+import winreg
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu,
     QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox,
@@ -22,19 +23,8 @@ from db.database import TranscriptionDB
 from web.server import start_web_server
 from config import LOGO_PATH, APP_DATA_DIR, GROQ_API_KEY
 
-
-def _ensure_accessibility() -> bool:
-    """Prompt macOS to grant Accessibility if not trusted. Returns True if already trusted."""
-    try:
-        from ApplicationServices import AXIsProcessTrustedWithOptions
-        return AXIsProcessTrustedWithOptions({"AXTrustedCheckOptionPrompt": True})
-    except Exception:
-        return True
-
-
-# LaunchAgent constants
-_LAUNCH_AGENT_LABEL = "so.saasfactory.sflow"
-_PLIST_PATH = os.path.expanduser(f"~/Library/LaunchAgents/{_LAUNCH_AGENT_LABEL}.plist")
+_REGISTRY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_REGISTRY_APP_NAME = "SFlow"
 
 
 # ---------------------------------------------------------------------------
@@ -83,52 +73,37 @@ class FirstRunDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
-# Launch at Login
+# Launch at Login (Windows Registry)
 # ---------------------------------------------------------------------------
 def _is_launch_at_login() -> bool:
-    if os.name == 'nt':
-        # TODO: Implement Windows Startup folder check or Registry check
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REGISTRY_KEY, 0, winreg.KEY_READ)
+        winreg.QueryValueEx(key, _REGISTRY_APP_NAME)
+        winreg.CloseKey(key)
+        return True
+    except FileNotFoundError:
         return False
-    return os.path.exists(_PLIST_PATH)
+    except Exception:
+        return False
 
 
 def _set_launch_at_login(enabled: bool):
-    if os.name == 'nt':
-        # TODO: Implement Windows Startup folder shortcut creation
-        print("Launch at login for Windows not yet implemented")
-        return
-
-    if enabled:
-        if getattr(sys, "frozen", False):
-            # In .app bundle: executable is Contents/MacOS/SFlow
-            exe = sys.executable
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REGISTRY_KEY, 0, winreg.KEY_SET_VALUE)
+        if enabled:
+            if getattr(sys, "frozen", False):
+                exe = sys.executable
+            else:
+                exe = f'"{sys.executable}" "{os.path.abspath(sys.argv[0])}"'
+            winreg.SetValueEx(key, _REGISTRY_APP_NAME, 0, winreg.REG_SZ, exe)
         else:
-            exe = os.path.abspath(sys.argv[0])
-
-        plist = f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>{_LAUNCH_AGENT_LABEL}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{exe}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <false/>
-</dict>
-</plist>"""
-        os.makedirs(os.path.dirname(_PLIST_PATH), exist_ok=True)
-        with open(_PLIST_PATH, "w") as f:
-            f.write(plist)
-        subprocess.run(["launchctl", "load", _PLIST_PATH], capture_output=True)
-    else:
-        if os.path.exists(_PLIST_PATH):
-            subprocess.run(["launchctl", "unload", _PLIST_PATH], capture_output=True)
-            os.remove(_PLIST_PATH)
+            try:
+                winreg.DeleteValue(key, _REGISTRY_APP_NAME)
+            except FileNotFoundError:
+                pass
+        winreg.CloseKey(key)
+    except Exception as e:
+        print(f"Error setting launch at login: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +112,6 @@ def _set_launch_at_login(enabled: bool):
 def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
     pixmap = QPixmap(LOGO_PATH)
     if pixmap.isNull():
-        # Fallback: empty icon (shouldn't happen but don't crash)
         icon = QIcon()
     else:
         icon = QIcon(pixmap.scaled(22, 22, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
@@ -152,15 +126,11 @@ def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
     menu.addSeparator()
 
     dashboard = QAction(f"Abrir Dashboard (:{port})", menu)
-    if os.name == 'nt':
-        dashboard.triggered.connect(lambda: subprocess.run(["cmd", "/c", "start", f"http://localhost:{port}"], capture_output=True))
-    else:
-        dashboard.triggered.connect(lambda: subprocess.run(["open", f"http://localhost:{port}"], capture_output=True))
+    dashboard.triggered.connect(lambda: subprocess.run(["cmd", "/c", "start", f"http://localhost:{port}"], capture_output=True))
     menu.addAction(dashboard)
     menu.addSeparator()
 
-    login_label = "Iniciar con Windows" if os.name == 'nt' else "Iniciar con macOS"
-    login_action = QAction(login_label, menu)
+    login_action = QAction("Iniciar con Windows", menu)
     login_action.setCheckable(True)
     login_action.setChecked(_is_launch_at_login())
     login_action.toggled.connect(_set_launch_at_login)
@@ -257,6 +227,9 @@ class SFlowApp(QObject):
 # Entry point
 # ---------------------------------------------------------------------------
 def main():
+    import ctypes
+    ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
+
     app = QApplication(sys.argv)
     app.setApplicationName("SFlow")
     app.setQuitOnLastWindowClosed(False)
@@ -264,26 +237,15 @@ def main():
     # Allow Ctrl+C to kill the app
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-    # First-run: ask for API key if missing (BEFORE hiding from Dock so dialog is visible)
+    # First-run: ask for API key if missing
     api_key = os.getenv("GROQ_API_KEY", "")
     if not api_key:
         dialog = FirstRunDialog()
         if dialog.exec() != QDialog.DialogCode.Accepted:
             sys.exit(0)
 
-    # Hide from Dock AFTER first-run dialog — menu bar only
-    try:
-        import AppKit
-        AppKit.NSApp.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
-    except Exception:
-        pass  # Non-critical: just means Dock icon stays
-
     # Start web dashboard
     port = start_web_server()
-
-    # Request Accessibility permission (shows macOS prompt if not granted)
-    if os.name != 'nt':
-        _ensure_accessibility()
 
     # Start the app
     sflow = SFlowApp()

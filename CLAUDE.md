@@ -2,56 +2,44 @@
 
 ## What is SFlow?
 
-SFlow is a macOS voice-to-text desktop tool that replaces Wispr Flow ($15/month). It captures audio via global hotkeys, transcribes using Groq Whisper API (~$0.02/hour), and auto-pastes text wherever the cursor is. It includes a floating pill UI overlay, real-time audio visualization, SQLite history, and a web dashboard.
+SFlow is a Windows voice-to-text desktop tool that replaces Wispr Flow ($15/month). It captures audio via global hotkeys, transcribes using Groq Whisper API (~$0.02/hour), and auto-pastes text wherever the cursor is. It includes a floating pill UI overlay, real-time audio visualization, SQLite history, and a web dashboard.
 
 ## Quick Start (Dev Mode)
 
 ```bash
-# 1. Install system dependency
-brew install portaudio
+# 1. Create virtual environment
+python -m venv venv
+venv\Scripts\activate
 
-# 2. Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# 3. Install Python dependencies
+# 2. Install Python dependencies
 pip install -r requirements.txt
 
-# 4. Set up environment
-cp .env.example .env
+# 3. Set up environment
+copy .env.example .env
 # Edit .env and add your GROQ_API_KEY (get one at https://console.groq.com/keys)
 
-# 5. Run
-python3 main.py
+# 4. Run
+python main.py
 ```
 
-## Build Desktop App (.app bundle)
+## Build Desktop App (.exe)
 
 ```bash
-# Build SFlow.app (generates icns, builds with PyInstaller, signs ad-hoc)
-bash build.sh
-
-# Install to Applications (MUST use ditto, not cp -r)
-ditto dist/SFlow.app /Applications/SFlow.app
-
-# Remove quarantine if needed
-xattr -cr /Applications/SFlow.app
+# Build SFlow.exe (uses PyInstaller)
+build.bat
 ```
 
-The .app bundle is self-contained (~107MB). No Python, no venv, no terminal needed.
-On first launch, if no API key exists in `~/Library/Application Support/SFlow/.env`,
-a dialog asks for it. The app lives in the menu bar (no Dock icon).
+The built app is in `dist\SFlow\SFlow.exe`. On first launch, if no API key exists in `%APPDATA%\SFlow\.env`, a dialog asks for it.
 
 ### Build Requirements
 - Python 3.12+ with venv
-- PyInstaller (installed automatically by build.sh)
-- portaudio (`brew install portaudio`)
+- PyInstaller (installed automatically by build.bat)
+- Optional: SFlow.ico (256x256 icon file for the .exe)
 
-## macOS Permissions Required
+## Permissions Required
 
-- **Accessibility**: System Settings → Privacy & Security → Accessibility → add your Terminal/IDE
+- **Administrator** (optional): May be needed for global hotkeys in some apps
 - **Microphone**: Automatically requested on first use
-- **Input Monitoring**: May be required for pynput — add your Terminal/IDE
 
 ## Project Structure
 
@@ -59,23 +47,22 @@ a dialog asks for it. The app lives in the menu bar (no Dock icon).
 sflow/
 ├── main.py                 # Entry point — tray icon, first-run dialog, launch-at-login, app controller
 ├── config.py               # All configuration constants (UI, audio, paths, bundle detection)
-├── sflow.spec              # PyInstaller spec for building .app bundle
-├── build.sh                # One-shot build script (icns → PyInstaller → sign)
+├── sflow.spec              # PyInstaller spec for building .exe
+├── build.bat               # One-shot build script for Windows
 ├── ui/
-│   ├── pill_widget.py      # Floating pill overlay (native macOS via PyObjC)
+│   ├── pill_widget.py      # Floating pill overlay (PyQt6 window flags)
 │   └── audio_visualizer.py # Real-time audio bars
 ├── core/
 │   ├── recorder.py         # sounddevice audio capture
 │   ├── transcriber.py      # Groq Whisper API client (lazy init, 10s timeout)
-│   ├── hotkey.py           # Global hotkeys (Ctrl+Shift hold + double-tap Ctrl)
-│   └── clipboard.py        # Focus save/restore + native paste via AppleScript
+│   ├── hotkey.py           # Global hotkeys (Ctrl+Alt hold + double-tap Ctrl)
+│   └── clipboard.py        # Focus save/restore + Ctrl+V paste via Win32 API
 ├── db/
 │   └── database.py         # SQLite CRUD
 ├── web/
 │   └── server.py           # Flask dashboard at localhost:5678 (auto-finds free port)
-├── logo.png                # Brand logo (full size, used for .icns generation)
-├── logo_small.png          # Brand logo (22x22 for menu bar + pill)
-├── SFlow.icns              # macOS app icon (generated from logo.png)
+├── logo.png                # Brand logo (full size)
+├── logo_small.png          # Brand logo (22x22 for tray + pill)
 ├── requirements.txt
 ├── .env                    # GROQ_API_KEY (never committed)
 └── .env.example
@@ -100,33 +87,16 @@ Hotkey Release (pynput thread)
 ## Critical Implementation Details
 
 ### 1. Qt Signal Threading (MUST use QueuedConnection)
-pynput emits signals from its own thread. Both QObjects live in the main thread, so Qt's `AutoConnection` incorrectly chooses `DirectConnection`. But since `emit()` comes from pynput's thread, UI modifications happen on the wrong thread — undefined behavior on macOS. **Always use explicit `Qt.ConnectionType.QueuedConnection`.**
+pynput emits signals from its own thread. Both QObjects live in the main thread, so Qt's `AutoConnection` incorrectly chooses `DirectConnection`. But since `emit()` comes from pynput's thread, UI modifications happen on the wrong thread — undefined behavior. **Always use explicit `Qt.ConnectionType.QueuedConnection`.**
 
-### 2. macOS Floating Window (MUST use PyObjC)
-Qt's `WindowDoesNotAcceptFocus` flag doesn't work properly on macOS. The pill must use native Cocoa APIs via PyObjC to float without stealing focus:
-```python
-import AppKit, objc
-from ctypes import c_void_p
+### 2. Floating Window (Qt Window Flags)
+The pill uses `FramelessWindowHint | WindowStaysOnTopHint | Tool | WindowDoesNotAcceptFocus` to float above all windows without stealing focus.
 
-ns_view = objc.objc_object(c_void_p=c_void_p(widget.winId().__int__()))
-ns_window = ns_view.window()
-ns_window.setLevel_(AppKit.NSFloatingWindowLevel)
-ns_window.setStyleMask_(ns_window.styleMask() | AppKit.NSWindowStyleMaskNonactivatingPanel)
-ns_window.setHidesOnDeactivate_(False)
-ns_window.setCollectionBehavior_(
-    AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
-    | AppKit.NSWindowCollectionBehaviorStationary
-    | AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
-)
-```
-This is the same approach used by Spotlight and Wispr Flow itself.
-
-### 3. Auto-Paste (MUST use native AppleScript, not pyautogui)
-pyautogui is unreliable on macOS when modifier keys were recently released. Use:
-- `save_frontmost_app()` before recording (via AppleScript)
-- `pbcopy` to copy text to clipboard
-- AppleScript to restore focus to saved app
-- AppleScript `keystroke "v" using command down` to paste
+### 3. Auto-Paste (Win32 API + pynput)
+- `save_frontmost_app()` saves the foreground window handle via `GetForegroundWindow()`
+- `Set-Clipboard` via PowerShell to copy text (handles UTF-8)
+- `SetForegroundWindow()` to restore focus
+- pynput `Controller` to simulate Ctrl+V
 
 ### 4. Audio Pipeline (thread-safe)
 sounddevice callback runs in audio thread — NEVER touch Qt widgets from it. Use `queue.Queue` as bridge:
@@ -137,36 +107,29 @@ sounddevice callback runs in audio thread — NEVER touch Qt widgets from it. Us
 Recordings under 0.3 seconds are accidental taps — skip transcription and return to idle.
 
 ### 6. Bundle vs Dev Mode (config.py)
-`config.py` detects `sys.frozen` to switch between dev and .app bundle:
+`config.py` detects `sys.frozen` to switch between dev and .exe bundle:
 - **Dev mode**: assets and data live in the project root directory
-- **Bundle mode**: read-only assets (logo) come from `sys._MEIPASS`, writable data (DB, .env) goes to `~/Library/Application Support/SFlow/`
+- **Bundle mode**: read-only assets (logo) come from `sys._MEIPASS`, writable data (DB, .env) goes to `%APPDATA%\SFlow\`
 
 ### 7. Desktop App Features (main.py)
-- **System Tray**: QSystemTrayIcon in menu bar with dashboard link, "Start with macOS" toggle, quit
-- **First-Run Dialog**: If GROQ_API_KEY is empty, shows a QDialog to enter it (saves to Application Support)
-- **Launch at Login**: Creates/removes a LaunchAgent plist in `~/Library/LaunchAgents/`
-- **Hide from Dock**: `NSApplicationActivationPolicyAccessory` via PyObjC (MUST be set AFTER first-run dialog)
+- **System Tray**: QSystemTrayIcon with dashboard link, "Iniciar con Windows" toggle, quit
+- **First-Run Dialog**: If GROQ_API_KEY is empty, shows a QDialog to enter it (saves to %APPDATA%\SFlow)
+- **Launch at Login**: Uses Windows Registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`)
 
 ### 8. Port Selection (web/server.py)
-Default port is 5678 (not 5000 which conflicts with AirPlay on macOS 12+). Auto-scans for free port.
-
-### 9. Building the .app (IMPORTANT)
-- Use `ditto` (not `cp -r`) to copy .app to /Applications — `cp -r` corrupts bundle metadata causing segfaults
-- The .icns is auto-generated from logo.png by build.sh if missing
-- Ad-hoc signing (`codesign --force --deep --sign -`) is sufficient for personal use
-- Remove quarantine after install: `xattr -cr /Applications/SFlow.app`
+Default port is 5678. Auto-scans for free port if occupied.
 
 ## Customization
 
 ### Hotkeys
 Edit `core/hotkey.py`:
-- **Hold mode**: Currently Ctrl+Shift. Change `is_ctrl`/`is_shift` checks.
+- **Hold mode**: Currently Ctrl+Alt. Change `is_ctrl`/`is_alt` checks.
 - **Hands-free mode**: Currently double-tap Ctrl within 400ms. Change `DOUBLE_TAP_INTERVAL` in config.py.
 
 ### UI Dimensions
 Edit `config.py`:
 - `PILL_WIDTH_IDLE` (34) — width when just showing logo
-- `PILL_WIDTH_RECORDING` (120) — width during recording with bars
+- `PILL_WIDTH_RECORDING` (100) — width during recording with bars
 - `PILL_WIDTH_STATUS` (52) — width for checkmark/spinner/error
 - `PILL_HEIGHT` (34) — height of pill
 - `PILL_MARGIN_BOTTOM` (14) — distance from bottom of screen
@@ -174,28 +137,18 @@ Edit `config.py`:
 ### Audio
 Edit `config.py`:
 - `SAMPLE_RATE` (16000) — 16kHz is optimal for speech
-- `NUM_BARS` (8) — number of visualizer bars
-- `BAR_GAIN` (6.0) — sensitivity of bars
-- `BAR_DECAY` (0.80) — how quickly bars fall
-
-## Building from Scratch
-
-If you want to rebuild this project from scratch using Claude, copy the `PRP.md` file and give it to Claude with the instruction: "Build this project following the PRP phases. Execute all phases sequentially, validating each one before moving to the next."
-
-The PRP contains all the architectural decisions, gotchas, and anti-patterns discovered during development. It serves as a complete blueprint.
+- `NUM_BARS` (20) — number of visualizer bars
+- `BAR_GAIN` (8.0) — sensitivity of bars
+- `BAR_DECAY` (0.85) — how quickly bars fall
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
-| Pill doesn't appear | Check Accessibility permissions for your terminal |
-| Pill appears but steals focus | Verify PyObjC is installed: `python3 -c "import AppKit"` |
-| Audio not captured | Check Microphone permissions + verify portaudio: `brew list portaudio` |
-| Paste doesn't work | Grant Accessibility permission to terminal; check `save_frontmost_app` |
+| Pill doesn't appear | Try running as Administrator |
+| Audio not captured | Check Microphone permissions in Windows Settings → Privacy |
+| Paste doesn't work | Run as Administrator for global hotkey/paste access |
 | Ctrl+C doesn't kill the process | This is handled by `signal.signal(signal.SIGINT, signal.SIG_DFL)` in main.py |
 | Short taps trigger transcription | Adjust the 0.3s threshold in `main.py` `_on_hotkey_released` |
-| Web dashboard not loading | Port auto-selects from 5678. Check: `lsof -i :5678` |
-| .app crashes on launch (segfault) | Was copied with `cp -r` instead of `ditto`. Reinstall with `ditto` |
-| .app blocked by macOS | Run `xattr -cr /Applications/SFlow.app` to remove quarantine |
-| First-run dialog invisible | Bug if NSApplicationActivationPolicyAccessory is set before dialog. Already fixed |
+| Web dashboard not loading | Port auto-selects from 5678. Check: `netstat -an | findstr 5678` |
 | Transcription hangs forever | API timeout is 10s. Check your GROQ_API_KEY is valid |
