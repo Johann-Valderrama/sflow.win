@@ -2,16 +2,18 @@
 """SFlow - Voice-to-text desktop tool powered by Groq Whisper."""
 
 import os
+import stat
 import sys
 import signal
 import subprocess
 import threading
+import logging
 import winreg
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu,
     QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox,
 )
-from PyQt6.QtCore import Qt, QObject, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, pyqtSlot, QTimer
 from PyQt6.QtGui import QIcon, QPixmap, QAction
 
 from ui.pill_widget import PillWidget
@@ -21,7 +23,9 @@ from core.hotkey import HotkeyListener
 from core.clipboard import paste_text, save_frontmost_app
 from db.database import TranscriptionDB
 from web.server import start_web_server
-from config import LOGO_PATH, APP_DATA_DIR, GROQ_API_KEY
+from config import LOGO_PATH, APP_DATA_DIR, GROQ_API_KEY, CHUNK_SECONDS, MAX_RECORDING_SECONDS
+
+logger = logging.getLogger(__name__)
 
 _REGISTRY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _REGISTRY_APP_NAME = "SFlow"
@@ -34,6 +38,7 @@ class FirstRunDialog(QDialog):
     """Shown when GROQ_API_KEY is missing on first launch."""
 
     def __init__(self):
+        """Construye el diálogo con campo de entrada para la API key y botón de guardar."""
         super().__init__()
         self.setWindowTitle("SFlow - Setup")
         self.setFixedWidth(420)
@@ -57,6 +62,7 @@ class FirstRunDialog(QDialog):
         self.setLayout(layout)
 
     def _save_key(self):
+        """Valida la API key, la guarda en .env y la establece en el entorno."""
         key = self.key_input.text().strip()
         if not key.startswith("gsk_") or len(key) < 20:
             QMessageBox.warning(self, "Error", "La clave debe comenzar con 'gsk_' y tener al menos 20 caracteres.")
@@ -67,6 +73,12 @@ class FirstRunDialog(QDialog):
         with open(env_path, "w") as f:
             f.write(f"GROQ_API_KEY={key}\n")
 
+        # Restrict .env permissions to current user (best-effort on Windows)
+        try:
+            os.chmod(env_path, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
+
         # Set in current process so Transcriber picks it up
         os.environ["GROQ_API_KEY"] = key
         self.accept()
@@ -76,6 +88,7 @@ class FirstRunDialog(QDialog):
 # Launch at Login (Windows Registry)
 # ---------------------------------------------------------------------------
 def _is_launch_at_login() -> bool:
+    """Verifica si SFlow está configurado para iniciar con Windows (registro)."""
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REGISTRY_KEY, 0, winreg.KEY_READ)
         winreg.QueryValueEx(key, _REGISTRY_APP_NAME)
@@ -88,6 +101,7 @@ def _is_launch_at_login() -> bool:
 
 
 def _set_launch_at_login(enabled: bool):
+    """Activa o desactiva el inicio automático de SFlow con Windows vía registro."""
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REGISTRY_KEY, 0, winreg.KEY_SET_VALUE)
         if enabled:
@@ -103,13 +117,14 @@ def _set_launch_at_login(enabled: bool):
                 pass
         winreg.CloseKey(key)
     except Exception as e:
-        print(f"Error setting launch at login: {e}")
+        logger.error("Error setting launch at login: %s", e)
 
 
 # ---------------------------------------------------------------------------
 # System tray
 # ---------------------------------------------------------------------------
 def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
+    """Crea el icono de bandeja del sistema con menú de dashboard, auto-inicio y salir."""
     pixmap = QPixmap(LOGO_PATH)
     if pixmap.isNull():
         icon = QIcon()
@@ -157,12 +172,23 @@ class SFlowApp(QObject):
     transcription_error = pyqtSignal(str)
 
     def __init__(self):
+        """Inicializa componentes (recorder, transcriber, DB, hotkey, pill) y conecta señales."""
         super().__init__()
         self.recorder = AudioRecorder()
         self.transcriber = Transcriber()
         self.db = TranscriptionDB()
         self.hotkey = HotkeyListener()
         self.pill = PillWidget()
+
+        # Chunked transcription state
+        self._chunk_texts: list[str] = []
+        self._chunk_timer = QTimer()
+        self._chunk_timer.timeout.connect(self._flush_chunk)
+
+        # Safety timer: auto-stop forgotten recordings
+        self._safety_timer = QTimer()
+        self._safety_timer.setSingleShot(True)
+        self._safety_timer.timeout.connect(self._on_hotkey_released)
 
         # Connect visualizer to recorder's audio queue
         self.pill.visualizer.set_audio_queue(self.recorder.audio_queue)
@@ -174,18 +200,51 @@ class SFlowApp(QObject):
         self.transcription_error.connect(self._on_transcription_error, Qt.ConnectionType.QueuedConnection)
 
     def start(self):
+        """Inicia el listener de hotkeys y muestra la pill en estado idle."""
         self.hotkey.start()
         self.pill.show()
         self.pill.set_state(PillWidget.STATE_IDLE)
 
     @pyqtSlot()
     def _on_hotkey_pressed(self):
+        """Guarda la ventana activa e inicia la grabación de audio."""
         save_frontmost_app()
-        self.recorder.start()
+        try:
+            self.recorder.start()
+        except Exception as e:
+            logger.error("Failed to start recording (no microphone?): %s", e)
+            self.pill.set_state(PillWidget.STATE_ERROR)
+            return
+        self._chunk_texts.clear()
+        self._chunk_timer.start(CHUNK_SECONDS * 1000)
+        self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
         self.pill.set_state(PillWidget.STATE_RECORDING)
+
+    def _flush_chunk(self):
+        """Extract and transcribe accumulated audio chunk in background."""
+        chunk_buf = self.recorder.extract_chunk()
+        if chunk_buf:
+            prompt = self._chunk_texts[-1][-200:] if self._chunk_texts else None
+            threading.Thread(
+                target=self._chunk_worker,
+                args=(chunk_buf, prompt),
+                daemon=True,
+            ).start()
+
+    def _chunk_worker(self, wav_buffer, prompt):
+        """Transcribe a single chunk in background, accumulate text."""
+        try:
+            text = self.transcriber.transcribe(wav_buffer, prompt=prompt)
+            if text:
+                self._chunk_texts.append(text)
+        except Exception as e:
+            logger.error("Chunk transcription failed: %s", e)
 
     @pyqtSlot()
     def _on_hotkey_released(self):
+        """Detiene la grabación y lanza la transcripción de los frames restantes."""
+        self._safety_timer.stop()
+        self._chunk_timer.stop()
         duration = self.recorder.stop()
         self.pill.set_state(PillWidget.STATE_PROCESSING)
 
@@ -194,19 +253,23 @@ class SFlowApp(QObject):
             return
 
         wav_buffer = self.recorder.get_wav_buffer()
-        recording_duration = self.recorder.get_duration()
         thread = threading.Thread(
-            target=self._transcribe_worker,
-            args=(wav_buffer, recording_duration),
+            target=self._transcribe_final,
+            args=(wav_buffer, duration),
             daemon=True,
         )
         thread.start()
 
-    def _transcribe_worker(self, wav_buffer, duration):
+    def _transcribe_final(self, wav_buffer, duration):
+        """Transcribe remaining frames, join with chunk texts, emit result."""
         try:
-            text = self.transcriber.transcribe(wav_buffer)
+            prompt = self._chunk_texts[-1][-200:] if self._chunk_texts else None
+            text = self.transcriber.transcribe(wav_buffer, prompt=prompt)
             if text:
-                self.transcription_done.emit(text, duration)
+                self._chunk_texts.append(text)
+            full_text = " ".join(self._chunk_texts)
+            if full_text.strip():
+                self.transcription_done.emit(full_text.strip(), duration)
             else:
                 self.transcription_error.emit("No speech detected")
         except Exception as e:
@@ -214,12 +277,14 @@ class SFlowApp(QObject):
 
     @pyqtSlot(str, float)
     def _on_transcription_done(self, text: str, duration: float):
+        """Pega el texto transcrito en la app activa y lo guarda en la base de datos."""
         paste_text(text)
         self.db.insert(text=text, duration_seconds=duration)
         self.pill.set_state(PillWidget.STATE_DONE)
 
     @pyqtSlot(str)
     def _on_transcription_error(self, error: str):
+        """Muestra estado de error en la pill cuando falla la transcripción."""
         self.pill.set_state(PillWidget.STATE_ERROR)
 
 
@@ -227,6 +292,7 @@ class SFlowApp(QObject):
 # Entry point
 # ---------------------------------------------------------------------------
 def main():
+    """Punto de entrada: configura Qt, verifica API key, inicia dashboard y app."""
     import ctypes
     ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
 
@@ -250,6 +316,9 @@ def main():
     # Start the app
     sflow = SFlowApp()
     sflow.start()
+
+    # Clean up hotkey listener on quit
+    app.aboutToQuit.connect(sflow.hotkey.stop)
 
     # System tray icon
     tray = _setup_tray(app, port)  # noqa: F841 — must keep reference alive

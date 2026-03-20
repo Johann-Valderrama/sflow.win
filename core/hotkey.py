@@ -15,6 +15,7 @@ class HotkeyListener(QObject):
     released = pyqtSignal()
 
     def __init__(self):
+        """Inicializa el estado de teclas y la detección de doble-tap."""
         super().__init__()
         self._ctrl_held = False
         self._alt_held = False
@@ -23,11 +24,11 @@ class HotkeyListener(QObject):
         self._listener: keyboard.Listener | None = None
 
         # Double-tap detection
-        self._last_ctrl_release = 0.0
         self._last_ctrl_press = 0.0
         self._ctrl_tap_count = 0
 
     def start(self):
+        """Inicia el listener global de teclado en un hilo daemon."""
         self._listener = keyboard.Listener(
             on_press=self._on_press,
             on_release=self._on_release,
@@ -36,11 +37,13 @@ class HotkeyListener(QObject):
         self._listener.start()
 
     def stop(self):
+        """Detiene y libera el listener de teclado."""
         if self._listener:
             self._listener.stop()
             self._listener = None
 
     def _on_press(self, key):
+        """Detecta Ctrl+Alt (hold) o doble-tap Ctrl (hands-free) y emite pressed."""
         is_ctrl = key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r)
         is_alt = key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r,
                          keyboard.Key.alt_gr)
@@ -86,13 +89,13 @@ class HotkeyListener(QObject):
             self.pressed.emit()
 
     def _on_release(self, key):
+        """Detecta liberación de teclas y emite released en modo hold."""
         is_ctrl = key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r)
         is_alt = key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r,
                          keyboard.Key.alt_gr)
 
         if is_ctrl:
             self._ctrl_held = False
-            self._last_ctrl_release = time.time()
         elif is_alt:
             self._alt_held = False
 

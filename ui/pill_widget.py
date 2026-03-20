@@ -26,6 +26,7 @@ class PillWidget(QWidget):
     STATE_ERROR = "error"
 
     def __init__(self):
+        """Configura la ventana flotante, timers de animación y el visualizador de audio."""
         super().__init__()
         self._state = self.STATE_IDLE
         self._target_width = PILL_WIDTH_IDLE
@@ -75,15 +76,17 @@ class PillWidget(QWidget):
         self._position_on_screen()
 
     def _position_on_screen(self):
+        """Centra la pill horizontalmente en la parte inferior de la pantalla."""
         screen = QApplication.primaryScreen()
         if screen:
             geo = screen.availableGeometry()
             # Anchor left edge so expansion always goes right
             x = geo.center().x() - PILL_WIDTH_IDLE // 2
-            y = geo.bottom() - 4 - PILL_HEIGHT
+            y = geo.bottom() - PILL_MARGIN_BOTTOM - PILL_HEIGHT
             self.move(x, y)
 
     def set_state(self, state: str):
+        """Cambia el estado visual de la pill (idle, recording, processing, done, error)."""
         self._state = state
         self._show_checkmark = False
         self._show_spinner = False
@@ -122,10 +125,12 @@ class PillWidget(QWidget):
         self.update()
 
     def _animate_spinner(self):
+        """Avanza el ángulo del spinner de procesamiento y repinta."""
         self._spinner_angle = (self._spinner_angle + 30) % 360
         self.update()
 
     def _animate_width(self):
+        """Interpola suavemente el ancho de la pill hacia el tamaño objetivo."""
         diff = self._target_width - self._current_width
         if abs(diff) < 1:
             self._current_width = float(self._target_width)
@@ -141,6 +146,7 @@ class PillWidget(QWidget):
         self.update()
 
     def _layout_children(self):
+        """Reposiciona el visualizador de audio dentro de la pill."""
         w = int(self._current_width)
         h = PILL_HEIGHT
         logo_pad = 6
@@ -150,6 +156,7 @@ class PillWidget(QWidget):
             self.visualizer.setGeometry(logo_area, 2, content_w, h - 4)
 
     def paintEvent(self, event):
+        """Dibuja el fondo redondeado, logo e iconos de estado (check, spinner, error)."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w = self.width()
@@ -204,14 +211,25 @@ class PillWidget(QWidget):
         painter.end()
 
     def mousePressEvent(self, event):
+        """Registra la posición inicial para arrastrar la pill."""
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
 
     def mouseMoveEvent(self, event):
+        """Mueve la pill siguiendo el cursor durante el arrastre, limitada a la pantalla."""
         if event.buttons() == Qt.MouseButton.LeftButton and self._drag_pos:
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            new_pos = event.globalPosition().toPoint() - self._drag_pos
+            screen = QApplication.primaryScreen()
+            if screen:
+                geo = screen.availableGeometry()
+                x = max(geo.left(), min(new_pos.x(), geo.right() - self.width()))
+                y = max(geo.top(), min(new_pos.y(), geo.bottom() - self.height()))
+                new_pos.setX(x)
+                new_pos.setY(y)
+            self.move(new_pos)
             event.accept()
 
     def mouseReleaseEvent(self, event):
+        """Finaliza el arrastre de la pill."""
         self._drag_pos = None

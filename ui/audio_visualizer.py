@@ -4,13 +4,14 @@ import numpy as np
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import QTimer, Qt, QRectF
 from PyQt6.QtGui import QPainter, QColor, QLinearGradient
-from config import NUM_BARS, VIZ_FPS, BAR_DECAY, BAR_GAIN
+from config import NUM_BARS, VIZ_FPS, BAR_GAIN
 
 
 class AudioVisualizer(QWidget):
     """Premium audio visualizer. Ultra-thin luminous bars with glow and spring physics."""
 
     def __init__(self, parent=None):
+        """Inicializa las barras, velocidades y el timer de actualización."""
         super().__init__(parent)
         self.num_bars = NUM_BARS
         self.bar_values = [0.0] * self.num_bars
@@ -23,20 +24,24 @@ class AudioVisualizer(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
     def set_audio_queue(self, q: queue.Queue):
+        """Asigna la cola de audio compartida con el recorder."""
         self.audio_queue = q
 
     def start(self):
+        """Reinicia las barras y arranca el timer de actualización."""
         self.bar_values = [0.0] * self.num_bars
         self._velocities = [0.0] * self.num_bars
         self._timer.start()
 
     def stop(self):
+        """Detiene el timer y resetea las barras a cero."""
         self._timer.stop()
         self.bar_values = [0.0] * self.num_bars
         self._velocities = [0.0] * self.num_bars
         self.update()
 
     def _update_bars(self):
+        """Lee chunks de audio, calcula FFT y aplica física de resorte a las barras."""
         if not self.audio_queue:
             return
 
@@ -81,6 +86,7 @@ class AudioVisualizer(QWidget):
         self.update()
 
     def paintEvent(self, event):
+        """Dibuja las barras luminosas con gradiente vertical y efecto de glow."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 

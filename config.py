@@ -55,8 +55,14 @@ LOGO_PATH = os.path.join(_RESOURCE_DIR, "logo_small.png")
 # Audio Visualizer
 NUM_BARS = 20
 VIZ_FPS = 60
-BAR_DECAY = 0.85
 BAR_GAIN = 8.0
+
+# Chunked recording
+CHUNK_SECONDS = 60        # Transcribe every 60s during recording
+CHUNK_OVERLAP_SECONDS = 1 # Overlap between chunks to avoid cutting words
+
+# Recording safety net
+MAX_RECORDING_SECONDS = 600  # Auto-stop forgotten recordings (e.g. hands-free mode)
 
 # Hotkey
 DOUBLE_TAP_INTERVAL = 0.4  # seconds for double-tap detection

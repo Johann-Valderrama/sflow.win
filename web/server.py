@@ -1,12 +1,17 @@
+import re
+import secrets
 import socket
 import threading
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, render_template_string, request
 from db.database import TranscriptionDB
-from config import DB_PATH
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
+app.config["SECRET_KEY"] = secrets.token_hex(32)
+
+# Single DB instance (avoids re-running DDL on every request)
+_db = TranscriptionDB()
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -15,6 +20,7 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SFlow - Transcripciones</title>
+    <!-- NOTE: Tailwind loaded from CDN. Accepted risk: app is local-only, dashboard on localhost. -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
@@ -132,6 +138,7 @@ HTML_TEMPLATE = """
         let renderedData = [];
         let editingId = null;
         let selectedIds = new Set();
+        let expandedIds = new Set();
         let anchorIndex = null;
 
         async function loadData() {
@@ -201,11 +208,28 @@ HTML_TEMPLATE = """
             }).join('');
 
             syncCheckboxUI();
+
+            // Restore expanded state after re-render
+            expandedIds.forEach(id => {
+                const row = tbody.querySelector(`tr[data-id="${id}"]`);
+                if (row) {
+                    const preview = row.querySelector('.text-preview');
+                    if (preview) preview.classList.add('expanded');
+                }
+            });
         }
 
         function toggleExpand(row) {
             const preview = row.querySelector('.text-preview');
-            if (preview) preview.classList.toggle('expanded');
+            const id = parseInt(row.dataset.id);
+            if (preview) {
+                preview.classList.toggle('expanded');
+                if (preview.classList.contains('expanded')) {
+                    expandedIds.add(id);
+                } else {
+                    expandedIds.delete(id);
+                }
+            }
         }
 
         function copyText(index, btn) {
@@ -401,6 +425,16 @@ HTML_TEMPLATE = """
             renderTable(allData.filter(t => t.text.toLowerCase().includes(q)));
         });
 
+        // Collapse all expanded rows on Escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                expandedIds.clear();
+                document.querySelectorAll('.text-preview.expanded').forEach(el => {
+                    el.classList.remove('expanded');
+                });
+            }
+        });
+
         // Auto-refresh every 5 seconds
         loadData();
         setInterval(loadData, 5000);
@@ -409,42 +443,63 @@ HTML_TEMPLATE = """
 </html>
 """
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+@app.before_request
+def _csrf_check():
+    """Block cross-origin requests to mutating endpoints."""
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return
+    origin = request.headers.get("Origin", "")
+    referer = request.headers.get("Referer", "")
+    # Allow requests with no Origin/Referer (same-origin browser, curl, etc.)
+    if not origin and not referer:
+        return
+    allowed_prefixes = ("http://localhost", "http://127.0.0.1")
+    if origin and not any(origin.startswith(p) for p in allowed_prefixes):
+        return jsonify({"error": "CSRF: origin not allowed"}), 403
+    if referer and not origin:
+        if not any(referer.startswith(p) for p in allowed_prefixes):
+            return jsonify({"error": "CSRF: referer not allowed"}), 403
+
 
 @app.route("/")
 def index():
+    """Sirve la página principal del dashboard de transcripciones."""
     return render_template_string(HTML_TEMPLATE)
 
 
 @app.route("/api/transcriptions")
 def get_transcriptions():
-    db = TranscriptionDB()
-    return jsonify(db.get_recent(limit=200))
+    """Retorna las últimas 200 transcripciones en formato JSON."""
+    return jsonify(_db.get_recent(limit=200))
 
 
 @app.route("/api/transcriptions/<int:tid>", methods=["DELETE"])
 def delete_transcription(tid):
-    db = TranscriptionDB()
-    deleted = db.delete_by_id(tid)
+    """Elimina una transcripción individual por su ID."""
+    deleted = _db.delete_by_id(tid)
     return jsonify({"deleted": deleted})
 
 
 @app.route("/api/transcriptions", methods=["DELETE"])
 def delete_transcriptions_bulk():
-    db = TranscriptionDB()
+    """Elimina transcripciones en lote por rango: day, week, month o all."""
     range_type = request.args.get("range", "")
     if range_type == "all":
-        deleted = db.delete_all()
+        deleted = _db.delete_all()
     elif range_type == "day":
         date = request.args.get("date", "")
-        if not date:
-            return jsonify({"error": "date parameter required"}), 400
-        deleted = db.delete_by_date(date)
+        if not date or not _DATE_RE.match(date):
+            return jsonify({"error": "date parameter required (YYYY-MM-DD)"}), 400
+        deleted = _db.delete_by_date(date)
     elif range_type == "week":
         since = (datetime.utcnow() - timedelta(weeks=1)).strftime("%Y-%m-%d")
-        deleted = db.delete_since(since)
+        deleted = _db.delete_since(since)
     elif range_type == "month":
         since = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%d")
-        deleted = db.delete_since(since)
+        deleted = _db.delete_since(since)
     else:
         return jsonify({"error": "invalid range"}), 400
     return jsonify({"deleted": deleted})
@@ -452,28 +507,31 @@ def delete_transcriptions_bulk():
 
 @app.route("/api/transcriptions/delete-batch", methods=["POST"])
 def delete_transcriptions_batch():
-    db = TranscriptionDB()
+    """Elimina múltiples transcripciones por una lista de IDs en el body JSON."""
     data = request.get_json()
     if not data or "ids" not in data:
         return jsonify({"error": "ids field required"}), 400
-    ids = [int(i) for i in data["ids"]]
-    deleted = db.delete_by_ids(ids)
+    try:
+        ids = [int(i) for i in data["ids"]]
+    except (ValueError, TypeError):
+        return jsonify({"error": "ids must be a list of integers"}), 400
+    deleted = _db.delete_by_ids(ids)
     return jsonify({"deleted": deleted})
 
 
 @app.route("/api/transcriptions/<int:tid>", methods=["PUT"])
 def update_transcription(tid):
-    db = TranscriptionDB()
+    """Actualiza el texto de una transcripción existente."""
     data = request.get_json()
     if not data or "text" not in data:
         return jsonify({"error": "text field required"}), 400
-    updated = db.update_text(tid, data["text"])
+    updated = _db.update_text(tid, data["text"])
     if updated == 0:
         return jsonify({"error": "not found"}), 404
     return jsonify({"ok": True})
 
 
-def _find_free_port(start: int = 5678, attempts: int = 10) -> int:
+def _find_free_port(start: int = 5678, attempts: int = 50) -> int:
     """Find an available port starting from `start`."""
     for port in range(start, start + attempts):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -482,7 +540,7 @@ def _find_free_port(start: int = 5678, attempts: int = 10) -> int:
                 return port
             except OSError:
                 continue
-    return start  # fallback
+    raise RuntimeError(f"No free port found in range {start}-{start + attempts - 1}")
 
 
 def start_web_server(port: int = None) -> int:
