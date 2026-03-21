@@ -13,6 +13,7 @@ class HotkeyListener(QObject):
 
     pressed = pyqtSignal()
     released = pyqtSignal()
+    toggle_pill = pyqtSignal()
 
     def __init__(self):
         """Inicializa el estado de teclas y la detección de doble-tap."""
@@ -43,10 +44,18 @@ class HotkeyListener(QObject):
             self._listener = None
 
     def _on_press(self, key):
-        """Detecta Ctrl+Alt (hold) o doble-tap Ctrl (hands-free) y emite pressed."""
+        """Detecta Ctrl+Alt (hold), doble-tap Ctrl (hands-free), o Alt+H (toggle pill)."""
         is_ctrl = key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r)
         is_alt = key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r,
                          keyboard.Key.alt_gr)
+
+        # Alt+J: toggle pill visibility
+        try:
+            if self._alt_held and hasattr(key, 'char') and key.char == 'j':
+                self.toggle_pill.emit()
+                return
+        except AttributeError:
+            pass
 
         if is_ctrl:
             now = time.time()
