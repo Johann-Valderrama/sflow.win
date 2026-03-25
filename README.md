@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="logo.png" width="120" alt="SFlow Logo">
+  <img src="logo.png" width="120" alt="Vflow">
 </p>
 
-<h1 align="center">SFlow</h1>
+<h1 align="center">Vflow</h1>
 
 <p align="center">
   <strong>Open-source voice-to-text for Windows. Wispr Flow alternative at 99% lower cost.</strong>
@@ -18,9 +18,9 @@
 
 ---
 
-SFlow is a **system-wide voice-to-text tool** for Windows. Hold a hotkey, speak, release — your words appear wherever your cursor is. Any app, any text field, any language.
+Vflow is a **system-wide voice-to-text tool** for Windows. Hold a hotkey, speak, release — your words appear wherever your cursor is. Any app, any text field, any language.
 
-Built as a replacement for [Wispr Flow](https://wispr.com) ($15/month). SFlow uses [Groq's Whisper API](https://console.groq.com/docs/speech-to-text) at **~$0.02/hour** — that's roughly **$0.60/month** with heavy daily use.
+Built as a replacement for [Wispr Flow](https://wispr.com) ($15/month). Vflow uses [Groq's Whisper API](https://console.groq.com/docs/speech-to-text) at **~$0.02/hour** — that's roughly **$0.60/month** with heavy daily use.
 
 ### Features
 
@@ -48,8 +48,8 @@ Built as a replacement for [Wispr Flow](https://wispr.com) ($15/month). SFlow us
 ### Install (Dev Mode)
 
 ```bash
-git clone https://github.com/Johann-valderrama/sflow.win.git
-cd sflow.win
+git clone https://github.com/Johann-valderrama/vflow.win.git
+cd vflow.win
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
@@ -62,10 +62,10 @@ python main.py
 
 ```bash
 build.bat
-# Output: dist\SFlow\SFlow.exe
+# Output: dist\Vflow\Vflow.exe
 ```
 
-On first launch SFlow asks for your [Groq API key](https://console.groq.com/keys).
+On first launch Vflow asks for your [Groq API key](https://console.groq.com/keys).
 
 ---
 
@@ -136,7 +136,7 @@ GROQ_MODEL = "whisper-large-v3-turbo"  # fastest Groq model
 
 ## Cost Comparison
 
-| | Wispr Flow | SFlow |
+| | Wispr Flow | Vflow |
 |---|---|---|
 | Monthly cost | $15/month | ~$0.60/month* |
 | Annual cost | $180/year | ~$7.20/year* |
@@ -168,5 +168,5 @@ MIT License. Do whatever you want with it.
 
 <p align="center">
   Built with Claude Opus 4.6 in a single session.<br>
-  <sub>Windows version by <a href="https://github.com/Johann-valderrama">Johann-valderrama</a> — <strong>S</strong><strong>f</strong>low</sub>
+  <sub>Windows version by <a href="https://github.com/Johann-valderrama">Johann-valderrama</a> — <strong>V</strong><strong>f</strong>low</sub>
 </p>

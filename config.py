@@ -11,10 +11,10 @@ def _get_resource_dir() -> str:
 
 
 def _get_data_dir() -> str:
-    """Writable user data (DB, .env). In bundle → %APPDATA%\\SFlow."""
+    """Writable user data (DB, .env). In bundle → %APPDATA%\\Vflow."""
     if getattr(sys, "frozen", False):
         appdata = os.environ.get("APPDATA", os.path.expanduser("~"))
-        return os.path.join(appdata, "SFlow")
+        return os.path.join(appdata, "Vflow")
     return os.path.dirname(os.path.abspath(__file__))
 
 
@@ -65,7 +65,7 @@ CHUNK_OVERLAP_SECONDS = 1 # Overlap between chunks to avoid cutting words
 MAX_RECORDING_SECONDS = 600  # Auto-stop forgotten recordings (e.g. hands-free mode)
 
 # Hotkey
-DOUBLE_TAP_INTERVAL = 0.4  # seconds for double-tap detection
+DOUBLE_TAP_INTERVAL = 0.2  # seconds for double-tap detection
 
 # Database (writable user data)
 DB_PATH = os.path.join(_DATA_DIR, "transcriptions.db")

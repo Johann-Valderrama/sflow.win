@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SFlow - Voice-to-text desktop tool powered by Groq Whisper."""
+"""Vflow - Voice-to-text desktop tool powered by Groq Whisper."""
 
 import os
 import stat
@@ -28,7 +28,7 @@ from config import LOGO_PATH, APP_DATA_DIR, GROQ_API_KEY, CHUNK_SECONDS, MAX_REC
 logger = logging.getLogger(__name__)
 
 _REGISTRY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-_REGISTRY_APP_NAME = "SFlow"
+_REGISTRY_APP_NAME = "Vflow"
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +40,7 @@ class FirstRunDialog(QDialog):
     def __init__(self):
         """Construye el diálogo con campo de entrada para la API key y botón de guardar."""
         super().__init__()
-        self.setWindowTitle("SFlow - Setup")
+        self.setWindowTitle("Vflow - Setup")
         self.setFixedWidth(420)
 
         layout = QVBoxLayout()
@@ -88,7 +88,7 @@ class FirstRunDialog(QDialog):
 # Launch at Login (Windows Registry)
 # ---------------------------------------------------------------------------
 def _is_launch_at_login() -> bool:
-    """Verifica si SFlow está configurado para iniciar con Windows (registro)."""
+    """Verifica si Vflow está configurado para iniciar con Windows (registro)."""
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REGISTRY_KEY, 0, winreg.KEY_READ)
         winreg.QueryValueEx(key, _REGISTRY_APP_NAME)
@@ -101,7 +101,7 @@ def _is_launch_at_login() -> bool:
 
 
 def _set_launch_at_login(enabled: bool):
-    """Activa o desactiva el inicio automático de SFlow con Windows vía registro."""
+    """Activa o desactiva el inicio automático de Vflow con Windows vía registro."""
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REGISTRY_KEY, 0, winreg.KEY_SET_VALUE)
         if enabled:
@@ -135,7 +135,7 @@ def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
 
     menu = QMenu()
 
-    status = QAction("SFlow - Activo", menu)
+    status = QAction("Vflow - Activo", menu)
     status.setEnabled(False)
     menu.addAction(status)
     menu.addSeparator()
@@ -157,7 +157,7 @@ def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
     menu.addAction(quit_action)
 
     tray.setContextMenu(menu)
-    tray.setToolTip("SFlow - Voice to Text")
+    tray.setToolTip("Vflow - Voice to Text")
     tray.show()
     return tray
 
@@ -165,7 +165,7 @@ def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
 # ---------------------------------------------------------------------------
 # Main app controller
 # ---------------------------------------------------------------------------
-class SFlowApp(QObject):
+class VflowApp(QObject):
     """Main application controller. Wires hotkey -> recorder -> transcriber -> clipboard."""
 
     transcription_done = pyqtSignal(str, float)
@@ -303,7 +303,7 @@ def main():
     ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("SFlow")
+    app.setApplicationName("Vflow")
     app.setQuitOnLastWindowClosed(False)
 
     # Allow Ctrl+C to kill the app
@@ -320,16 +320,16 @@ def main():
     port = start_web_server()
 
     # Start the app
-    sflow = SFlowApp()
-    sflow.start()
+    vflow = VflowApp()
+    vflow.start()
 
     # Clean up hotkey listener on quit
-    app.aboutToQuit.connect(sflow.hotkey.stop)
+    app.aboutToQuit.connect(vflow.hotkey.stop)
 
     # System tray icon
     tray = _setup_tray(app, port)  # noqa: F841 — must keep reference alive
 
-    print("\nSFlow running. Ctrl+Alt (hold) to record, double Ctrl to toggle hands-free.")
+    print("\nVflow running. Ctrl+Alt (hold) to record, double Ctrl to toggle hands-free.")
     print(f"Dashboard available at http://localhost:{port}\n")
 
     sys.exit(app.exec())

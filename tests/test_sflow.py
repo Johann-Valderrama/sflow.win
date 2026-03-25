@@ -1,4 +1,4 @@
-"""Tests for SFlow core modules."""
+"""Tests for Vflow core modules."""
 
 import io
 import json

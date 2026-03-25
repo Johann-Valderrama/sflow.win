@@ -1,9 +1,9 @@
-# PRP-001: SFlow — Voice-to-Text Desktop Tool (Wispr Flow Alternative)
+# PRP-001: Vflow — Voice-to-Text Desktop Tool (Wispr Flow Alternative)
 
 > **Status**: COMPLETED
 > **Date**: 2026-03-04
 > **Author**: Claude Opus 4.6
-> **Project**: sflow
+> **Project**: vflow
 
 ---
 
@@ -33,7 +33,7 @@ This is a fully functional replacement for Wispr Flow ($15/month) built from scr
 
 ### Expected Behavior
 
-1. Launch `sflow` — a small floating pill appears at the bottom-center of the screen (logo only)
+1. Launch `vflow` — a small floating pill appears at the bottom-center of the screen (logo only)
 2. **Hold Mode**: User holds **Ctrl+Shift** — pill expands showing animated audio bars
 3. **Hands-Free Mode**: User double-taps **Ctrl** — recording starts, tap Ctrl again to stop
 4. Audio bars react in real-time to microphone volume
@@ -81,7 +81,7 @@ This is a fully functional replacement for Wispr Flow ($15/month) built from scr
 
 ### Architecture
 ```
-sflow/
+vflow/
 ├── main.py                 # Entry point — wires hotkey → recorder → transcriber → clipboard
 ├── config.py               # Centralized configuration (loads .env)
 ├── ui/
@@ -100,8 +100,8 @@ sflow/
 ├── web/
 │   ├── __init__.py
 │   └── server.py           # Flask web dashboard (localhost:5000)
-├── logo.png                # SF brand logo (full size)
-├── logo_small.png          # SF brand logo (22x22 for pill)
+├── logo.png                # Vflow brand logo (full size)
+├── logo_small.png          # Vflow brand logo (22x22 for pill)
 ├── requirements.txt
 ├── .env                    # GROQ_API_KEY (not committed)
 ├── .env.example
@@ -241,7 +241,7 @@ ns_window.setCollectionBehavior_(
 **Objective**: Browser-based transcription history viewer
 
 - [x] Create `web/server.py` — Flask app with Tailwind CSS
-- [x] Dark theme, SF branding, glass morphism design
+- [x] Dark theme, Vflow branding, glass morphism design
 - [x] Table view with time, text, duration, copy button
 - [x] Click-to-expand for long transcriptions
 - [x] Search filter

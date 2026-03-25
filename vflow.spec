@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for SFlow — Windows voice-to-text app."""
+"""PyInstaller spec for Vflow — Windows voice-to-text app."""
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
@@ -76,7 +76,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='SFlow',
+    name='Vflow',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -85,7 +85,7 @@ exe = EXE(
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
-    icon='SFlow.ico',
+    icon='Vflow.ico',
 )
 
 coll = COLLECT(
@@ -96,5 +96,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name='SFlow',
+    name='Vflow',
 )

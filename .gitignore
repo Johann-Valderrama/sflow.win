@@ -10,8 +10,8 @@ dist/
 build/
 .claude/
 *.log
-start_sflow.sh
-.sflow.lock
+start_vflow.sh
+.vflow.lock
 logo-v*.png
 logo-*-clean.png
 *.iconset/

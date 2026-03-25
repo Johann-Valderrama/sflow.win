@@ -3,7 +3,7 @@ import secrets
 import socket
 import threading
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, render_template_string, request, send_file
 from db.database import TranscriptionDB
 
 app = Flask(__name__)
@@ -19,7 +19,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SFlow - Transcripciones</title>
+    <title>Vflow - Transcripciones</title>
     <!-- NOTE: Tailwind loaded from CDN. Accepted risk: app is local-only, dashboard on localhost. -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -33,8 +33,7 @@ HTML_TEMPLATE = """
         @keyframes flash { 0%,100% { background: transparent; } 50% { background: rgba(80,220,120,0.1); } }
         .deleted { animation: fadeout 0.4s ease forwards; }
         @keyframes fadeout { to { opacity: 0; transform: translateX(20px); } }
-        .purple { color: #8c50dc; }
-        .orange { color: #ffa028; }
+        .brand-logo { width: 28px; height: 28px; border-radius: 6px; }
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
@@ -72,10 +71,8 @@ HTML_TEMPLATE = """
         <!-- Header -->
         <div class="flex items-center justify-between mb-8">
             <div class="flex items-center gap-3">
-                <div class="text-2xl font-semibold">
-                    <span class="purple">S</span><span class="orange">f</span>
-                    <span class="text-white/60 text-lg ml-1">low</span>
-                </div>
+                <img src="/logo" class="brand-logo" alt="Vflow">
+                <div class="text-2xl font-semibold text-white">Vflow</div>
                 <span class="text-xs text-white/30 bg-white/5 px-2 py-1 rounded-full" id="count-badge">-</span>
             </div>
             <div class="flex items-center gap-3">
@@ -122,7 +119,7 @@ HTML_TEMPLATE = """
 
         <!-- Footer -->
         <div class="mt-4 text-center text-white/15 text-xs">
-            SFlow &middot; Ctrl+Shift para grabar &middot; Groq Whisper
+            Vflow &middot; Ctrl+Shift para grabar &middot; Groq Whisper
         </div>
     </div>
 
@@ -468,6 +465,13 @@ def _csrf_check():
 def index():
     """Sirve la página principal del dashboard de transcripciones."""
     return render_template_string(HTML_TEMPLATE)
+
+
+@app.route("/logo")
+def logo():
+    """Sirve el logo de la app para el dashboard."""
+    from config import LOGO_PATH
+    return send_file(LOGO_PATH, mimetype="image/png")
 
 
 @app.route("/api/transcriptions")

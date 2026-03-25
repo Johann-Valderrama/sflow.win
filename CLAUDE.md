@@ -1,8 +1,8 @@
-# CLAUDE.md — SFlow Development Instructions
+# CLAUDE.md — Vflow Development Instructions
 
-## What is SFlow?
+## What is Vflow?
 
-SFlow is a Windows voice-to-text desktop tool that replaces Wispr Flow ($15/month). It captures audio via global hotkeys, transcribes using Groq Whisper API (~$0.02/hour), and auto-pastes text wherever the cursor is. It includes a floating pill UI overlay, real-time audio visualization, SQLite history, and a web dashboard.
+Vflow is a Windows voice-to-text desktop tool that replaces Wispr Flow ($15/month). It captures audio via global hotkeys, transcribes using Groq Whisper API (~$0.02/hour), and auto-pastes text wherever the cursor is. It includes a floating pill UI overlay, real-time audio visualization, SQLite history, and a web dashboard.
 
 ## Quick Start (Dev Mode)
 
@@ -25,16 +25,16 @@ python main.py
 ## Build Desktop App (.exe)
 
 ```bash
-# Build SFlow.exe (uses PyInstaller)
+# Build Vflow.exe (uses PyInstaller)
 build.bat
 ```
 
-The built app is in `dist\SFlow\SFlow.exe`. On first launch, if no API key exists in `%APPDATA%\SFlow\.env`, a dialog asks for it.
+The built app is in `dist\Vflow\Vflow.exe`. On first launch, if no API key exists in `%APPDATA%\Vflow\.env`, a dialog asks for it.
 
 ### Build Requirements
 - Python 3.12+ with venv
 - PyInstaller (installed automatically by build.bat)
-- Optional: SFlow.ico (256x256 icon file for the .exe)
+- Optional: Vflow.ico (256x256 icon file for the .exe)
 
 ## Permissions Required
 
@@ -44,10 +44,10 @@ The built app is in `dist\SFlow\SFlow.exe`. On first launch, if no API key exist
 ## Project Structure
 
 ```
-sflow/
+vflow/
 ├── main.py                 # Entry point — tray icon, first-run dialog, launch-at-login, app controller
 ├── config.py               # All configuration constants (UI, audio, paths, bundle detection)
-├── sflow.spec              # PyInstaller spec for building .exe
+├── vflow.spec              # PyInstaller spec for building .exe
 ├── build.bat               # One-shot build script for Windows
 ├── ui/
 │   ├── pill_widget.py      # Floating pill overlay (PyQt6 window flags)
@@ -109,11 +109,11 @@ Recordings under 0.3 seconds are accidental taps — skip transcription and retu
 ### 6. Bundle vs Dev Mode (config.py)
 `config.py` detects `sys.frozen` to switch between dev and .exe bundle:
 - **Dev mode**: assets and data live in the project root directory
-- **Bundle mode**: read-only assets (logo) come from `sys._MEIPASS`, writable data (DB, .env) goes to `%APPDATA%\SFlow\`
+- **Bundle mode**: read-only assets (logo) come from `sys._MEIPASS`, writable data (DB, .env) goes to `%APPDATA%\Vflow\`
 
 ### 7. Desktop App Features (main.py)
 - **System Tray**: QSystemTrayIcon with dashboard link, "Iniciar con Windows" toggle, quit
-- **First-Run Dialog**: If GROQ_API_KEY is empty, shows a QDialog to enter it (saves to %APPDATA%\SFlow)
+- **First-Run Dialog**: If GROQ_API_KEY is empty, shows a QDialog to enter it (saves to %APPDATA%\Vflow)
 - **Launch at Login**: Uses Windows Registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`)
 
 ### 8. Port Selection (web/server.py)
