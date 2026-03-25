@@ -1,10 +1,15 @@
+import os
 import re
 import secrets
 import socket
 import threading
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, render_template_string, request, send_file
+from dotenv import set_key
 from db.database import TranscriptionDB
+from config import APP_DATA_DIR
+
+_ENV_PATH = os.path.join(APP_DATA_DIR, ".env")
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
@@ -51,6 +56,18 @@ HTML_TEMPLATE = """
             border-radius: 6px; color: #e5e5e5; padding: 6px 8px; font-size: 13px; font-family: inherit;
             resize: vertical; min-height: 60px; }
         .edit-area:focus { outline: none; border-color: rgba(140,80,220,0.5); }
+        .cfg-select { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px; color: #e5e5e5; padding: 6px 8px; font-size: 13px; width: 100%; cursor: pointer; }
+        .cfg-select:focus { outline: none; border-color: rgba(140,80,220,0.5); }
+        .cfg-select option { background: #1a1a1a; }
+        .toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255,255,255,0.1); border-radius: 20px; transition: 0.2s; }
+        .toggle-slider:before { position: absolute; content: ''; height: 14px; width: 14px;
+            left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.2s; }
+        .toggle-switch input:checked + .toggle-slider { background: rgba(140,80,220,0.6); }
+        .toggle-switch input:checked + .toggle-slider:before { transform: translateX(16px); }
         .selection-bar { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
             background: #1a1a1a; border: 1px solid rgba(140,80,220,0.4); border-radius: 12px;
             padding: 10px 20px; display: none; align-items: center; gap: 14px; z-index: 100;
@@ -93,6 +110,63 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
                 <button onclick="loadData()" class="text-white/40 hover:text-white/70 text-sm">Actualizar</button>
+                <button onclick="toggleSettings()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Configuración">&#9881;</button>
+            </div>
+        </div>
+
+        <!-- Settings panel -->
+        <div id="settings-panel" class="glass rounded-xl p-5 mb-6 hidden">
+            <div class="text-sm font-medium text-white/60 mb-4">Configuración</div>
+            <div class="grid gap-4" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))">
+                <div>
+                    <label class="text-xs text-white/40 block mb-1">Idioma de transcripción</label>
+                    <select id="cfg-language" class="cfg-select">
+                        <option value="es">Español</option>
+                        <option value="en">English</option>
+                        <option value="fr">Français</option>
+                        <option value="de">Deutsch</option>
+                        <option value="it">Italiano</option>
+                        <option value="pt">Português</option>
+                        <option value="ja">日本語</option>
+                        <option value="zh">中文</option>
+                        <option value="auto">Auto-detectar (mayor costo)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-xs text-white/40 block mb-1">Micrófono</label>
+                    <select id="cfg-microphone" class="cfg-select">
+                        <option value="">Sistema por defecto</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-xs text-white/40 block mb-1">Idioma de salida (traducción)</label>
+                    <select id="cfg-translate-target" class="cfg-select">
+                        <option value="en">English</option>
+                        <option value="es">Español</option>
+                        <option value="fr">Français</option>
+                        <option value="de">Deutsch</option>
+                        <option value="it">Italiano</option>
+                        <option value="pt">Português</option>
+                        <option value="ja">日本語</option>
+                        <option value="zh">中文</option>
+                        <option value="ko">한국어</option>
+                        <option value="ru">Русский</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-xs text-white/40 block mb-1">Sonidos</label>
+                    <div class="flex items-center gap-2" style="height:32px">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="cfg-sounds">
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span class="text-xs text-white/40">Beep al iniciar/terminar</span>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end items-center mt-4 gap-3">
+                <span id="cfg-saved" class="text-xs text-green-400" style="opacity:0;transition:opacity 0.3s">Guardado ✓</span>
+                <button onclick="saveSettings()" class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50">Guardar</button>
             </div>
         </div>
 
@@ -435,6 +509,53 @@ HTML_TEMPLATE = """
         // Auto-refresh every 5 seconds
         loadData();
         setInterval(loadData, 5000);
+
+        // --- Settings panel ---
+        async function toggleSettings() {
+            const panel = document.getElementById('settings-panel');
+            if (panel.classList.contains('hidden')) {
+                panel.classList.remove('hidden');
+                await loadSettings();
+            } else {
+                panel.classList.add('hidden');
+            }
+        }
+
+        async function loadSettings() {
+            const [settings, mics] = await Promise.all([
+                fetch('/api/settings').then(r => r.json()),
+                fetch('/api/microphones').then(r => r.json()),
+            ]);
+            document.getElementById('cfg-language').value = settings.language || 'es';
+            document.getElementById('cfg-translate-target').value = settings.translate_target || 'en';
+            document.getElementById('cfg-sounds').checked = settings.sounds_enabled !== false;
+            const micSelect = document.getElementById('cfg-microphone');
+            micSelect.innerHTML = '<option value="">Sistema por defecto</option>';
+            mics.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.name;
+                opt.textContent = m.name;
+                if (m.name === settings.device_name) opt.selected = true;
+                micSelect.appendChild(opt);
+            });
+        }
+
+        async function saveSettings() {
+            const data = {
+                language: document.getElementById('cfg-language').value,
+                translate_target: document.getElementById('cfg-translate-target').value,
+                device_name: document.getElementById('cfg-microphone').value,
+                sounds_enabled: document.getElementById('cfg-sounds').checked ? 'true' : 'false',
+            };
+            await fetch('/api/settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data),
+            });
+            const saved = document.getElementById('cfg-saved');
+            saved.style.opacity = '1';
+            setTimeout(() => { saved.style.opacity = '0'; }, 2000);
+        }
     </script>
 </body>
 </html>
@@ -533,6 +654,54 @@ def update_transcription(tid):
     if updated == 0:
         return jsonify({"error": "not found"}), 404
     return jsonify({"ok": True})
+
+
+def _set_env_key(key: str, value: str):
+    """Write key=value to .env and update the running process environment."""
+    os.makedirs(APP_DATA_DIR, exist_ok=True)
+    set_key(_ENV_PATH, key, value)
+    os.environ[key] = value
+
+
+@app.route("/api/settings")
+def get_settings():
+    """Devuelve la configuración actual (idioma, micrófono, sonidos)."""
+    return jsonify({
+        "language": os.getenv("WHISPER_LANGUAGE", "es"),
+        "translate_target": os.getenv("TRANSLATE_TARGET_LANG", "en"),
+        "device_name": os.getenv("AUDIO_DEVICE_NAME", ""),
+        "sounds_enabled": os.getenv("SOUNDS_ENABLED", "true") == "true",
+    })
+
+
+@app.route("/api/settings", methods=["POST"])
+def update_settings():
+    """Guarda configuración en .env y actualiza el proceso en ejecución."""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "no data"}), 400
+    allowed = {
+        "language": "WHISPER_LANGUAGE",
+        "translate_target": "TRANSLATE_TARGET_LANG",
+        "device_name": "AUDIO_DEVICE_NAME",
+        "sounds_enabled": "SOUNDS_ENABLED",
+    }
+    for field, env_key in allowed.items():
+        if field in data:
+            _set_env_key(env_key, str(data[field]).strip())
+    return jsonify({"ok": True})
+
+
+@app.route("/api/microphones")
+def get_microphones():
+    """Lista los dispositivos de entrada de audio (excluye salidas/speakers)."""
+    import sounddevice as sd
+    mics = [
+        {"index": i, "name": dev["name"]}
+        for i, dev in enumerate(sd.query_devices())
+        if dev["max_input_channels"] > 0 and dev["max_output_channels"] == 0
+    ]
+    return jsonify(mics)
 
 
 def _find_free_port(start: int = 5678, attempts: int = 50) -> int:

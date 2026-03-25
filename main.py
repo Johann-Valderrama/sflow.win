@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Vflow - Voice-to-text desktop tool powered by Groq Whisper."""
 
+import math
 import os
 import stat
+import struct
 import sys
 import signal
 import subprocess
 import threading
 import logging
 import winreg
+import winsound
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu,
     QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox,
@@ -26,6 +29,41 @@ from web.server import start_web_server
 from config import LOGO_PATH, APP_DATA_DIR, GROQ_API_KEY, CHUNK_SECONDS, MAX_RECORDING_SECONDS
 
 logger = logging.getLogger(__name__)
+
+
+def _generate_beep_wav(freq: int, duration_ms: int, volume: float = 0.009) -> bytes:
+    """Generate a mono 16-bit PCM WAV tone in memory (no file needed)."""
+    sample_rate = 44100
+    num_samples = int(sample_rate * duration_ms / 1000)
+    pcm = bytearray()
+    for i in range(num_samples):
+        fade = 1.0 - (i / num_samples) ** 2  # quadratic fade-out to avoid click
+        sample = int(32767 * volume * fade * math.sin(2 * math.pi * freq * i / sample_rate))
+        pcm += struct.pack('<h', max(-32768, min(32767, sample)))
+    data_size = len(pcm)
+    header  = struct.pack('<4sI4s', b'RIFF', 36 + data_size, b'WAVE')
+    header += struct.pack('<4sIHHIIHH', b'fmt ', 16, 1, 1, sample_rate, sample_rate * 2, 2, 16)
+    header += struct.pack('<4sI', b'data', data_size)
+    return bytes(header) + bytes(pcm)
+
+
+def _play_sound(freq: int, duration_ms: int = 120):
+    """Play a synthesized tone through the audio output (not the PC speaker).
+
+    Uses winsound.PlaySound with SND_MEMORY so it works on modern Windows 10
+    systems where the Beep device is disabled. Runs in a daemon thread.
+    """
+    if os.getenv("SOUNDS_ENABLED", "true") != "true":
+        return
+    try:
+        wav = _generate_beep_wav(freq, duration_ms)
+        threading.Thread(
+            target=lambda: winsound.PlaySound(wav, winsound.SND_MEMORY),
+            daemon=True,
+        ).start()
+    except Exception:
+        pass
+
 
 _REGISTRY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _REGISTRY_APP_NAME = "Vflow"
@@ -182,6 +220,7 @@ class VflowApp(QObject):
 
         # Chunked transcription state
         self._chunk_texts: list[str] = []
+        self._translate_mode = False
         self._chunk_timer = QTimer()
         self._chunk_timer.timeout.connect(self._flush_chunk)
 
@@ -197,6 +236,7 @@ class VflowApp(QObject):
         self.hotkey.pressed.connect(self._on_hotkey_pressed, Qt.ConnectionType.QueuedConnection)
         self.hotkey.released.connect(self._on_hotkey_released, Qt.ConnectionType.QueuedConnection)
         self.hotkey.toggle_pill.connect(self._on_toggle_pill, Qt.ConnectionType.QueuedConnection)
+        self.hotkey.translate_pressed.connect(self._on_translate_pressed, Qt.ConnectionType.QueuedConnection)
         self.transcription_done.connect(self._on_transcription_done, Qt.ConnectionType.QueuedConnection)
         self.transcription_error.connect(self._on_transcription_error, Qt.ConnectionType.QueuedConnection)
 
@@ -209,6 +249,7 @@ class VflowApp(QObject):
     @pyqtSlot()
     def _on_hotkey_pressed(self):
         """Guarda la ventana activa e inicia la grabación de audio."""
+        _play_sound(880)  # high beep = start recording
         save_frontmost_app()
         try:
             self.recorder.start()
@@ -218,6 +259,24 @@ class VflowApp(QObject):
             return
         self._chunk_texts.clear()
         self._chunk_timer.start(CHUNK_SECONDS * 1000)
+        self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
+        self.pill.set_state(PillWidget.STATE_RECORDING)
+
+    @pyqtSlot()
+    def _on_translate_pressed(self):
+        """Inicia grabación en modo traducción (→ inglés). Sin chunking."""
+        self._translate_mode = True
+        _play_sound(880)
+        save_frontmost_app()
+        try:
+            self.recorder.start()
+        except Exception as e:
+            logger.error("Failed to start recording for translation: %s", e)
+            self.pill.set_state(PillWidget.STATE_ERROR)
+            self._translate_mode = False
+            return
+        self._chunk_texts.clear()
+        # No chunk_timer in translate mode — send full audio to translations endpoint
         self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
         self.pill.set_state(PillWidget.STATE_RECORDING)
 
@@ -253,24 +312,30 @@ class VflowApp(QObject):
             self.pill.set_state(PillWidget.STATE_IDLE)
             return
 
+        translate = self._translate_mode
+        self._translate_mode = False  # reset before background thread starts
         wav_buffer = self.recorder.get_wav_buffer()
         thread = threading.Thread(
             target=self._transcribe_final,
-            args=(wav_buffer, duration),
+            args=(wav_buffer, duration, translate),
             daemon=True,
         )
         thread.start()
 
-    def _transcribe_final(self, wav_buffer, duration):
-        """Transcribe remaining frames, join with chunk texts, emit result."""
+    def _transcribe_final(self, wav_buffer, duration, translate: bool = False):
+        """Transcribe or translate remaining frames and emit result."""
         try:
-            prompt = self._chunk_texts[-1][-200:] if self._chunk_texts else None
-            text = self.transcriber.transcribe(wav_buffer, prompt=prompt)
-            if text:
-                self._chunk_texts.append(text)
-            full_text = " ".join(self._chunk_texts)
-            if full_text.strip():
-                self.transcription_done.emit(full_text.strip(), duration)
+            if translate:
+                target = os.getenv("TRANSLATE_TARGET_LANG", "en")
+                text = self.transcriber.translate(wav_buffer, target_lang=target)
+            else:
+                prompt = self._chunk_texts[-1][-200:] if self._chunk_texts else None
+                text = self.transcriber.transcribe(wav_buffer, prompt=prompt)
+                if text:
+                    self._chunk_texts.append(text)
+                text = " ".join(self._chunk_texts)
+            if text.strip():
+                self.transcription_done.emit(text.strip(), duration)
             else:
                 self.transcription_error.emit("No speech detected")
         except Exception as e:
@@ -284,6 +349,7 @@ class VflowApp(QObject):
     @pyqtSlot(str, float)
     def _on_transcription_done(self, text: str, duration: float):
         """Pega el texto transcrito en la app activa y lo guarda en la base de datos."""
+        _play_sound(660)  # lower beep = done
         paste_text(text)
         self.db.insert(text=text, duration_seconds=duration)
         self.pill.set_state(PillWidget.STATE_DONE)

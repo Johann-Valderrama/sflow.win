@@ -1,4 +1,5 @@
 import io
+import os
 import wave
 import queue
 import logging
@@ -8,6 +9,17 @@ import sounddevice as sd
 from config import SAMPLE_RATE, CHANNELS, AUDIO_DTYPE, BLOCK_SIZE, CHUNK_OVERLAP_SECONDS, MAX_RECORDING_SECONDS
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_device(name: str) -> int | None:
+    """Find input device index by name substring. Returns None to use system default."""
+    if not name:
+        return None
+    for i, dev in enumerate(sd.query_devices()):
+        if dev["max_input_channels"] > 0 and name.lower() in dev["name"].lower():
+            return i
+    logger.warning("Audio device '%s' not found, using system default.", name)
+    return None
 
 
 class AudioRecorder:
@@ -42,12 +54,14 @@ class AudioRecorder:
             except queue.Empty:
                 break
         self.is_recording = True
+        device = _resolve_device(os.getenv("AUDIO_DEVICE_NAME", ""))
         self.stream = sd.InputStream(
             samplerate=SAMPLE_RATE,
             channels=CHANNELS,
             dtype=AUDIO_DTYPE,
             blocksize=BLOCK_SIZE,
             callback=self._callback,
+            device=device,
         )
         self.stream.start()
 
