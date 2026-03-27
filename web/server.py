@@ -162,6 +162,12 @@ HTML_TEMPLATE = """
                         </label>
                         <span class="text-xs text-white/40">Beep al iniciar/terminar</span>
                     </div>
+                    <div class="flex items-center gap-2 mt-2">
+                        <input type="range" id="cfg-beep-volume" min="1" max="10" step="1"
+                               class="accent-purple-500" style="width:90px"
+                               oninput="document.getElementById('cfg-beep-volume-label').textContent=this.value">
+                        <span class="text-xs text-white/40">Volumen: <span id="cfg-beep-volume-label">2</span></span>
+                    </div>
                 </div>
             </div>
             <div class="flex justify-end items-center mt-4 gap-3">
@@ -529,6 +535,9 @@ HTML_TEMPLATE = """
             document.getElementById('cfg-language').value = settings.language || 'es';
             document.getElementById('cfg-translate-target').value = settings.translate_target || 'en';
             document.getElementById('cfg-sounds').checked = settings.sounds_enabled !== false;
+            const vol = settings.beep_volume || 2;
+            document.getElementById('cfg-beep-volume').value = vol;
+            document.getElementById('cfg-beep-volume-label').textContent = vol;
             const micSelect = document.getElementById('cfg-microphone');
             micSelect.innerHTML = '<option value="">Sistema por defecto</option>';
             mics.forEach(m => {
@@ -546,6 +555,7 @@ HTML_TEMPLATE = """
                 translate_target: document.getElementById('cfg-translate-target').value,
                 device_name: document.getElementById('cfg-microphone').value,
                 sounds_enabled: document.getElementById('cfg-sounds').checked ? 'true' : 'false',
+                beep_volume: document.getElementById('cfg-beep-volume').value,
             };
             await fetch('/api/settings', {
                 method: 'POST',
@@ -671,6 +681,7 @@ def get_settings():
         "translate_target": os.getenv("TRANSLATE_TARGET_LANG", "en"),
         "device_name": os.getenv("AUDIO_DEVICE_NAME", ""),
         "sounds_enabled": os.getenv("SOUNDS_ENABLED", "true") == "true",
+        "beep_volume": int(os.getenv("BEEP_VOLUME_STEPS", "2")),
     })
 
 
@@ -685,6 +696,7 @@ def update_settings():
         "translate_target": "TRANSLATE_TARGET_LANG",
         "device_name": "AUDIO_DEVICE_NAME",
         "sounds_enabled": "SOUNDS_ENABLED",
+        "beep_volume": "BEEP_VOLUME_STEPS",
     }
     for field, env_key in allowed.items():
         if field in data:

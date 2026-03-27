@@ -8,7 +8,7 @@ class HotkeyListener(QObject):
     """Global hotkey listener with four modes:
 
     1. Hold Ctrl+Alt:          press-and-hold → transcribe (release to stop)
-    2. Double-tap Ctrl:        hands-free toggle → transcribe (tap Ctrl again to stop)
+    2. Triple-tap Shift:       hands-free toggle → transcribe (tap Shift again to stop)
     3. Hold Ctrl+Shift+Alt:    press-and-hold → translate → target language
                                (Shift must be held BEFORE Alt)
     4. Alt Gr + Space toggle:  hands-free toggle → translate → target language
@@ -35,9 +35,9 @@ class HotkeyListener(QObject):
         self._alt_gr_space_mode = False  # True when in Alt Gr + Space translate toggle
         self._listener: keyboard.Listener | None = None
 
-        # Double-tap detection
-        self._last_ctrl_press = 0.0
-        self._ctrl_tap_count = 0
+        # Triple-tap detection (Shift)
+        self._last_shift_press = 0.0
+        self._shift_tap_count = 0
 
     def start(self):
         """Inicia el listener global de teclado en un hilo daemon."""
@@ -86,41 +86,40 @@ class HotkeyListener(QObject):
 
         # --- Modifier state tracking ---
         if is_ctrl:
+            self._ctrl_held = True
+        elif is_alt:
+            self._alt_held = True
+        elif is_alt_gr:
+            self._alt_gr_held = True
+        elif is_shift:
             now = time.time()
 
             # Ignore repeats (Windows auto-repeat fix)
-            if self._ctrl_held:
+            if self._shift_held:
                 return
-            self._ctrl_held = True
+            self._shift_held = True
 
-            # Hands-free (mode 2): single Ctrl tap stops it
+            # Hands-free (mode 2): single Shift tap stops it
             if self._hands_free and self._recording:
                 self._hands_free = False
                 self._recording = False
                 self.released.emit()
                 return
 
-            # Double-tap detection
-            if now - self._last_ctrl_press < DOUBLE_TAP_INTERVAL:
-                self._ctrl_tap_count += 1
+            # Triple-tap detection
+            if now - self._last_shift_press < DOUBLE_TAP_INTERVAL:
+                self._shift_tap_count += 1
             else:
-                self._ctrl_tap_count = 1
-            self._last_ctrl_press = now
+                self._shift_tap_count = 1
+            self._last_shift_press = now
 
-            if self._ctrl_tap_count >= 2 and not self._recording:
-                # Mode 2: Double-tap Ctrl → hands-free transcribe
-                self._ctrl_tap_count = 0
+            if self._shift_tap_count >= 3 and not self._recording:
+                # Mode 2: Triple-tap Shift → hands-free transcribe
+                self._shift_tap_count = 0
                 self._hands_free = True
                 self._recording = True
                 self.pressed.emit()
                 return
-
-        elif is_alt:
-            self._alt_held = True
-        elif is_alt_gr:
-            self._alt_gr_held = True
-        elif is_shift:
-            self._shift_held = True
 
         # --- Mode 1 / Mode 3: Ctrl+Alt hold ---
         if self._ctrl_held and self._alt_held and not self._recording:
@@ -156,7 +155,7 @@ class HotkeyListener(QObject):
             return
 
         # Mode 1 / Mode 3 (hold): stop when Ctrl or Alt released
-        # Mode 2 (hands-free): stop handled in _on_press (Ctrl tap)
+        # Mode 2 (hands-free): stop handled in _on_press (Shift tap)
         if self._recording and not self._hands_free:
             if not (self._ctrl_held and self._alt_held):
                 self._recording = False

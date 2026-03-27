@@ -56,7 +56,8 @@ def _play_sound(freq: int, duration_ms: int = 120):
     if os.getenv("SOUNDS_ENABLED", "true") != "true":
         return
     try:
-        wav = _generate_beep_wav(freq, duration_ms)
+        volume = int(os.getenv("BEEP_VOLUME_STEPS", "2")) * 0.0045
+        wav = _generate_beep_wav(freq, duration_ms, volume=volume)
         threading.Thread(
             target=lambda: winsound.PlaySound(wav, winsound.SND_MEMORY),
             daemon=True,

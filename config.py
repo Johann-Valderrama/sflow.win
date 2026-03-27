@@ -65,7 +65,7 @@ CHUNK_OVERLAP_SECONDS = 1 # Overlap between chunks to avoid cutting words
 MAX_RECORDING_SECONDS = 600  # Auto-stop forgotten recordings (e.g. hands-free mode)
 
 # Hotkey
-DOUBLE_TAP_INTERVAL = 0.2  # seconds for double-tap detection
+DOUBLE_TAP_INTERVAL = 0.4  # seconds between taps for triple-tap detection
 
 # Database (writable user data)
 DB_PATH = os.path.join(_DATA_DIR, "transcriptions.db")

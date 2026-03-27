@@ -28,7 +28,11 @@ These are DONE. Do not re-implement.
 **Phase 1 (done):**
 - `WHISPER_LANGUAGE` read from `os.getenv()` in `transcriber.py` at transcription time
 - Microphone selection by name via `_resolve_device()` in `recorder.py`, reads `AUDIO_DEVICE_NAME` env var
-- Interaction sounds via `winsound.Beep()` in daemon thread, controlled by `SOUNDS_ENABLED` env var
+- Interaction sounds via `winsound.PlaySound(wav, winsound.SND_MEMORY)` in daemon thread, controlled by `SOUNDS_ENABLED` env var
+  - `winsound.Beep()` was NOT used — it targets the PC speaker device, disabled on modern Windows 10
+  - Instead: `_generate_beep_wav(freq, duration_ms, volume=0.009)` synthesizes mono 16-bit PCM WAV in memory (struct.pack + math.sin, quadratic fade-out to avoid click)
+  - `_play_sound(freq, duration_ms=120)` spawns a daemon thread running `winsound.PlaySound(wav, winsound.SND_MEMORY)`
+  - Start recording: `_play_sound(880)` (high beep); transcription done: `_play_sound(660)` (low beep)
 - Dashboard settings panel at ⚙ button: language dropdown, mic dropdown, sounds toggle
 - New Flask endpoints: `GET/POST /api/settings`, `GET /api/microphones`
 - Helper `_set_env_key(key, value)` in `web/server.py` — uses `dotenv.set_key()` + updates `os.environ`
@@ -36,19 +40,29 @@ These are DONE. Do not re-implement.
 **Phase 2 (done):**
 - `Transcriber.translate(wav_buffer)` in `core/transcriber.py` — calls `audio.translations.create()` with `model="whisper-large-v3"` (NOT turbo — turbo not supported for translations on Groq)
 - `translate_pressed = pyqtSignal()` in `HotkeyListener`
+- `Transcriber.translate(wav_buffer, target_lang)` — two paths:
+  - `target_lang == "en"`: Whisper `audio.translations.create()` with `model="whisper-large-v3"` (best quality, native endpoint)
+  - `target_lang != "en"`: transcribes first via Whisper, then calls `_llm_translate(text, target_lang)` which uses `llama-3.1-8b-instant` via `chat.completions.create()` (fast, near-zero cost on Groq)
+  - `_LANG_NAMES` dict in Transcriber maps ISO codes to full names for LLM system prompt
 - Hotkey A: `Ctrl+Shift+Alt` hold → translate mode (Shift must be held before Alt)
-- Hotkey B: `Alt Gr + Space` hold → translate mode (`_alt_gr_space_mode` flag, separate release path)
+- Hotkey B: `Alt Gr + Space` **toggle** (NOT hold) — press once to start, press AltGr+Space again to stop
+  - `_alt_gr_space_mode` flag: set on first press, cleared on second press; `_on_release` skips stop when flag is True
+  - Releasing AltGr alone does NOT stop recording — only a second AltGr+Space press stops it
 - `_alt_gr_held` tracked separately from `_alt_held` (alt_gr does NOT trigger Ctrl+Alt mode)
-- `_on_translate_pressed()` in `VflowApp` — starts recording without chunk timer
-- `_transcribe_final(wav_buffer, duration, translate: bool)` — routes to translate() or transcribe()
+- `_on_translate_pressed()` in `VflowApp` — starts recording WITHOUT chunk timer (full audio needed for translations endpoint)
+- `_transcribe_final(wav_buffer, duration, translate: bool)` — routes to translate(target_lang) or transcribe()
+  - reads `TRANSLATE_TARGET_LANG` from env at transcription time: `os.getenv("TRANSLATE_TARGET_LANG", "en")`
 - `_translate_mode: bool` flag on VflowApp, reset to False before background thread starts
+- `translate_pressed` signal connected to `_on_translate_pressed` with `Qt.ConnectionType.QueuedConnection`
+- `toggle_pill` signal connected to `_on_toggle_pill` → `pill.setVisible(not pill.isVisible())`, triggered by `Alt+J`
 
-**Env vars written to `.env` by Phase 1:**
+**Env vars written to `.env` by Phases 1 and 2:**
 ```
-GROQ_API_KEY=...         # existing, written by FirstRunDialog
-WHISPER_LANGUAGE=es      # configurable, default "es"
-AUDIO_DEVICE_NAME=       # empty = system default
-SOUNDS_ENABLED=true      # "true" / "false"
+GROQ_API_KEY=...              # existing, written by FirstRunDialog
+WHISPER_LANGUAGE=es           # configurable, default "es"; "auto" uses whisper-large-v3 (higher cost)
+AUDIO_DEVICE_NAME=            # empty = system default; saved as name string, resolved to index at recording time
+SOUNDS_ENABLED=true           # "true" / "false"
+TRANSLATE_TARGET_LANG=en      # target language for translate mode; default "en" uses Whisper endpoint; others use LLM
 ```
 
 ---
@@ -554,12 +568,38 @@ build.bat
 ## CONTEXT SNAPSHOT (state of codebase when this document was written)
 
 - Git branch: `windows-variant`
-- Last commit implementing Phase 2: after feat adding translate_pressed signal
-- Phases 1+2 verified: transcriber.py uses os.getenv, recorder.py resolves device by name,
-  main.py has _play_sound(), server.py has /api/settings + /api/microphones endpoints,
-  hotkey.py has translate_pressed signal + _shift_held tracking,
-  main.py has _on_translate_pressed() and translate flag in _transcribe_final()
+- Last verified commit: feat: add Alt+J hotkey to toggle pill visibility (f5791a8)
 
-- Known working Python version: 3.12+
-- Known working PyInstaller: latest compatible with Python 3.12
-- Groq SDK version: >=0.4.0 (supports both audio.transcriptions and audio.translations)
+### Verified working features (Phases 1+2):
+- `core/transcriber.py`:
+  - `os.getenv("WHISPER_LANGUAGE", "es")` read at call time (NOT at import)
+  - `"auto"` lang → switches to `whisper-large-v3` (turbo has degraded auto-detect)
+  - `translate(wav_buffer, target_lang)` implemented with Whisper endpoint (→ en) or LLM fallback (→ other)
+  - `_llm_translate(text, target_lang)` uses `llama-3.1-8b-instant` via `chat.completions.create()`
+- `core/recorder.py`:
+  - `_resolve_device(name)` resolves `AUDIO_DEVICE_NAME` env var → device index
+  - Filter: `max_input_channels > 0 and max_output_channels == 0` (excludes WASAPI loopback/speakers)
+- `core/hotkey.py`:
+  - Mode 1: Ctrl+Alt hold → `pressed` (transcribe)
+  - Mode 2: Double-tap Ctrl (within DOUBLE_TAP_INTERVAL) → `pressed` hands-free (tap Ctrl again to stop)
+  - Mode 3: Ctrl+Shift+Alt hold → `translate_pressed` (Shift before Alt)
+  - Mode 4: AltGr+Space **toggle** → `translate_pressed` (press once start, press again stop)
+  - `_alt_gr_held` separate from `_alt_held` — AltGr does NOT trigger Ctrl+Alt mode
+  - `toggle_pill` signal → Alt+J
+- `main.py`:
+  - Sound: `_generate_beep_wav()` synthesizes in-memory WAV; `_play_sound()` uses `winsound.PlaySound(SND_MEMORY)` in daemon thread
+  - Volume: `0.009` (final tuned value; `winsound.Beep()` was NOT used — PC speaker disabled on Win10)
+  - `_on_translate_pressed()` starts recording without chunk timer
+  - `_transcribe_final(wav_buffer, duration, translate)` reads `TRANSLATE_TARGET_LANG` env at runtime
+  - `_translate_mode` flag reset to False before background thread starts
+- `web/server.py`:
+  - `GET/POST /api/settings` — reads/writes: WHISPER_LANGUAGE, AUDIO_DEVICE_NAME, SOUNDS_ENABLED, TRANSLATE_TARGET_LANG
+  - `GET /api/microphones` — lists input-only devices (name + index)
+  - `_set_env_key(key, value)` — writes to `.env` via `dotenv.set_key()` AND updates `os.environ`
+  - Dashboard settings panel: language dropdown (input), mic dropdown, sounds toggle, translate target dropdown
+
+### Known Python/dependency versions:
+- Python 3.12+
+- PyInstaller: latest compatible with Python 3.12
+- Groq SDK: >=0.4.0 (supports `audio.transcriptions` and `audio.translations`)
+- pynput: >=1.7 (supports `keyboard.Key.alt_gr` on Windows)
