@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" width="120" alt="Vflow">
+  <img src="Vpoint%20Logo_v14.png" width="160" alt="Vflow">
 </p>
 
 <h1 align="center">Vflow</h1>
@@ -20,19 +20,22 @@
 
 Vflow is a **system-wide voice-to-text tool** for Windows. Hold a hotkey, speak, release — your words appear wherever your cursor is. Any app, any text field, any language.
 
-Built as a replacement for [Wispr Flow](https://wispr.com) ($15/month). Vflow uses [Groq's Whisper API](https://console.groq.com/docs/speech-to-text) at **~$0.02/hour** — that's roughly **$0.60/month** with heavy daily use.
+Built as a replacement for [Wispr Flow](https://wispr.com) ($15/month). Vflow uses [Groq's Whisper API](https://console.groq.com/docs/speech-to-text) at **~$0.02/hour** — roughly **$0.60/month** with heavy daily use.
 
 ### Features
 
-- **Windows native** — lives in the system tray, starts with Windows
+- **Windows native** — system tray, starts with Windows, builds to a standalone `.exe`
 - **System-wide dictation** — works in any app (VS Code, Chrome, Slack, Notepad, etc.)
-- **Two recording modes** — hold Ctrl+Alt (push-to-talk) or double-tap Ctrl (hands-free)
-- **Floating pill UI** — minimal overlay with real-time audio visualization bars
+- **4 recording modes** — push-to-talk, hands-free toggle, translation hold, translation toggle
+- **Real-time translation** — dictate in any language, paste in another (12 languages supported)
+- **Floating pill UI** — minimal draggable overlay with real-time audio visualization
 - **No focus stealing** — pill floats above everything without interrupting your work
+- **Audio feedback** — distinct beeps on recording start and transcription done (configurable volume)
 - **Auto-paste** — text appears exactly where your cursor was
-- **Web dashboard** — browse, search, and copy transcription history at `localhost:5678`
+- **Chunked transcription** — records indefinitely; splits into 60-second chunks internally so nothing is lost
+- **Web dashboard** — browse, search, edit, and manage transcription history at `localhost:5678`
+- **Dashboard settings** — change language, microphone, translation target, and sound volume without editing any file
 - **SQLite history** — every transcription saved locally with timestamp and duration
-- **Multilingual** — supports all languages Whisper supports (English, Spanish, French, etc.)
 - **First-run setup** — asks for your Groq API key on first launch, no config files to edit
 
 ---
@@ -48,8 +51,8 @@ Built as a replacement for [Wispr Flow](https://wispr.com) ($15/month). Vflow us
 ### Install (Dev Mode)
 
 ```bash
-git clone https://github.com/Johann-valderrama/vflow.win.git
-cd vflow.win
+git clone https://github.com/Johann-Valderrama/sflow.win.git
+cd sflow.win
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
@@ -65,19 +68,31 @@ build.bat
 # Output: dist\Vflow\Vflow.exe
 ```
 
-On first launch Vflow asks for your [Groq API key](https://console.groq.com/keys).
+On first launch Vflow checks for a Groq API key. If none is found, a setup dialog appears — paste your key and you're done.
 
 ---
 
 ## Usage
 
+### Hotkeys
+
 | Action | Shortcut |
 |--------|----------|
-| **Push-to-talk** | Hold `Ctrl+Alt`, speak, release |
-| **Hands-free** | Double-tap `Ctrl` to start, tap `Ctrl` to stop |
-| **View history** | Click "Abrir Dashboard" in system tray, or `http://localhost:5678` |
-| **Start with Windows** | Toggle in system tray → "Iniciar con Windows" |
-| **Quit** | System tray → "Salir" (or `Ctrl+C` in dev mode) |
+| **Push-to-talk** (transcribe) | Hold `Ctrl+Alt`, speak, release |
+| **Hands-free** (transcribe) | Triple-tap `Shift` to start, tap `Shift` once to stop |
+| **Push-to-talk** (translate) | Hold `Ctrl+Shift+Alt`, speak, release |
+| **Hands-free** (translate) | `AltGr+Space` to start, `AltGr+Space` again to stop |
+| **Toggle pill visibility** | `Alt+J` |
+
+> **Hands-free tip:** Triple-tap Shift starts recording. A single Shift tap stops it. Great for long dictations where holding a key gets tiring.
+
+### System Tray
+
+| Option | Description |
+|--------|-------------|
+| **Abrir Dashboard (:5678)** | Opens the transcription history in your browser |
+| **Iniciar con Windows** | Toggle auto-start on login (writes to Windows Registry) |
+| **Salir** | Quit (or `Ctrl+C` in dev mode) |
 
 ### Pill States
 
@@ -86,51 +101,131 @@ On first launch Vflow asks for your [Groq API key](https://console.groq.com/keys
 | Idle | Small pill with logo |
 | Recording | Expanded pill with animated audio bars |
 | Processing | Spinning dots |
-| Done | Green checkmark (auto-dismisses) |
-| Error | Red X (auto-dismisses) |
+| Done | Green checkmark (auto-dismisses after 0.8s) |
+| Error | Red X (auto-dismisses after 1.2s) |
+
+The pill is **draggable** — left-click and drag to reposition it anywhere on screen.
+
+---
+
+## Translation
+
+Vflow can translate speech in real time:
+
+- **Hold** `Ctrl+Shift+Alt` (or use the hands-free translate toggle `AltGr+Space`) to record in translation mode
+- The transcribed audio is automatically translated to your target language
+- For English output: uses Whisper's native `/audio/translations` endpoint (highest quality)
+- For other target languages: transcribes first, then uses `llama-3.1-8b-instant` as an LLM translator
+
+**Supported target languages:** Spanish, English, French, German, Italian, Portuguese, Japanese, Chinese, Korean, Russian, Arabic, Dutch
+
+Configure the target language in the dashboard Settings panel or via the `TRANSLATE_TARGET_LANG` environment variable.
+
+---
+
+## Web Dashboard
+
+Access at `http://localhost:5678` (or click **Abrir Dashboard** in the system tray).
+
+### Transcription Table
+- Full history with timestamp, duration, and text
+- Click any row to expand the full text
+- **Inline editing** — click the edit icon to correct a transcription in place
+- **Copy to clipboard** — one click per row
+
+### Search & Filter
+- Live text search as you type
+
+### Bulk Actions
+- Multi-select rows with checkboxes
+- Delete selection, or use the **Limpiar** dropdown to delete:
+  - Today's transcriptions
+  - Last 7 days
+  - Last 30 days
+  - By custom date
+  - All transcriptions
+
+### Settings Panel (⚙)
+All settings persist to the `.env` file — no manual editing needed.
+
+| Setting | Description |
+|---------|-------------|
+| **Idioma** | Whisper input language (`es`, `en`, `fr`, `de`, `it`, `pt`, `ja`, `zh`, `auto`) |
+| **Micrófono** | Select input device from detected audio devices |
+| **Traducción** | Target language for translation mode |
+| **Sonidos** | Enable/disable audio feedback beeps |
+| **Volumen** | Beep volume (1–10) |
 
 ---
 
 ## Architecture
 
 ```
-Hotkey (pynput) → Audio Capture (sounddevice) → Groq Whisper API → Auto-Paste (Win32 + pynput)
-                        ↓                                                    ↓
-                  Audio Bars (QPainter)                              SQLite Database
-                        ↓                                                    ↓
-                  Floating Pill (PyQt6)                             Web Dashboard (Flask)
+Hotkey Press (pynput thread)
+  → [QueuedConnection] → save_frontmost_app() + recorder.start()
+  → pill.set_state(RECORDING) + beep 880 Hz
+
+sounddevice callback → queue.Queue → QTimer → audio_visualizer (FFT bars, spring physics)
+
+Hotkey Release
+  → recorder.stop() → pill.set_state(PROCESSING)
+  → Thread: transcriber.transcribe(wav_buffer)  ← Groq Whisper API
+    (long recordings: 60s chunks processed in parallel with 1s overlap)
+  → paste_text() [Win32 API + pynput Ctrl+V] + db.insert() + beep 660 Hz
+  → pill.set_state(DONE)
 ```
 
 Key technical decisions:
-- **PyQt6 window flags** for floating pill that stays on top without stealing focus
-- **Qt QueuedConnection** for thread-safe signals between pynput and UI
-- **Win32 API** for saving/restoring foreground window + pynput for Ctrl+V paste
-- **sounddevice + queue.Queue** for thread-safe audio visualization
+- **PyQt6 window flags** — pill stays on top without stealing focus (`FramelessWindowHint | WindowStaysOnTopHint | Tool | WindowDoesNotAcceptFocus`)
+- **Qt QueuedConnection** — all pynput→Qt signals cross the thread boundary safely
+- **Win32 API** — `GetForegroundWindow` saves target app; `GlobalAlloc`/`SetClipboardData` writes UTF-16 text; `SetForegroundWindow` restores focus before Ctrl+V
+- **FFT + spring physics** — visualizer uses frequency analysis and spring simulation for smooth, natural bar animations
+- **Chunked recording** — recordings split every 60 seconds with 1-second overlap; chunks transcribed concurrently; final chunk stitched with prompt continuity to avoid cut-off words
 
 ---
 
 ## Customization
 
-All configuration lives in `config.py`:
+All tunable constants live in `config.py`:
 
 ```python
 # Hotkey
-DOUBLE_TAP_INTERVAL = 0.4  # seconds for double-tap detection
+DOUBLE_TAP_INTERVAL = 0.4   # seconds between taps for hands-free detection
 
 # UI
-PILL_WIDTH_IDLE = 34        # pill width when idle (logo only)
-PILL_WIDTH_RECORDING = 100  # pill width during recording
-PILL_HEIGHT = 34            # pill height
+PILL_WIDTH_IDLE = 34          # width when idle (logo only)
+PILL_WIDTH_RECORDING = 100    # width during recording
+PILL_WIDTH_STATUS = 52        # width for checkmark/spinner/error
+PILL_HEIGHT = 34
+PILL_OPACITY = 0.90
+PILL_CORNER_RADIUS = 17
+PILL_MARGIN_BOTTOM = 14       # distance from bottom of screen
 
 # Audio
-SAMPLE_RATE = 16000         # 16kHz mono (optimal for speech)
-NUM_BARS = 20               # number of visualizer bars
-BAR_GAIN = 8.0              # bar sensitivity
-BAR_DECAY = 0.85            # bar fall-off speed
+SAMPLE_RATE = 16000           # 16kHz mono (optimal for speech)
+NUM_BARS = 20                 # visualizer bar count
+VIZ_FPS = 60
+BAR_GAIN = 8.0                # bar sensitivity
+BAR_DECAY = 0.85              # bar fall-off speed
+
+# Chunked recording
+CHUNK_SECONDS = 60            # split long recordings every N seconds
+MAX_RECORDING_SECONDS = 600   # hard safety cutoff (auto-stop at 10 min)
 
 # STT
-GROQ_MODEL = "whisper-large-v3-turbo"  # fastest Groq model
+GROQ_MODEL = "whisper-large-v3-turbo"   # fastest Groq model
 ```
+
+Additional settings via environment variables (`.env` or dashboard):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GROQ_API_KEY` | — | Your Groq API key (`gsk_...`) |
+| `WHISPER_LANGUAGE` | `es` | Input language (`auto` for auto-detect) |
+| `TRANSLATE_TARGET_LANG` | `en` | Translation output language |
+| `AUDIO_DEVICE_NAME` | *(default mic)* | Substring of microphone name to use |
+| `SOUNDS_ENABLED` | `true` | Enable/disable beep feedback |
+| `BEEP_VOLUME_STEPS` | `2` | Beep volume 1–10 |
 
 ---
 
@@ -140,7 +235,8 @@ GROQ_MODEL = "whisper-large-v3-turbo"  # fastest Groq model
 |---|---|---|
 | Monthly cost | $15/month | ~$0.60/month* |
 | Annual cost | $180/year | ~$7.20/year* |
-| Data control | Third-party | Local |
+| Translation | Included | Included |
+| Data control | Third-party cloud | Local only |
 | Customizable | No | Fully |
 | Open source | No | Yes |
 
@@ -154,9 +250,12 @@ GROQ_MODEL = "whisper-large-v3-turbo"  # fastest Groq model
 |---------|----------|
 | Pill doesn't appear | Try running as Administrator |
 | Audio not captured | Check Microphone permissions in Windows Settings → Privacy |
-| Paste goes to wrong app | Ensure the app was focused before recording started |
-| Ctrl+C doesn't quit | Should work out of the box (SIGINT handler) |
+| Paste goes to wrong app | Ensure the target app was focused before recording started |
+| Hotkeys not working in some apps | Run as Administrator (required for elevated apps like Task Manager) |
 | Dashboard not loading | Port auto-selects from 5678: `netstat -an \| findstr 5678` |
+| Transcription hangs | Check your `GROQ_API_KEY` is valid; API timeout is 10 seconds |
+| Wrong language transcribed | Set `WHISPER_LANGUAGE` in dashboard Settings (or use `auto` to detect) |
+| Beeps too loud / quiet | Adjust **Volumen** in dashboard Settings (1–10) |
 
 ---
 
@@ -167,6 +266,6 @@ MIT License. Do whatever you want with it.
 ---
 
 <p align="center">
-  Built with Claude Opus 4.6 in a single session.<br>
-  <sub>Windows version by <a href="https://github.com/Johann-valderrama">Johann-valderrama</a> — <strong>V</strong><strong>f</strong>low</sub>
+  Original macOS version by <a href="https://github.com/daniel-carreon/sflow">daniel-carreon</a><br>
+  Windows version by <a href="https://github.com/Johann-Valderrama">Johann-Valderrama</a> — built with Claude Opus 4.6
 </p>
