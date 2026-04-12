@@ -236,7 +236,6 @@ class VflowApp(QObject):
         # MUST use QueuedConnection: pynput emits from its own thread
         self.hotkey.pressed.connect(self._on_hotkey_pressed, Qt.ConnectionType.QueuedConnection)
         self.hotkey.released.connect(self._on_hotkey_released, Qt.ConnectionType.QueuedConnection)
-        self.hotkey.toggle_pill.connect(self._on_toggle_pill, Qt.ConnectionType.QueuedConnection)
         self.hotkey.translate_pressed.connect(self._on_translate_pressed, Qt.ConnectionType.QueuedConnection)
         self.transcription_done.connect(self._on_transcription_done, Qt.ConnectionType.QueuedConnection)
         self.transcription_error.connect(self._on_transcription_error, Qt.ConnectionType.QueuedConnection)
@@ -341,11 +340,6 @@ class VflowApp(QObject):
                 self.transcription_error.emit("No speech detected")
         except Exception as e:
             self.transcription_error.emit(str(e))
-
-    @pyqtSlot()
-    def _on_toggle_pill(self):
-        """Toggle pill widget visibility with Alt+J."""
-        self.pill.setVisible(not self.pill.isVisible())
 
     @pyqtSlot(str, float)
     def _on_transcription_done(self, text: str, duration: float):

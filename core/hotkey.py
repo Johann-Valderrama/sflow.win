@@ -20,7 +20,6 @@ class HotkeyListener(QObject):
 
     pressed = pyqtSignal()
     released = pyqtSignal()
-    toggle_pill = pyqtSignal()
     translate_pressed = pyqtSignal()
 
     def __init__(self):
@@ -61,14 +60,6 @@ class HotkeyListener(QObject):
         is_alt_gr = key == keyboard.Key.alt_gr
         is_shift  = key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r)
         is_space  = key == keyboard.Key.space
-
-        # Alt+J: toggle pill visibility
-        try:
-            if self._alt_held and hasattr(key, 'char') and key.char == 'j':
-                self.toggle_pill.emit()
-                return
-        except AttributeError:
-            pass
 
         # --- Mode 4: Alt Gr + Space toggle (translate, hands-free style) ---
         if is_space and self._alt_gr_held:
