@@ -1,3 +1,4 @@
+import ctypes
 import math
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QTimer
@@ -8,8 +9,8 @@ from config import (
     PILL_WIDTH_RECORDING,
     PILL_WIDTH_STATUS,
     PILL_HEIGHT,
+    PILL_HEIGHT_IDLE,
     PILL_OPACITY,
-    PILL_CORNER_RADIUS,
     PILL_MARGIN_BOTTOM,
     LOGO_SIZE,
     LOGO_PATH,
@@ -31,8 +32,13 @@ class PillWidget(QWidget):
         self._state = self.STATE_IDLE
         self._target_width = PILL_WIDTH_IDLE
         self._current_width = float(PILL_WIDTH_IDLE)
+        self._target_height = PILL_HEIGHT_IDLE
+        self._current_height = float(PILL_HEIGHT_IDLE)
+        self._bottom_anchor_y: int = 0  # set in _position_on_screen
         self._drag_pos = None
-        self._bg_color = QColor(15, 15, 15, int(255 * PILL_OPACITY))
+        self._bg_color_active = QColor(15, 15, 15, int(255 * PILL_OPACITY))
+        self._bg_color_idle = QColor(140, 140, 140, 176)  # gray, 20% more translucent
+        self._bg_color = self._bg_color_idle  # start in idle
 
         self._logo = QPixmap(LOGO_PATH)
         if not self._logo.isNull():
@@ -55,7 +61,7 @@ class PillWidget(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setFixedHeight(PILL_HEIGHT)
+        self.setFixedHeight(PILL_HEIGHT_IDLE)
         self.setFixedWidth(PILL_WIDTH_IDLE)
 
         self.visualizer = AudioVisualizer(parent=self)
@@ -63,7 +69,7 @@ class PillWidget(QWidget):
 
         self._anim_timer = QTimer()
         self._anim_timer.setInterval(16)
-        self._anim_timer.timeout.connect(self._animate_width)
+        self._anim_timer.timeout.connect(self._animate_size)
 
         self._spinner_timer = QTimer()
         self._spinner_timer.setInterval(50)
@@ -73,6 +79,12 @@ class PillWidget(QWidget):
         self._done_timer.setSingleShot(True)
         self._done_timer.timeout.connect(lambda: self.set_state(self.STATE_IDLE))
 
+        # Enforce always-on-top every 3 s (Qt's hint alone is unreliable on Windows)
+        self._topmost_timer = QTimer()
+        self._topmost_timer.setInterval(3000)
+        self._topmost_timer.timeout.connect(self._force_topmost)
+        self._topmost_timer.start()
+
         self._position_on_screen()
 
     def _position_on_screen(self):
@@ -80,9 +92,10 @@ class PillWidget(QWidget):
         screen = QApplication.primaryScreen()
         if screen:
             geo = screen.availableGeometry()
-            # Anchor left edge so expansion always goes right
+            # Bottom anchor: pill's bottom edge stays here at all times
+            self._bottom_anchor_y = geo.bottom() - PILL_MARGIN_BOTTOM
             x = geo.center().x() - PILL_WIDTH_IDLE // 2
-            y = geo.bottom() - PILL_MARGIN_BOTTOM - PILL_HEIGHT
+            y = self._bottom_anchor_y - int(self._current_height)
             self.move(x, y)
 
     def set_state(self, state: str):
@@ -94,27 +107,34 @@ class PillWidget(QWidget):
         self._spinner_timer.stop()
 
         if state == self.STATE_IDLE:
+            self._bg_color = self._bg_color_idle
             self._target_width = PILL_WIDTH_IDLE
+            self._target_height = PILL_HEIGHT_IDLE
             self.visualizer.setVisible(False)
             self.visualizer.stop()
         elif state == self.STATE_RECORDING:
+            self._bg_color = self._bg_color_active
             self._target_width = PILL_WIDTH_RECORDING
+            self._target_height = PILL_HEIGHT
             self.visualizer.setVisible(True)
             self.visualizer.start()
         elif state == self.STATE_PROCESSING:
             self._target_width = PILL_WIDTH_STATUS
+            self._target_height = PILL_HEIGHT
             self._show_spinner = True
             self._spinner_timer.start()
             self.visualizer.setVisible(False)
             self.visualizer.stop()
         elif state == self.STATE_DONE:
             self._target_width = PILL_WIDTH_STATUS
+            self._target_height = PILL_HEIGHT
             self._show_checkmark = True
             self.visualizer.setVisible(False)
             self.visualizer.stop()
             self._done_timer.start(800)
         elif state == self.STATE_ERROR:
             self._target_width = PILL_WIDTH_STATUS
+            self._target_height = PILL_HEIGHT
             self._show_error = True
             self.visualizer.setVisible(False)
             self.visualizer.stop()
@@ -129,26 +149,40 @@ class PillWidget(QWidget):
         self._spinner_angle = (self._spinner_angle + 30) % 360
         self.update()
 
-    def _animate_width(self):
-        """Interpola suavemente el ancho de la pill hacia el tamaño objetivo."""
-        diff = self._target_width - self._current_width
-        if abs(diff) < 1:
+    def _animate_size(self):
+        """Interpola suavemente el ancho y alto de la pill hacia los tamaños objetivo."""
+        # Width lerp
+        dw = self._target_width - self._current_width
+        if abs(dw) < 1:
             self._current_width = float(self._target_width)
-            self._anim_timer.stop()
         else:
-            self._current_width += diff * 0.22
+            self._current_width += dw * 0.22
 
-        # Anchor left edge: logo stays fixed, expansion goes right
+        # Height lerp
+        dh = self._target_height - self._current_height
+        if abs(dh) < 1:
+            self._current_height = float(self._target_height)
+        else:
+            self._current_height += dh * 0.22
+
+        # Stop only when both dimensions have settled
+        if abs(self._target_width - self._current_width) < 1 and abs(self._target_height - self._current_height) < 1:
+            self._anim_timer.stop()
+
+        # Anchor left edge (width expands right) and bottom edge (height grows up)
         left_x = self.x()
-        self.setFixedWidth(int(self._current_width))
-        self.move(left_x, self.y())
+        new_w = int(self._current_width)
+        new_h = int(self._current_height)
+        self.setFixedWidth(new_w)
+        self.setFixedHeight(new_h)
+        self.move(left_x, self._bottom_anchor_y - new_h)
         self._layout_children()
         self.update()
 
     def _layout_children(self):
         """Reposiciona el visualizador de audio dentro de la pill."""
         w = int(self._current_width)
-        h = PILL_HEIGHT
+        h = int(self._current_height)
         logo_pad = 6
         logo_area = logo_pad + LOGO_SIZE + 4
         content_w = w - logo_area - 4
@@ -162,15 +196,23 @@ class PillWidget(QWidget):
         w = self.width()
         h = self.height()
 
+        # Dynamic corner radius so thin-line state stays pill-shaped
+        radius = h / 2.0
+
         # Background
         path = QPainterPath()
-        path.addRoundedRect(0.0, 0.0, float(w), float(h), PILL_CORNER_RADIUS, PILL_CORNER_RADIUS)
+        path.addRoundedRect(0.0, 0.0, float(w), float(h), radius, radius)
         painter.fillPath(path, self._bg_color)
 
         # Border
         painter.setPen(QPen(QColor(255, 255, 255, 12), 0.5))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(0, 0, w, h, PILL_CORNER_RADIUS, PILL_CORNER_RADIUS)
+        painter.drawRoundedRect(0, 0, w, h, radius, radius)
+
+        # Skip content when thin (idle line — no logo, no icons)
+        if h < 10:
+            painter.end()
+            return
 
         # Logo
         if not self._logo.isNull():
@@ -210,6 +252,22 @@ class PillWidget(QWidget):
 
         painter.end()
 
+    def _force_topmost(self):
+        """Fuerza la ventana al frente usando Win32 SetWindowPos (más confiable que Qt en Windows)."""
+        HWND_TOPMOST   = -1
+        SWP_NOMOVE     = 0x0002
+        SWP_NOSIZE     = 0x0001
+        SWP_NOACTIVATE = 0x0010
+        ctypes.windll.user32.SetWindowPos(
+            int(self.winId()), HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+
+    def showEvent(self, event):
+        """Al mostrarse, aplica HWND_TOPMOST después de que el HWND esté listo."""
+        super().showEvent(event)
+        QTimer.singleShot(0, self._force_topmost)
+
     def mousePressEvent(self, event):
         """Registra la posición inicial para arrastrar la pill."""
         if event.button() == Qt.MouseButton.LeftButton:
@@ -228,6 +286,7 @@ class PillWidget(QWidget):
                 new_pos.setX(x)
                 new_pos.setY(y)
             self.move(new_pos)
+            self._bottom_anchor_y = new_pos.y() + self.height()  # track new anchor
             event.accept()
 
     def mouseReleaseEvent(self, event):
