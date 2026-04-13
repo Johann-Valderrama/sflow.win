@@ -1,4 +1,6 @@
 import ctypes
+import ctypes.wintypes
+import logging
 import math
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QTimer
@@ -15,6 +17,29 @@ from config import (
     LOGO_SIZE,
     LOGO_PATH,
 )
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Win32 API type annotations (critical for 64-bit Windows)
+# Without these, ctypes defaults to c_int (32-bit) for all parameters,
+# truncating 64-bit HWND pointers.  See also core/clipboard.py.
+# ---------------------------------------------------------------------------
+_user32 = ctypes.windll.user32
+_user32.SetWindowPos.argtypes = [
+    ctypes.wintypes.HWND,   # hWnd
+    ctypes.wintypes.HWND,   # hWndInsertAfter
+    ctypes.c_int,            # X
+    ctypes.c_int,            # Y
+    ctypes.c_int,            # cx
+    ctypes.c_int,            # cy
+    ctypes.wintypes.UINT,    # uFlags
+]
+_user32.SetWindowPos.restype = ctypes.wintypes.BOOL
+_user32.IsWindow.argtypes = [ctypes.wintypes.HWND]
+_user32.IsWindow.restype = ctypes.wintypes.BOOL
+
+_HWND_TOPMOST = ctypes.wintypes.HWND(-1)
 
 
 class PillWidget(QWidget):
@@ -79,11 +104,16 @@ class PillWidget(QWidget):
         self._done_timer.setSingleShot(True)
         self._done_timer.timeout.connect(lambda: self.set_state(self.STATE_IDLE))
 
-        # Enforce always-on-top every 3 s (Qt's hint alone is unreliable on Windows)
+        # Enforce always-on-top every 1 s (Qt's hint alone is unreliable on Windows)
         self._topmost_timer = QTimer()
-        self._topmost_timer.setInterval(3000)
+        self._topmost_timer.setInterval(1000)
         self._topmost_timer.timeout.connect(self._force_topmost)
         self._topmost_timer.start()
+
+        # Re-assert topmost whenever any window gains focus
+        app = QApplication.instance()
+        if app:
+            app.focusChanged.connect(lambda _old, _new: QTimer.singleShot(50, self._force_topmost))
 
         self._position_on_screen()
 
@@ -204,8 +234,9 @@ class PillWidget(QWidget):
         path.addRoundedRect(0.0, 0.0, float(w), float(h), radius, radius)
         painter.fillPath(path, self._bg_color)
 
-        # Border
-        painter.setPen(QPen(QColor(255, 255, 255, 12), 0.5))
+        # Border (more visible in idle so the thin line is findable)
+        border_alpha = 40 if h < 12 else 12
+        painter.setPen(QPen(QColor(255, 255, 255, border_alpha), 0.5))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(0, 0, w, h, radius, radius)
 
@@ -253,15 +284,24 @@ class PillWidget(QWidget):
         painter.end()
 
     def _force_topmost(self):
-        """Fuerza la ventana al frente usando Win32 SetWindowPos (más confiable que Qt en Windows)."""
-        HWND_TOPMOST   = -1
-        SWP_NOMOVE     = 0x0002
-        SWP_NOSIZE     = 0x0001
-        SWP_NOACTIVATE = 0x0010
-        ctypes.windll.user32.SetWindowPos(
-            int(self.winId()), HWND_TOPMOST, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        )
+        """Fuerza la ventana al frente usando Win32 SetWindowPos (64-bit safe)."""
+        try:
+            wid = self.winId()
+            if not wid:
+                return
+            hwnd = ctypes.wintypes.HWND(int(wid))
+            if not _user32.IsWindow(hwnd):
+                return
+            SWP_NOMOVE     = 0x0002
+            SWP_NOSIZE     = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            SWP_SHOWWINDOW = 0x0040
+            _user32.SetWindowPos(
+                hwnd, _HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            )
+        except Exception as exc:
+            logger.warning("_force_topmost failed: %s", exc)
 
     def showEvent(self, event):
         """Al mostrarse, aplica HWND_TOPMOST después de que el HWND esté listo."""
