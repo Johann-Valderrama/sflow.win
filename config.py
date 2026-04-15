@@ -47,7 +47,7 @@ PILL_HEIGHT = 34
 PILL_HEIGHT_IDLE = 8   # thin line when idle (visible but subtle)
 PILL_OPACITY = 0.90
 PILL_CORNER_RADIUS = 17
-PILL_MARGIN_BOTTOM = 14
+PILL_MARGIN_BOTTOM = 12
 LOGO_SIZE = 22
 
 # Logo path (read-only bundled asset)
