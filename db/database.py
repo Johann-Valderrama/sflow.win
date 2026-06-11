@@ -1,6 +1,7 @@
 import os
 import logging
 import sqlite3
+from datetime import datetime, timedelta
 from config import DB_PATH
 
 logger = logging.getLogger(__name__)
@@ -130,3 +131,22 @@ class TranscriptionDB:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("UPDATE transcriptions SET text = ? WHERE id = ?", (new_text, transcription_id))
             return cursor.rowcount
+
+    def prune_older_than(self, days: int) -> int:
+        """Elimina transcripciones más antiguas que *days* días.
+
+        Si days <= 0 no hace nada (semántica: conservar siempre).
+        Devuelve el número de filas eliminadas.
+        """
+        if days <= 0:
+            return 0
+        cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "DELETE FROM transcriptions WHERE date(created_at) < date(?)",
+                (cutoff,),
+            )
+            deleted = cursor.rowcount
+        if deleted:
+            logger.info("Poda de historial: %d transcripciones eliminadas (anteriores a %s)", deleted, cutoff)
+        return deleted

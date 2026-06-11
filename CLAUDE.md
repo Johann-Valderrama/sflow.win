@@ -119,6 +119,20 @@ Recordings under 0.3 seconds are accidental taps — skip transcription and retu
 ### 8. Port Selection (web/server.py)
 Default port is 5678. Auto-scans for free port if occupied.
 
+## Security & Privacy
+
+### 1. API Key Encryption (DPAPI)
+The GROQ_API_KEY is encrypted with Windows Data Protection API (DPAPI) via crypt32.dll and stored as base64 in `%APPDATA%\Vflow\GROQ_API_KEY_ENC`. Only the same Windows user on the same machine can decrypt it. Plaintext keys are automatically migrated to encrypted format on startup. This replaces the ineffective `os.chmod()` approach (which doesn't work on Windows).
+
+### 2. History Privacy Mode
+Configure history saving with `SAVE_HISTORY` in `.env` (default: `true`). Set to `false` to disable database recording — transcriptions paste normally but are never stored. Togglable from the dashboard Settings panel without restarting.
+
+### 3. Automatic History Retention
+Set `HISTORY_RETENTION_DAYS` in `.env` (default: `0` = keep forever). If > 0, the app automatically deletes transcriptions older than N days on startup. Configurable from the dashboard without code changes.
+
+### 4. CSRF Hardening
+The dashboard validates exact Origin/Referer hosts (`localhost`, `127.0.0.1`, or `::1` only) instead of prefix matching. This closes bypasses like `localhost.evil.com`.
+
 ## Customization
 
 ### Hotkeys
@@ -143,6 +157,17 @@ Edit `config.py`:
 - `NUM_BARS` (20) — number of visualizer bars
 - `BAR_GAIN` (8.0) — sensitivity of bars
 - `BAR_DECAY` (0.85) — how quickly bars fall
+
+### Environment Variables (`.env`)
+- `GROQ_API_KEY` — Your Groq API key (automatically encrypted)
+- `SAVE_HISTORY` (default: `true`) — Set to `false` to disable recording transcriptions to database
+- `HISTORY_RETENTION_DAYS` (default: `0`) — Auto-delete transcriptions older than N days; `0` keeps forever
+- `WHISPER_LANGUAGE` (default: `es`) — Input language for transcription
+- `TRANSLATE_TARGET_LANG` (default: `en`) — Target language for translation mode
+- `AUDIO_DEVICE_NAME` — Substring of microphone name to use (defaults to system default)
+- `SOUNDS_ENABLED` (default: `true`) — Enable/disable audio feedback beeps
+- `BEEP_VOLUME_STEPS` (default: `2`) — Beep volume (1–10)
+- `RESTORE_CLIPBOARD` (default: `false`) — Restore clipboard content after paste
 
 ## Troubleshooting
 

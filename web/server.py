@@ -4,6 +4,7 @@ import secrets
 import socket
 import threading
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 from flask import Flask, jsonify, render_template_string, request, send_file
 from dotenv import set_key
 from db.database import TranscriptionDB
@@ -168,6 +169,25 @@ HTML_TEMPLATE = """
                                oninput="document.getElementById('cfg-beep-volume-label').textContent=this.value">
                         <span class="text-xs text-white/40">Volumen: <span id="cfg-beep-volume-label">2</span></span>
                     </div>
+                </div>
+                <div>
+                    <label class="text-xs text-white/40 block mb-1">Guardar historial</label>
+                    <div class="flex items-center gap-2" style="height:32px">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="cfg-save-history">
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span class="text-xs text-white/40">Guardar transcripciones</span>
+                    </div>
+                </div>
+                <div>
+                    <label class="text-xs text-white/40 block mb-1">Eliminar transcripciones después de (días)</label>
+                    <select id="cfg-retention-days" class="cfg-select">
+                        <option value="0">Nunca</option>
+                        <option value="7">7 días</option>
+                        <option value="30">30 días</option>
+                        <option value="90">90 días</option>
+                    </select>
                 </div>
             </div>
             <div class="flex justify-end items-center mt-4 gap-3">
@@ -538,6 +558,11 @@ HTML_TEMPLATE = """
             const vol = settings.beep_volume || 2;
             document.getElementById('cfg-beep-volume').value = vol;
             document.getElementById('cfg-beep-volume-label').textContent = vol;
+            document.getElementById('cfg-save-history').checked = settings.save_history !== false;
+            const retDays = settings.retention_days || 0;
+            const retSelect = document.getElementById('cfg-retention-days');
+            const retOpt = retSelect.querySelector('option[value="' + retDays + '"]');
+            retSelect.value = retOpt ? String(retDays) : '0';
             const micSelect = document.getElementById('cfg-microphone');
             micSelect.innerHTML = '<option value="">Sistema por defecto</option>';
             mics.forEach(m => {
@@ -556,6 +581,8 @@ HTML_TEMPLATE = """
                 device_name: document.getElementById('cfg-microphone').value,
                 sounds_enabled: document.getElementById('cfg-sounds').checked ? 'true' : 'false',
                 beep_volume: document.getElementById('cfg-beep-volume').value,
+                save_history: document.getElementById('cfg-save-history').checked ? 'true' : 'false',
+                retention_days: document.getElementById('cfg-retention-days').value,
             };
             await fetch('/api/settings', {
                 method: 'POST',
@@ -573,6 +600,19 @@ HTML_TEMPLATE = """
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+_LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "::1"}
+
+
+def _is_local_url(url: str) -> bool:
+    """Devuelve True solo si la URL apunta exactamente a un host local.
+
+    Parsea el hostname con urlparse para evitar bypasses por prefijo como
+    http://localhost.evil.com (hostname sería "localhost.evil.com", no "localhost").
+    Cualquier puerto local es válido; solo el hostname es verificado.
+    """
+    host = urlparse(url).hostname
+    return host in _LOCAL_HOSTNAMES
+
 
 @app.before_request
 def _csrf_check():
@@ -581,14 +621,13 @@ def _csrf_check():
         return
     origin = request.headers.get("Origin", "")
     referer = request.headers.get("Referer", "")
-    # Allow requests with no Origin/Referer (same-origin browser, curl, etc.)
+    # Permitir requests sin Origin ni Referer (mismo origen, curl, etc.)
     if not origin and not referer:
         return
-    allowed_prefixes = ("http://localhost", "http://127.0.0.1")
-    if origin and not any(origin.startswith(p) for p in allowed_prefixes):
+    if origin and not _is_local_url(origin):
         return jsonify({"error": "CSRF: origin not allowed"}), 403
     if referer and not origin:
-        if not any(referer.startswith(p) for p in allowed_prefixes):
+        if not _is_local_url(referer):
             return jsonify({"error": "CSRF: referer not allowed"}), 403
 
 
@@ -682,6 +721,8 @@ def get_settings():
         "device_name": os.getenv("AUDIO_DEVICE_NAME", ""),
         "sounds_enabled": os.getenv("SOUNDS_ENABLED", "true") == "true",
         "beep_volume": int(os.getenv("BEEP_VOLUME_STEPS", "2")),
+        "save_history": os.getenv("SAVE_HISTORY", "true").lower() == "true",
+        "retention_days": int(os.getenv("HISTORY_RETENTION_DAYS", "0") or 0),
     })
 
 
@@ -697,6 +738,8 @@ def update_settings():
         "device_name": "AUDIO_DEVICE_NAME",
         "sounds_enabled": "SOUNDS_ENABLED",
         "beep_volume": "BEEP_VOLUME_STEPS",
+        "save_history": "SAVE_HISTORY",
+        "retention_days": "HISTORY_RETENTION_DAYS",
     }
     for field, env_key in allowed.items():
         if field in data:

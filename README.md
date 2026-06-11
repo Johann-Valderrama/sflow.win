@@ -37,6 +37,8 @@ Built as a replacement for [Wispr Flow](https://wispr.com) ($15/month). Vflow us
 - **Dashboard settings** — change language, microphone, translation target, and sound volume without editing any file
 - **SQLite history** — every transcription saved locally with timestamp and duration
 - **First-run setup** — asks for your Groq API key on first launch, no config files to edit
+- **Encrypted API key** — GROQ_API_KEY encrypted with Windows DPAPI (only your user on this machine can decrypt)
+- **Privacy controls** — disable history recording, set auto-deletion retention, no cloud sync
 
 ---
 
@@ -219,12 +221,15 @@ Additional settings via environment variables (`.env` or dashboard):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GROQ_API_KEY` | — | Your Groq API key (`gsk_...`) |
+| `GROQ_API_KEY` | — | Your Groq API key (`gsk_...`); encrypted with DPAPI on first use |
+| `SAVE_HISTORY` | `true` | Set to `false` to disable recording transcriptions to database |
+| `HISTORY_RETENTION_DAYS` | `0` | Auto-delete transcriptions older than N days; `0` = keep forever |
 | `WHISPER_LANGUAGE` | `es` | Input language (`auto` for auto-detect) |
 | `TRANSLATE_TARGET_LANG` | `en` | Translation output language |
 | `AUDIO_DEVICE_NAME` | *(default mic)* | Substring of microphone name to use |
 | `SOUNDS_ENABLED` | `true` | Enable/disable beep feedback |
 | `BEEP_VOLUME_STEPS` | `2` | Beep volume 1–10 |
+| `RESTORE_CLIPBOARD` | `false` | Restore clipboard content after paste |
 
 ---
 
@@ -258,6 +263,19 @@ Additional settings via environment variables (`.env` or dashboard):
 | Only one instance allowed | Single-instance mutex prevents multiple launches; second instance shows warning and exits |
 | Text in clipboard but not pasted | If window verification fails, text stays in clipboard; paste manually with Ctrl+V |
 | Failed recording saved for debugging | Check `%APPDATA%\Vflow\last_failed_recording.wav` if transcription API/network error occurs |
+| API key plaintext in `.env` | On first launch, plaintext keys are automatically encrypted with DPAPI; no manual action needed |
+| Disable history recording | Set `SAVE_HISTORY=false` in `.env` or toggle in dashboard Settings; transcriptions paste but won't be stored |
+| Auto-delete old transcriptions | Set `HISTORY_RETENTION_DAYS=N` (e.g., `30`) to delete entries older than N days on startup |
+
+---
+
+## Privacy & Security
+
+- **Your API key stays on your machine**: Encrypted with Windows DPAPI; only your user account can decrypt it
+- **No cloud sync**: All transcriptions stored locally in SQLite; never uploaded
+- **Offline capable**: Once you have your API key, you can disable internet after startup (API calls require internet)
+- **Open source**: Audit the code yourself — no hidden telemetry or data collection
+- **Privacy controls**: Disable history recording with `SAVE_HISTORY=false`, or set auto-deletion with `HISTORY_RETENTION_DAYS`
 
 ---
 

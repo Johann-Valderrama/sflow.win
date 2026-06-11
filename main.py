@@ -6,7 +6,6 @@ import logging
 import logging.handlers
 import math
 import os
-import stat
 import struct
 import sys
 import signal
@@ -21,11 +20,13 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, pyqtSlot, QTimer
 from PyQt6.QtGui import QIcon, QPixmap, QAction
 
+from dotenv import set_key, unset_key
 from ui.pill_widget import PillWidget
 from core.recorder import AudioRecorder
 from core.transcriber import Transcriber
 from core.hotkey import HotkeyListener
 from core.clipboard import paste_text, save_frontmost_app
+from core.secrets import encrypt
 from db.database import TranscriptionDB
 from web.server import start_web_server
 from config import LOGO_PATH, APP_DATA_DIR, GROQ_API_KEY, CHUNK_SECONDS, MAX_RECORDING_SECONDS
@@ -51,6 +52,33 @@ def _setup_logging():
         handlers=[handler],
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+
+def _migrate_plaintext_key():
+    """Migra una GROQ_API_KEY en texto plano existente en .env al formato DPAPI cifrado.
+
+    Si el .env contiene 'GROQ_API_KEY' en texto plano (valor que empieza con 'gsk_')
+    y no existe 'GROQ_API_KEY_ENC', cifra el valor y actualiza el .env en el acto.
+    No aborta la aplicación si falla — solo registra el error.
+    """
+    from dotenv import dotenv_values
+    env_path = os.path.join(APP_DATA_DIR, ".env")
+    if not os.path.exists(env_path):
+        return
+    try:
+        values = dotenv_values(env_path)
+        plain_key = values.get("GROQ_API_KEY", "")
+        already_encrypted = values.get("GROQ_API_KEY_ENC", "")
+        if plain_key.startswith("gsk_") and not already_encrypted:
+            enc = encrypt(plain_key)
+            set_key(env_path, "GROQ_API_KEY_ENC", enc)
+            try:
+                unset_key(env_path, "GROQ_API_KEY")
+            except Exception:
+                pass
+            logger.info("Migración completada: GROQ_API_KEY cifrada con DPAPI en .env")
+    except Exception as e:
+        logger.warning("_migrate_plaintext_key: no se pudo migrar la clave — %s", e)
 
 
 def _generate_beep_wav(freq: int, duration_ms: int, volume: float = 0.009) -> bytes:
@@ -123,7 +151,7 @@ class FirstRunDialog(QDialog):
         self.setLayout(layout)
 
     def _save_key(self):
-        """Valida la API key, la guarda en .env y la establece en el entorno."""
+        """Valida la API key, la cifra con DPAPI y la guarda en .env como GROQ_API_KEY_ENC."""
         key = self.key_input.text().strip()
         if not key.startswith("gsk_") or len(key) < 20:
             QMessageBox.warning(self, "Error", "La clave debe comenzar con 'gsk_' y tener al menos 20 caracteres.")
@@ -131,13 +159,15 @@ class FirstRunDialog(QDialog):
 
         env_path = os.path.join(APP_DATA_DIR, ".env")
         os.makedirs(APP_DATA_DIR, exist_ok=True)
-        with open(env_path, "w") as f:
-            f.write(f"GROQ_API_KEY={key}\n")
 
-        # Restringir permisos del .env al usuario actual (best-effort en Windows)
+        # Cifrar con DPAPI y escribir solo el blob cifrado en .env (nunca texto plano)
+        enc = encrypt(key)
+        set_key(env_path, "GROQ_API_KEY_ENC", enc)
+
+        # Eliminar cualquier clave legacy en texto plano del .env
         try:
-            os.chmod(env_path, stat.S_IRUSR | stat.S_IWUSR)
-        except OSError:
+            unset_key(env_path, "GROQ_API_KEY")
+        except Exception:
             pass
 
         # Establecer en el proceso actual para que Transcriber lo detecte
@@ -239,6 +269,17 @@ class VflowApp(QObject):
         self.recorder = AudioRecorder()
         self.transcriber = Transcriber()
         self.db = TranscriptionDB()
+
+        # Poda de historial por retención al arranque (HISTORY_RETENTION_DAYS=0 → conservar siempre)
+        try:
+            retention_days = int(os.getenv("HISTORY_RETENTION_DAYS", "0") or 0)
+            if retention_days > 0:
+                pruned = self.db.prune_older_than(retention_days)
+                if pruned:
+                    logger.info("Retención: eliminadas %d transcripciones (> %d días)", pruned, retention_days)
+        except Exception as _prune_exc:
+            logger.warning("Error en poda de historial por retención: %s", _prune_exc)
+
         self.hotkey = HotkeyListener()
         self.pill = PillWidget()
 
@@ -429,8 +470,9 @@ class VflowApp(QObject):
         if gen != self._generation:
             return  # resultado de sesión vieja: descartar
         _play_sound(660)  # beep bajo = transcripción lista
-        # Insertar siempre en DB: la transcripción es válida aunque el paste falle
-        self.db.insert(text=text, duration_seconds=duration)
+        # Insertar en DB solo si el historial está habilitado (SAVE_HISTORY=true por defecto)
+        if os.getenv("SAVE_HISTORY", "true").lower() == "true":
+            self.db.insert(text=text, duration_seconds=duration)
         # La pill permanece en STATE_PROCESSING hasta que paste_finished confirme el resultado
         threading.Thread(target=self._paste_worker, args=(text,), daemon=True).start()
 
@@ -489,6 +531,9 @@ def main():
     # Configurar logging a archivo antes de cualquier otra operación
     _setup_logging()
     logger.info("Iniciando Vflow")
+
+    # Migrar clave legacy en texto plano a DPAPI cifrado (operación idempotente)
+    _migrate_plaintext_key()
 
     ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
 

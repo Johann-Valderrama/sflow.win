@@ -28,6 +28,20 @@ if getattr(sys, "frozen", False):
 # Load .env from data dir
 load_dotenv(os.path.join(_DATA_DIR, ".env"))
 
+# Descifrado DPAPI: si GROQ_API_KEY no está en claro pero existe GROQ_API_KEY_ENC,
+# descifrar y establecer en el entorno de runtime (nunca se escribe a disco en texto plano).
+if not os.getenv("GROQ_API_KEY") and os.getenv("GROQ_API_KEY_ENC"):
+    try:
+        from core.secrets import decrypt as _dpapi_decrypt
+        _plain = _dpapi_decrypt(os.getenv("GROQ_API_KEY_ENC"))
+        if _plain:
+            os.environ["GROQ_API_KEY"] = _plain
+        # Si _plain es None → clave de otra máquina o dato corrupto → dejamos vacío
+        # para que main.py muestre el FirstRunDialog.
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("config: no se pudo descifrar GROQ_API_KEY_ENC — %s", _e)
+
 # Groq API
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = "whisper-large-v3-turbo"
