@@ -265,6 +265,36 @@ class TestTranscriber:
         # prompt should not be in the kwargs
         assert "prompt" not in (call_kwargs.kwargs if call_kwargs.kwargs else call_kwargs[1])
 
+    def test_is_hallucination_standalone(self):
+        """Alucinaciones cortas/sueltas de silencio se detectan (exact match)."""
+        from core.transcriber import _is_hallucination
+        for txt in ("Gracias.", "gracias", "  ¡Gracias!  ", "Muchas gracias.",
+                    "You", "Thank you.", "Adiós", "Vale.",
+                    "Gracias por ver el video", "Gracias por ver el video.",
+                    "Subtítulos por la comunidad de Amara.org"):
+            assert _is_hallucination(txt) is True, txt
+
+    def test_is_hallucination_preserves_real_dictation(self):
+        """Dictado real (incluso si menciona una frase marcadora) NO se filtra."""
+        from core.transcriber import _is_hallucination
+        for txt in ("", "hola quiero comprar pan y leche",
+                    "gracias por tu ayuda con el reporte",
+                    "le dije gracias por ver el video que le compartí en la reunión de hoy",
+                    "muchas gracias por venir hoy a la reunión de equipo"):
+            assert _is_hallucination(txt) is False, txt
+
+    @patch("core.transcriber.Groq")
+    @patch.dict(os.environ, {"GROQ_API_KEY": "gsk_test_key_12345678901234567890"})
+    def test_transcribe_filters_hallucination(self, mock_groq_cls):
+        """transcribe() devuelve '' cuando la API alucina en silencio."""
+        from core.transcriber import Transcriber
+        mock_client = MagicMock()
+        mock_groq_cls.return_value = mock_client
+        mock_client.audio.transcriptions.create.return_value = "Gracias."
+        t = Transcriber()
+        buf = io.BytesIO(b"x" * 200)
+        assert t.transcribe(buf) == ""
+
 
 # ---------------------------------------------------------------------------
 # TestHotkeyListener

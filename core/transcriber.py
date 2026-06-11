@@ -5,13 +5,10 @@ from groq import Groq
 from config import GROQ_MODEL
 
 
-# Frases que Whisper "alucina" en audio silencioso o muy corto; nunca deben pegarse.
-# Lista basada en el upstream macOS (Daniel Carreón, ea0f413) ampliada con variantes
-# adicionales en español e inglés.
+# Fragmentos INCONFUNDIBLES que jamás aparecen en dictado real: se buscan por
+# contención (aunque vayan dentro de otro texto) porque nadie los dicta nunca.
+# Lista basada en el upstream macOS (Daniel Carreón, ea0f413).
 _HALLUCINATION_MARKERS = (
-    "gracias por ver el video",
-    "gracias por ver este video",
-    "gracias por ver.",
     "subtitulado por la comunidad",
     "subtítulos por la comunidad",
     "subtitulos realizados por la comunidad",
@@ -20,14 +17,46 @@ _HALLUCINATION_MARKERS = (
     "amara.org",
     "suscríbete al canal",
     "suscribete al canal",
+)
+
+# Alucinaciones CORTAS y sueltas que Whisper devuelve en silencio puro.
+# A diferencia de las frases largas, estas son palabras/expresiones que SÍ podrían
+# aparecer dentro de dictado real, por lo que se comparan por COINCIDENCIA EXACTA
+# contra el texto completo normalizado (sin puntuación), no por contención: solo
+# se descartan cuando son la ÚNICA salida del modelo. Tradeoff aceptado: si dictas
+# literalmente "gracias" y nada más, se filtrará (caso rarísimo frente al de silencio).
+_HALLUCINATION_EXACT = frozenset({
+    # Cortas sueltas
+    "gracias",
+    "muchas gracias",
+    "gracias a todos",
+    "vale",
+    "you",
+    "thank you",
+    "thanks",
+    "bye",
+    "adios",
+    "adiós",
+    "hasta luego",
+    # Frases completas que SÍ podrían incrustarse en dictado real, por eso van por
+    # exacto (solo se filtran cuando son la única salida del modelo).
+    "gracias por ver",
+    "gracias por ver el video",
+    "gracias por ver el vídeo",
+    "gracias por ver este video",
+    "gracias por ver este vídeo",
     "thank you for watching",
     "thanks for watching",
     "please subscribe",
     "see you next time",
     "estoy listo para ayudarte",
-    "¿qué transcripción de voz necesitas",
+    "qué transcripción de voz necesitas",
     "que transcripcion de voz necesitas",
-)
+})
+
+# Caracteres de puntuación/espacio que se recortan de los extremos al normalizar
+# para la comparación exacta (p. ej. "¡Gracias!" / "Gracias." → "gracias").
+_TRIM_CHARS = " \t\n.,!?¡¿…\"'-"
 
 # Umbral de longitud para distinguir alucinaciones de dictado legítimo largo.
 # Una alucinación típica es la ÚNICA salida del modelo (texto corto y genérico).
@@ -64,6 +93,11 @@ def _is_hallucination(text: str) -> bool:
         # Texto largo → casi seguro dictado real; no filtrar.
         return False
     lowered = stripped.lower()
+    # 1) Coincidencia EXACTA contra alucinaciones cortas sueltas (texto completo
+    #    normalizado sin puntuación), p. ej. "Gracias." → "gracias".
+    if lowered.strip(_TRIM_CHARS) in _HALLUCINATION_EXACT:
+        return True
+    # 2) Contención de frases largas inconfundibles (subtítulos de Amara, etc.).
     return any(marker in lowered for marker in _HALLUCINATION_MARKERS)
 
 
