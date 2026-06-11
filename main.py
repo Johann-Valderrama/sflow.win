@@ -368,53 +368,81 @@ class VflowApp(QObject):
 
     @pyqtSlot()
     def _on_hotkey_pressed(self):
-        """Guarda la ventana activa e inicia la grabación de audio."""
-        self._generation += 1
-        _play_sound(880)  # beep alto = inicio de grabación
-        save_frontmost_app()
+        """Guarda la ventana activa e inicia la grabación de audio.
+
+        Envuelve el cuerpo en un try/except defensivo externo para que cualquier
+        excepción inesperada (fuera del fallo de recorder.start()) quede registrada
+        con traceback y caiga a STATE_ERROR sin propagar la excepción al caller.
+        El try/except interno de recorder.start() se conserva íntegro con su return
+        temprano para mantener la semántica de fallo puntual de micrófono.
+        """
         try:
-            self.recorder.start()
+            self._generation += 1
+            _play_sound(880)  # beep alto = inicio de grabación
+            save_frontmost_app()
+            try:
+                self.recorder.start()
+            except Exception as e:
+                logger.error("Error al iniciar grabación (¿micrófono no disponible?): %s", e)
+                self.pill.set_state(PillWidget.STATE_ERROR)
+                return
+            self._recording_active = True
+            with self._chunk_state_lock:
+                self._chunk_results.clear()
+                self._chunk_seq = 0
+            self._chunk_timer.start(CHUNK_SECONDS * 1000)
+            self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
+            # Arrancar watchdog de micrófono
+            self._last_samples_seen = 0
+            self._mic_stall_count = 0
+            self._mic_watchdog_timer.start()
+            self.pill.set_state(PillWidget.STATE_RECORDING)
         except Exception as e:
-            logger.error("Error al iniciar grabación (¿micrófono no disponible?): %s", e)
-            self.pill.set_state(PillWidget.STATE_ERROR)
-            return
-        self._recording_active = True
-        with self._chunk_state_lock:
-            self._chunk_results.clear()
-            self._chunk_seq = 0
-        self._chunk_timer.start(CHUNK_SECONDS * 1000)
-        self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
-        # Arrancar watchdog de micrófono
-        self._last_samples_seen = 0
-        self._mic_stall_count = 0
-        self._mic_watchdog_timer.start()
-        self.pill.set_state(PillWidget.STATE_RECORDING)
+            logger.error("_on_hotkey_pressed: fallo inesperado: %s", e, exc_info=True)
+            try:
+                self.pill.set_state(PillWidget.STATE_ERROR)
+            except Exception:
+                pass
 
     @pyqtSlot()
     def _on_translate_pressed(self):
-        """Inicia grabación en modo traducción (→ inglés). Sin chunking."""
-        self._generation += 1
-        self._translate_mode = True
-        _play_sound(880)
-        save_frontmost_app()
+        """Inicia grabación en modo traducción (→ inglés). Sin chunking.
+
+        Envuelve el cuerpo en un try/except defensivo externo para que cualquier
+        excepción inesperada quede registrada con traceback y caiga a STATE_ERROR.
+        El try/except interno de recorder.start() se conserva con su return temprano
+        y el reset de _translate_mode para dejar el estado limpio ante fallo de micrófono.
+        """
         try:
-            self.recorder.start()
+            self._generation += 1
+            self._translate_mode = True
+            _play_sound(880)
+            save_frontmost_app()
+            try:
+                self.recorder.start()
+            except Exception as e:
+                logger.error("Error al iniciar grabación para traducción: %s", e)
+                self.pill.set_state(PillWidget.STATE_ERROR)
+                self._translate_mode = False
+                return
+            self._recording_active = True
+            with self._chunk_state_lock:
+                self._chunk_results.clear()
+                self._chunk_seq = 0
+            # Sin chunk_timer en modo traducción — se envía audio completo al endpoint de traducción
+            self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
+            # Arrancar watchdog de micrófono
+            self._last_samples_seen = 0
+            self._mic_stall_count = 0
+            self._mic_watchdog_timer.start()
+            self.pill.set_state(PillWidget.STATE_RECORDING)
         except Exception as e:
-            logger.error("Error al iniciar grabación para traducción: %s", e)
-            self.pill.set_state(PillWidget.STATE_ERROR)
+            logger.error("_on_translate_pressed: fallo inesperado: %s", e, exc_info=True)
             self._translate_mode = False
-            return
-        self._recording_active = True
-        with self._chunk_state_lock:
-            self._chunk_results.clear()
-            self._chunk_seq = 0
-        # Sin chunk_timer en modo traducción — se envía audio completo al endpoint de traducción
-        self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
-        # Arrancar watchdog de micrófono
-        self._last_samples_seen = 0
-        self._mic_stall_count = 0
-        self._mic_watchdog_timer.start()
-        self.pill.set_state(PillWidget.STATE_RECORDING)
+            try:
+                self.pill.set_state(PillWidget.STATE_ERROR)
+            except Exception:
+                pass
 
     def _flush_chunk(self):
         """Extrae y transcribe el chunk de audio acumulado en un hilo background."""
@@ -451,33 +479,50 @@ class VflowApp(QObject):
 
     @pyqtSlot()
     def _on_hotkey_released(self):
-        """Detiene la grabación y lanza la transcripción de los frames restantes."""
+        """Detiene la grabación y lanza la transcripción de los frames restantes.
+
+        El early-return por release espurio queda FUERA del bloque defensivo para
+        que nunca se lo trague el except. El cleanup de estado (_recording_active,
+        hotkey.reset, stop de timers) ocurre antes de cualquier operación que pueda
+        lanzar, garantizando que un fallo posterior no deje la app en estado colgado.
+        Si algo falla tras el cleanup, el except registra traceback y pone STATE_ERROR.
+        """
         # Early-return: evita releases espurios del safety timer / listener desincronizado
         if not self._recording_active:
             return
+
+        # --- Cleanup de estado PRIMERO: garantiza que no quede colgada aunque falle lo siguiente ---
         self._recording_active = False
         self.hotkey.reset()
-
         self._safety_timer.stop()
         self._chunk_timer.stop()
         self._mic_watchdog_timer.stop()
-        duration = self.recorder.stop()
-        self.pill.set_state(PillWidget.STATE_PROCESSING)
 
-        if duration < 0.3:
-            self.pill.set_state(PillWidget.STATE_IDLE)
-            return
+        try:
+            duration = self.recorder.stop()
+            self.pill.set_state(PillWidget.STATE_PROCESSING)
 
-        translate = self._translate_mode
-        self._translate_mode = False  # resetear antes de iniciar el hilo background
-        gen = self._generation
-        wav_buffer = self.recorder.get_wav_buffer()
-        thread = threading.Thread(
-            target=self._transcribe_final,
-            args=(wav_buffer, duration, translate, gen),
-            daemon=True,
-        )
-        thread.start()
+            if duration < 0.3:
+                self.pill.set_state(PillWidget.STATE_IDLE)
+                return
+
+            translate = self._translate_mode
+            self._translate_mode = False  # resetear antes de iniciar el hilo background
+            gen = self._generation
+            wav_buffer = self.recorder.get_wav_buffer()
+            thread = threading.Thread(
+                target=self._transcribe_final,
+                args=(wav_buffer, duration, translate, gen),
+                daemon=True,
+            )
+            thread.start()
+        except Exception as e:
+            logger.error("_on_hotkey_released: fallo inesperado: %s", e, exc_info=True)
+            self._translate_mode = False
+            try:
+                self.pill.set_state(PillWidget.STATE_ERROR)
+            except Exception:
+                pass
 
     def _transcribe_final(self, wav_buffer, duration, translate: bool = False, gen: int = 0):
         """Transcribe o traduce los frames restantes y emite el resultado."""

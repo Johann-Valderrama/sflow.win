@@ -5,6 +5,68 @@ from groq import Groq
 from config import GROQ_MODEL
 
 
+# Frases que Whisper "alucina" en audio silencioso o muy corto; nunca deben pegarse.
+# Lista basada en el upstream macOS (Daniel Carreón, ea0f413) ampliada con variantes
+# adicionales en español e inglés.
+_HALLUCINATION_MARKERS = (
+    "gracias por ver el video",
+    "gracias por ver este video",
+    "gracias por ver.",
+    "subtitulado por la comunidad",
+    "subtítulos por la comunidad",
+    "subtitulos realizados por la comunidad",
+    "subtítulos realizados por la comunidad",
+    "subtítulos por la comunidad de amara",
+    "amara.org",
+    "suscríbete al canal",
+    "suscribete al canal",
+    "thank you for watching",
+    "thanks for watching",
+    "please subscribe",
+    "see you next time",
+    "estoy listo para ayudarte",
+    "¿qué transcripción de voz necesitas",
+    "que transcripcion de voz necesitas",
+)
+
+# Umbral de longitud para distinguir alucinaciones de dictado legítimo largo.
+# Una alucinación típica es la ÚNICA salida del modelo (texto corto y genérico).
+# Si el texto supera este límite, asumimos que es dictado real que menciona
+# casualmente una frase marcadora (p. ej. "le di las gracias por ver el video
+# que le mandé") y NO lo descartamos.
+_HALLUCINATION_MAX_LENGTH = 80
+
+
+def _is_hallucination(text: str) -> bool:
+    """Devuelve True si el texto es una alucinación conocida de Whisper.
+
+    Whisper produce estas frases fijas cuando recibe audio silencioso o
+    demasiado corto para transcribir. La heurística combina dos condiciones:
+
+    1. El texto (en minúsculas, sin espacios extremos) contiene alguno de los
+       marcadores de ``_HALLUCINATION_MARKERS``.
+    2. El texto es suficientemente corto (≤ ``_HALLUCINATION_MAX_LENGTH``
+       caracteres tras strip). Esto evita falsos positivos: si alguien dicta
+       un párrafo largo que casualmente menciona "gracias por ver el video",
+       el texto supera el umbral y no se descarta.
+
+    Argumentos:
+        text: Texto devuelto por la API de Whisper, ya con strip() aplicado.
+
+    Retorna:
+        True si debe considerarse alucinación y descartarse; False en caso
+        contrario.
+    """
+    if not text:
+        return False
+    stripped = text.strip()
+    if len(stripped) > _HALLUCINATION_MAX_LENGTH:
+        # Texto largo → casi seguro dictado real; no filtrar.
+        return False
+    lowered = stripped.lower()
+    return any(marker in lowered for marker in _HALLUCINATION_MARKERS)
+
+
 class Transcriber:
     """Cliente de transcripción que envía audio a la API Groq Whisper."""
 
@@ -50,6 +112,8 @@ class Transcriber:
             kwargs["prompt"] = prompt
         transcription = self._get_client().audio.transcriptions.create(**kwargs)
         text = transcription.strip() if isinstance(transcription, str) else str(transcription).strip()
+        if _is_hallucination(text):
+            return ""
         return text
 
     def translate(self, wav_buffer: io.BytesIO, target_lang: str = "en") -> str:
@@ -73,6 +137,8 @@ class Transcriber:
                 temperature=0.0,
             )
             text = translation.strip() if isinstance(translation, str) else str(translation).strip()
+            if _is_hallucination(text):
+                return ""
             return text
 
         # For non-English targets: transcribe first, then LLM-translate
