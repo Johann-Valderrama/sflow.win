@@ -81,10 +81,9 @@ On first launch Vflow checks for a Groq API key. If none is found, a setup dialo
 | **Push-to-talk** (transcribe) | Hold `Ctrl+Alt`, speak, release |
 | **Hands-free** (transcribe) | Triple-tap `Shift` to start, tap `Shift` once to stop |
 | **Push-to-talk** (translate) | Hold `Ctrl+Shift+Alt`, speak, release |
-| **Hands-free** (translate) | `AltGr+Space` to start, `AltGr+Space` again to stop |
-| **Toggle pill visibility** | `Alt+J` |
+| **Hands-free** (translate) | Press `AltGr+Space` to start, press again to stop |
 
-> **Hands-free tip:** Triple-tap Shift starts recording. A single Shift tap stops it. Great for long dictations where holding a key gets tiring.
+> **Hands-free tip:** Triple-tap Shift starts recording. A single Shift tap stops it. Great for long dictations where holding a key gets tiring. Mode 4 (AltGr+Space) works similarly for translation.
 
 ### System Tray
 
@@ -178,7 +177,7 @@ Hotkey Release
 Key technical decisions:
 - **PyQt6 window flags** — pill stays on top without stealing focus (`FramelessWindowHint | WindowStaysOnTopHint | Tool | WindowDoesNotAcceptFocus`)
 - **Qt QueuedConnection** — all pynput→Qt signals cross the thread boundary safely
-- **Win32 API** — `GetForegroundWindow` saves target app; `GlobalAlloc`/`SetClipboardData` writes UTF-16 text; `SetForegroundWindow` restores focus before Ctrl+V
+- **Win32 API** — `GetForegroundWindow` saves target app; `GlobalAlloc`/`GlobalLock`/`SetClipboardData` via ctypes writes UTF-16 text directly (no subprocess); `SetForegroundWindow` restores focus before Ctrl+V
 - **FFT + spring physics** — visualizer uses frequency analysis and spring simulation for smooth, natural bar animations
 - **Chunked recording** — recordings split every 60 seconds with 1-second overlap; chunks transcribed concurrently; final chunk stitched with prompt continuity to avoid cut-off words
 
@@ -256,6 +255,9 @@ Additional settings via environment variables (`.env` or dashboard):
 | Transcription hangs | Check your `GROQ_API_KEY` is valid; API timeout is 10 seconds |
 | Wrong language transcribed | Set `WHISPER_LANGUAGE` in dashboard Settings (or use `auto` to detect) |
 | Beeps too loud / quiet | Adjust **Volumen** in dashboard Settings (1–10) |
+| Only one instance allowed | Single-instance mutex prevents multiple launches; second instance shows warning and exits |
+| Text in clipboard but not pasted | If window verification fails, text stays in clipboard; paste manually with Ctrl+V |
+| Failed recording saved for debugging | Check `%APPDATA%\Vflow\last_failed_recording.wav` if transcription API/network error occurs |
 
 ---
 

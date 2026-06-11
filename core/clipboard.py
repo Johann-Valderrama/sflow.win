@@ -1,5 +1,6 @@
 import ctypes
 import ctypes.wintypes
+import os
 import time
 import logging
 
@@ -20,12 +21,16 @@ _kernel32 = ctypes.windll.kernel32
 _user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
 _user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
 _user32.SetForegroundWindow.restype = ctypes.wintypes.BOOL
+_user32.IsWindow.argtypes = [ctypes.wintypes.HWND]
+_user32.IsWindow.restype = ctypes.wintypes.BOOL
 _user32.OpenClipboard.argtypes = [ctypes.wintypes.HWND]
 _user32.OpenClipboard.restype = ctypes.wintypes.BOOL
 _user32.CloseClipboard.restype = ctypes.wintypes.BOOL
 _user32.EmptyClipboard.restype = ctypes.wintypes.BOOL
 _user32.SetClipboardData.argtypes = [ctypes.wintypes.UINT, ctypes.wintypes.HANDLE]
 _user32.SetClipboardData.restype = ctypes.wintypes.HANDLE
+_user32.GetClipboardData.argtypes = [ctypes.wintypes.UINT]
+_user32.GetClipboardData.restype = ctypes.wintypes.HANDLE
 
 _kernel32.GlobalAlloc.argtypes = [ctypes.wintypes.UINT, ctypes.c_size_t]
 _kernel32.GlobalAlloc.restype = ctypes.wintypes.HGLOBAL
@@ -82,26 +87,87 @@ def _set_clipboard_text(text: str):
             _kernel32.GlobalFree(h_mem)
 
 
-def paste_text(text: str):
-    """Copy text to clipboard and paste into the previously active window."""
+def _get_clipboard_text() -> "str | None":
+    """Lee el texto actual del clipboard. Devuelve None si no hay texto o falla."""
+    CF_UNICODETEXT = 13
+    try:
+        opened = False
+        for _ in range(5):
+            if _user32.OpenClipboard(None):
+                opened = True
+                break
+            time.sleep(0.05)
+        if not opened:
+            return None
+        try:
+            h_data = _user32.GetClipboardData(CF_UNICODETEXT)
+            if not h_data:
+                return None
+            p_mem = _kernel32.GlobalLock(h_data)
+            if not p_mem:
+                return None
+            try:
+                text = ctypes.wstring_at(p_mem)
+            finally:
+                _kernel32.GlobalUnlock(h_data)
+            return text if text else None
+        finally:
+            _user32.CloseClipboard()
+    except Exception as e:
+        logger.warning("Failed to read clipboard text: %s", e)
+        return None
+
+
+def paste_text(text: str) -> str:
+    """Copy text to clipboard and paste into the previously active window.
+
+    Returns:
+        "pasted"         — texto copiado al clipboard y Ctrl+V simulado con éxito.
+        "clipboard_only" — texto en clipboard pero Ctrl+V no simulado (ventana no verificada
+                           o excepción al simular).
+        "failed"         — _set_clipboard_text lanzó excepción; nada se copió.
+    """
     global _saved_hwnd
 
-    # 1. Copy to clipboard via Win32 API (no subprocess/shell injection risk)
+    restore_clipboard = os.getenv("RESTORE_CLIPBOARD", "false").lower() == "true"
+
+    # 1. Leer clipboard previo (solo si la restauración está habilitada)
+    prev_clipboard: "str | None" = None
+    if restore_clipboard:
+        prev_clipboard = _get_clipboard_text()
+
+    # 2. Copiar al clipboard via Win32 API (sin riesgo de shell injection)
     try:
         _set_clipboard_text(text)
     except Exception as e:
         logger.error("Failed to set clipboard text: %s", e)
-        return  # Don't paste if clipboard wasn't set
+        _saved_hwnd = None
+        return "failed"
 
-    # 2. Restore focus
-    if _saved_hwnd:
-        try:
-            _user32.SetForegroundWindow(_saved_hwnd)
-            time.sleep(0.15)
-        except Exception as e:
-            logger.warning("Failed to restore foreground window: %s", e)
+    # 3. Verificar ventana destino
+    hwnd = _saved_hwnd
+    _saved_hwnd = None
 
-    # 3. Simulate Ctrl+V
+    if not hwnd or not _user32.IsWindow(hwnd):
+        logger.warning("No valid target window to paste into (hwnd=%s).", hwnd)
+        return "clipboard_only"
+
+    # Intentar restaurar foco y verificar que quedó correctamente
+    try:
+        _user32.SetForegroundWindow(hwnd)
+        time.sleep(0.15)
+    except Exception as e:
+        logger.warning("SetForegroundWindow raised exception: %s", e)
+
+    current_fg = _user32.GetForegroundWindow()
+    if current_fg != hwnd:
+        logger.warning(
+            "Focus verification failed: expected hwnd=%s, got %s. Skipping Ctrl+V.",
+            hwnd, current_fg,
+        )
+        return "clipboard_only"
+
+    # 4. Simular Ctrl+V
     try:
         ctrl = Controller()
         with ctrl.pressed(Key.ctrl):
@@ -109,5 +175,14 @@ def paste_text(text: str):
             ctrl.release('v')
     except Exception as e:
         logger.warning("Failed to simulate Ctrl+V: %s", e)
+        return "clipboard_only"
 
-    _saved_hwnd = None
+    # 5. Restaurar clipboard previo si está habilitado
+    if restore_clipboard and prev_clipboard is not None:
+        time.sleep(1.5)
+        try:
+            _set_clipboard_text(prev_clipboard)
+        except Exception as e:
+            logger.warning("Failed to restore previous clipboard: %s", e)
+
+    return "pasted"

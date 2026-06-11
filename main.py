@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Vflow - Voice-to-text desktop tool powered by Groq Whisper."""
 
+import ctypes
+import logging
+import logging.handlers
 import math
 import os
 import stat
@@ -9,7 +12,6 @@ import sys
 import signal
 import subprocess
 import threading
-import logging
 import winreg
 import winsound
 from PyQt6.QtWidgets import (
@@ -30,14 +32,34 @@ from config import LOGO_PATH, APP_DATA_DIR, GROQ_API_KEY, CHUNK_SECONDS, MAX_REC
 
 logger = logging.getLogger(__name__)
 
+# El handle del mutex debe vivir durante todo el proceso para garantizar instancia única.
+_MUTEX_HANDLE = None
+
+
+def _setup_logging():
+    """Configura logging a archivo rotativo en APP_DATA_DIR/vflow.log."""
+    os.makedirs(APP_DATA_DIR, exist_ok=True)
+    log_path = os.path.join(APP_DATA_DIR, "vflow.log")
+    handler = logging.handlers.RotatingFileHandler(
+        log_path,
+        maxBytes=500_000,
+        backupCount=2,
+        encoding="utf-8",
+    )
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[handler],
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
 
 def _generate_beep_wav(freq: int, duration_ms: int, volume: float = 0.009) -> bytes:
-    """Generate a mono 16-bit PCM WAV tone in memory (no file needed)."""
+    """Genera un tono WAV mono 16-bit PCM en memoria (sin archivo temporal)."""
     sample_rate = 44100
     num_samples = int(sample_rate * duration_ms / 1000)
     pcm = bytearray()
     for i in range(num_samples):
-        fade = 1.0 - (i / num_samples) ** 2  # quadratic fade-out to avoid click
+        fade = 1.0 - (i / num_samples) ** 2  # atenuación cuadrática para evitar click
         sample = int(32767 * volume * fade * math.sin(2 * math.pi * freq * i / sample_rate))
         pcm += struct.pack('<h', max(-32768, min(32767, sample)))
     data_size = len(pcm)
@@ -48,10 +70,10 @@ def _generate_beep_wav(freq: int, duration_ms: int, volume: float = 0.009) -> by
 
 
 def _play_sound(freq: int, duration_ms: int = 120):
-    """Play a synthesized tone through the audio output (not the PC speaker).
+    """Reproduce un tono sintetizado por la salida de audio (no el altavoz del PC).
 
-    Uses winsound.PlaySound with SND_MEMORY so it works on modern Windows 10
-    systems where the Beep device is disabled. Runs in a daemon thread.
+    Usa winsound.PlaySound con SND_MEMORY para compatibilidad con Windows 10
+    donde el dispositivo Beep está deshabilitado. Se ejecuta en un hilo daemon.
     """
     if os.getenv("SOUNDS_ENABLED", "true") != "true":
         return
@@ -71,10 +93,10 @@ _REGISTRY_APP_NAME = "Vflow"
 
 
 # ---------------------------------------------------------------------------
-# First-run dialog
+# Diálogo de primera ejecución
 # ---------------------------------------------------------------------------
 class FirstRunDialog(QDialog):
-    """Shown when GROQ_API_KEY is missing on first launch."""
+    """Mostrado cuando GROQ_API_KEY falta en el primer arranque."""
 
     def __init__(self):
         """Construye el diálogo con campo de entrada para la API key y botón de guardar."""
@@ -112,19 +134,19 @@ class FirstRunDialog(QDialog):
         with open(env_path, "w") as f:
             f.write(f"GROQ_API_KEY={key}\n")
 
-        # Restrict .env permissions to current user (best-effort on Windows)
+        # Restringir permisos del .env al usuario actual (best-effort en Windows)
         try:
             os.chmod(env_path, stat.S_IRUSR | stat.S_IWUSR)
         except OSError:
             pass
 
-        # Set in current process so Transcriber picks it up
+        # Establecer en el proceso actual para que Transcriber lo detecte
         os.environ["GROQ_API_KEY"] = key
         self.accept()
 
 
 # ---------------------------------------------------------------------------
-# Launch at Login (Windows Registry)
+# Inicio automático con Windows (Registro)
 # ---------------------------------------------------------------------------
 def _is_launch_at_login() -> bool:
     """Verifica si Vflow está configurado para iniciar con Windows (registro)."""
@@ -156,11 +178,11 @@ def _set_launch_at_login(enabled: bool):
                 pass
         winreg.CloseKey(key)
     except Exception as e:
-        logger.error("Error setting launch at login: %s", e)
+        logger.error("Error al configurar inicio con Windows: %s", e)
 
 
 # ---------------------------------------------------------------------------
-# System tray
+# Bandeja del sistema
 # ---------------------------------------------------------------------------
 def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
     """Crea el icono de bandeja del sistema con menú de dashboard, auto-inicio y salir."""
@@ -202,13 +224,14 @@ def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
 
 
 # ---------------------------------------------------------------------------
-# Main app controller
+# Controlador principal de la aplicación
 # ---------------------------------------------------------------------------
 class VflowApp(QObject):
-    """Main application controller. Wires hotkey -> recorder -> transcriber -> clipboard."""
+    """Controlador principal. Conecta hotkey -> recorder -> transcriber -> clipboard."""
 
-    transcription_done = pyqtSignal(str, float)
-    transcription_error = pyqtSignal(str)
+    transcription_done = pyqtSignal(str, float, int)   # text, duration, generation
+    transcription_error = pyqtSignal(str, int)          # error_msg, generation
+    paste_finished = pyqtSignal(str)                    # "pasted" | "clipboard_only" | "failed"
 
     def __init__(self):
         """Inicializa componentes (recorder, transcriber, DB, hotkey, pill) y conecta señales."""
@@ -219,26 +242,37 @@ class VflowApp(QObject):
         self.hotkey = HotkeyListener()
         self.pill = PillWidget()
 
-        # Chunked transcription state
-        self._chunk_texts: list[str] = []
+        # Referencia al tray para mostrar mensajes; se asigna desde main()
+        self.tray: QSystemTrayIcon | None = None
+
+        # Contador de generación y guard anti-duplicado
+        self._generation = 0
+        self._recording_active = False
+
+        # Estado de chunking con lock para acceso seguro entre hilos
+        self._chunk_results: dict[int, str] = {}
+        self._chunk_seq = 0
+        self._chunk_state_lock = threading.Lock()
+
         self._translate_mode = False
         self._chunk_timer = QTimer()
         self._chunk_timer.timeout.connect(self._flush_chunk)
 
-        # Safety timer: auto-stop forgotten recordings
+        # Temporizador de seguridad: detiene grabaciones olvidadas automáticamente
         self._safety_timer = QTimer()
         self._safety_timer.setSingleShot(True)
         self._safety_timer.timeout.connect(self._on_hotkey_released)
 
-        # Connect visualizer to recorder's audio queue
+        # Conectar visualizador a la cola de audio del recorder
         self.pill.visualizer.set_audio_queue(self.recorder.audio_queue)
 
-        # MUST use QueuedConnection: pynput emits from its own thread
+        # DEBE usarse QueuedConnection: pynput emite desde su propio hilo
         self.hotkey.pressed.connect(self._on_hotkey_pressed, Qt.ConnectionType.QueuedConnection)
         self.hotkey.released.connect(self._on_hotkey_released, Qt.ConnectionType.QueuedConnection)
         self.hotkey.translate_pressed.connect(self._on_translate_pressed, Qt.ConnectionType.QueuedConnection)
         self.transcription_done.connect(self._on_transcription_done, Qt.ConnectionType.QueuedConnection)
         self.transcription_error.connect(self._on_transcription_error, Qt.ConnectionType.QueuedConnection)
+        self.paste_finished.connect(self._on_paste_finished, Qt.ConnectionType.QueuedConnection)
 
     def start(self):
         """Inicia el listener de hotkeys y muestra la pill en estado idle."""
@@ -249,15 +283,19 @@ class VflowApp(QObject):
     @pyqtSlot()
     def _on_hotkey_pressed(self):
         """Guarda la ventana activa e inicia la grabación de audio."""
-        _play_sound(880)  # high beep = start recording
+        self._generation += 1
+        _play_sound(880)  # beep alto = inicio de grabación
         save_frontmost_app()
         try:
             self.recorder.start()
         except Exception as e:
-            logger.error("Failed to start recording (no microphone?): %s", e)
+            logger.error("Error al iniciar grabación (¿micrófono no disponible?): %s", e)
             self.pill.set_state(PillWidget.STATE_ERROR)
             return
-        self._chunk_texts.clear()
+        self._recording_active = True
+        with self._chunk_state_lock:
+            self._chunk_results.clear()
+            self._chunk_seq = 0
         self._chunk_timer.start(CHUNK_SECONDS * 1000)
         self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
         self.pill.set_state(PillWidget.STATE_RECORDING)
@@ -265,44 +303,67 @@ class VflowApp(QObject):
     @pyqtSlot()
     def _on_translate_pressed(self):
         """Inicia grabación en modo traducción (→ inglés). Sin chunking."""
+        self._generation += 1
         self._translate_mode = True
         _play_sound(880)
         save_frontmost_app()
         try:
             self.recorder.start()
         except Exception as e:
-            logger.error("Failed to start recording for translation: %s", e)
+            logger.error("Error al iniciar grabación para traducción: %s", e)
             self.pill.set_state(PillWidget.STATE_ERROR)
             self._translate_mode = False
             return
-        self._chunk_texts.clear()
-        # No chunk_timer in translate mode — send full audio to translations endpoint
+        self._recording_active = True
+        with self._chunk_state_lock:
+            self._chunk_results.clear()
+            self._chunk_seq = 0
+        # Sin chunk_timer en modo traducción — se envía audio completo al endpoint de traducción
         self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
         self.pill.set_state(PillWidget.STATE_RECORDING)
 
     def _flush_chunk(self):
-        """Extract and transcribe accumulated audio chunk in background."""
+        """Extrae y transcribe el chunk de audio acumulado en un hilo background."""
         chunk_buf = self.recorder.extract_chunk()
         if chunk_buf:
-            prompt = self._chunk_texts[-1][-200:] if self._chunk_texts else None
+            with self._chunk_state_lock:
+                idx = self._chunk_seq
+                self._chunk_seq += 1
+                # Prompt: últimos 200 chars del índice completado más alto (best-effort)
+                if self._chunk_results:
+                    last_key = max(self._chunk_results)
+                    prompt = self._chunk_results[last_key][-200:]
+                else:
+                    prompt = None
+            gen = self._generation
             threading.Thread(
                 target=self._chunk_worker,
-                args=(chunk_buf, prompt),
+                args=(chunk_buf, prompt, idx, gen),
                 daemon=True,
             ).start()
 
-    def _chunk_worker(self, wav_buffer, prompt):
-        """Transcribe a single chunk in background, accumulate text."""
+    def _chunk_worker(self, wav_buffer, prompt, idx: int, gen: int):
+        """Transcribe un chunk en background; descarta resultado si la generación cambió."""
         try:
             text = self.transcriber.transcribe(wav_buffer, prompt=prompt)
+            if gen != self._generation:
+                # Sesión vieja: descartar resultado
+                return
             if text:
-                self._chunk_texts.append(text)
+                with self._chunk_state_lock:
+                    self._chunk_results[idx] = text
         except Exception as e:
-            logger.error("Chunk transcription failed: %s", e)
+            logger.error("Transcripción de chunk fallida: %s", e)
 
     @pyqtSlot()
     def _on_hotkey_released(self):
         """Detiene la grabación y lanza la transcripción de los frames restantes."""
+        # Early-return: evita releases espurios del safety timer / listener desincronizado
+        if not self._recording_active:
+            return
+        self._recording_active = False
+        self.hotkey.reset()
+
         self._safety_timer.stop()
         self._chunk_timer.stop()
         duration = self.recorder.stop()
@@ -313,85 +374,163 @@ class VflowApp(QObject):
             return
 
         translate = self._translate_mode
-        self._translate_mode = False  # reset before background thread starts
+        self._translate_mode = False  # resetear antes de iniciar el hilo background
+        gen = self._generation
         wav_buffer = self.recorder.get_wav_buffer()
         thread = threading.Thread(
             target=self._transcribe_final,
-            args=(wav_buffer, duration, translate),
+            args=(wav_buffer, duration, translate, gen),
             daemon=True,
         )
         thread.start()
 
-    def _transcribe_final(self, wav_buffer, duration, translate: bool = False):
-        """Transcribe or translate remaining frames and emit result."""
+    def _transcribe_final(self, wav_buffer, duration, translate: bool = False, gen: int = 0):
+        """Transcribe o traduce los frames restantes y emite el resultado."""
         try:
             if translate:
                 target = os.getenv("TRANSLATE_TARGET_LANG", "en")
                 text = self.transcriber.translate(wav_buffer, target_lang=target)
             else:
-                prompt = self._chunk_texts[-1][-200:] if self._chunk_texts else None
+                with self._chunk_state_lock:
+                    if self._chunk_results:
+                        last_key = max(self._chunk_results)
+                        prompt = self._chunk_results[last_key][-200:]
+                    else:
+                        prompt = None
                 text = self.transcriber.transcribe(wav_buffer, prompt=prompt)
-                if text:
-                    self._chunk_texts.append(text)
-                text = " ".join(self._chunk_texts)
-            if text.strip():
-                self.transcription_done.emit(text.strip(), duration)
-            else:
-                self.transcription_error.emit("No speech detected")
-        except Exception as e:
-            self.transcription_error.emit(str(e))
+                # Asignar el tramo final al índice siguiente en el dict de chunks
+                with self._chunk_state_lock:
+                    final_idx = self._chunk_seq
+                    if text:
+                        self._chunk_results[final_idx] = text
+                    # Ensamblar texto completo en orden
+                    text = " ".join(self._chunk_results[k] for k in sorted(self._chunk_results))
 
-    @pyqtSlot(str, float)
-    def _on_transcription_done(self, text: str, duration: float):
+            if text.strip():
+                self.transcription_done.emit(text.strip(), duration, gen)
+            else:
+                self.transcription_error.emit("No speech detected", gen)
+        except Exception as e:
+            # Guardar audio fallido para diagnóstico
+            try:
+                failed_path = os.path.join(APP_DATA_DIR, "last_failed_recording.wav")
+                wav_buffer.seek(0)
+                with open(failed_path, "wb") as f:
+                    f.write(wav_buffer.read())
+                logger.info("Audio fallido guardado en: %s", failed_path)
+            except Exception as save_err:
+                logger.error("No se pudo guardar el audio fallido: %s", save_err)
+            error_msg = f"{e} — audio guardado en last_failed_recording.wav"
+            self.transcription_error.emit(error_msg, gen)
+
+    @pyqtSlot(str, float, int)
+    def _on_transcription_done(self, text: str, duration: float, gen: int):
         """Pega el texto transcrito en la app activa y lo guarda en la base de datos."""
-        _play_sound(660)  # lower beep = done
-        paste_text(text)
+        if gen != self._generation:
+            return  # resultado de sesión vieja: descartar
+        _play_sound(660)  # beep bajo = transcripción lista
+        # Insertar siempre en DB: la transcripción es válida aunque el paste falle
         self.db.insert(text=text, duration_seconds=duration)
-        self.pill.set_state(PillWidget.STATE_DONE)
+        # La pill permanece en STATE_PROCESSING hasta que paste_finished confirme el resultado
+        threading.Thread(target=self._paste_worker, args=(text,), daemon=True).start()
+
+    def _paste_worker(self, text: str):
+        """Ejecuta paste_text en un hilo background (es bloqueante ~0.5-2s)."""
+        status = paste_text(text)
+        self.paste_finished.emit(status)
 
     @pyqtSlot(str)
-    def _on_transcription_error(self, error: str):
-        """Muestra estado de error en la pill cuando falla la transcripción."""
+    def _on_paste_finished(self, status: str):
+        """Actualiza la pill y muestra notificación según el resultado del pegado."""
+        if status == "pasted":
+            self.pill.set_state(PillWidget.STATE_DONE)
+        elif status == "clipboard_only":
+            self.pill.set_state(PillWidget.STATE_DONE)
+            if self.tray:
+                self.tray.showMessage(
+                    "Vflow",
+                    "No se pudo pegar automáticamente. El texto está en el portapapeles: usa Ctrl+V.",
+                    QSystemTrayIcon.MessageIcon.Warning,
+                    4000,
+                )
+        else:  # "failed"
+            self.pill.set_state(PillWidget.STATE_ERROR)
+            if self.tray:
+                self.tray.showMessage(
+                    "Vflow",
+                    "No se pudo copiar el texto al portapapeles.",
+                    QSystemTrayIcon.MessageIcon.Critical,
+                    4000,
+                )
+
+    @pyqtSlot(str, int)
+    def _on_transcription_error(self, error: str, gen: int):
+        """Muestra estado de error en la pill y notificación en bandeja cuando falla la transcripción."""
+        if gen != self._generation:
+            return  # resultado de sesión vieja: descartar
         self.pill.set_state(PillWidget.STATE_ERROR)
+        if self.tray:
+            truncated = error[:120] + "…" if len(error) > 120 else error
+            self.tray.showMessage(
+                "Vflow - Error",
+                truncated,
+                QSystemTrayIcon.MessageIcon.Critical,
+                4000,
+            )
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Punto de entrada
 # ---------------------------------------------------------------------------
 def main():
-    """Punto de entrada: configura Qt, verifica API key, inicia dashboard y app."""
-    import ctypes
+    """Punto de entrada: configura logging, verifica instancia única, inicia la app."""
+    global _MUTEX_HANDLE
+
+    # Configurar logging a archivo antes de cualquier otra operación
+    _setup_logging()
+    logger.info("Iniciando Vflow")
+
     ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
 
     app = QApplication(sys.argv)
     app.setApplicationName("Vflow")
     app.setQuitOnLastWindowClosed(False)
 
-    # Allow Ctrl+C to kill the app
+    # Instancia única: mutex con nombre global de sesión local
+    _MUTEX_HANDLE = ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\VflowSingleInstance")
+    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        QMessageBox.information(
+            None,
+            "Vflow",
+            "Vflow ya está en ejecución (revisa la bandeja del sistema).",
+        )
+        sys.exit(0)
+
+    # Permitir que Ctrl+C cierre la app
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-    # First-run: ask for API key if missing
+    # Primera ejecución: pedir API key si falta
     api_key = os.getenv("GROQ_API_KEY", "")
     if not api_key:
         dialog = FirstRunDialog()
         if dialog.exec() != QDialog.DialogCode.Accepted:
             sys.exit(0)
 
-    # Start web dashboard
+    # Iniciar dashboard web
     port = start_web_server()
 
-    # Start the app
+    # Iniciar controlador principal
     vflow = VflowApp()
     vflow.start()
 
-    # Clean up hotkey listener on quit
+    # Limpiar listener de hotkeys al salir
     app.aboutToQuit.connect(vflow.hotkey.stop)
 
-    # System tray icon
-    tray = _setup_tray(app, port)  # noqa: F841 — must keep reference alive
+    # Icono de bandeja del sistema
+    tray = _setup_tray(app, port)  # noqa: F841 — debe mantenerse la referencia viva
+    vflow.tray = tray  # exponer tray al controlador para mensajes de notificación
 
-    print("\nVflow running. Ctrl+Alt (hold) to record, double Ctrl to toggle hands-free.")
-    print(f"Dashboard available at http://localhost:{port}\n")
+    logger.info("Vflow activo. Dashboard en http://localhost:%s", port)
 
     sys.exit(app.exec())
 

@@ -55,8 +55,8 @@ vflow/
 ├── core/
 │   ├── recorder.py         # sounddevice audio capture
 │   ├── transcriber.py      # Groq Whisper API client (lazy init, 10s timeout)
-│   ├── hotkey.py           # Global hotkeys (Ctrl+Alt hold + double-tap Ctrl)
-│   └── clipboard.py        # Focus save/restore + Ctrl+V paste via Win32 API
+│   ├── hotkey.py           # Global hotkeys (4 modes: Ctrl+Alt, triple-tap Shift, Ctrl+Shift+Alt, AltGr+Space)
+│   └── clipboard.py        # Focus save/restore + Ctrl+V paste via Win32 API (GlobalAlloc/SetClipboardData/ctypes)
 ├── db/
 │   └── database.py         # SQLite CRUD
 ├── web/
@@ -94,7 +94,7 @@ The pill uses `FramelessWindowHint | WindowStaysOnTopHint | Tool | WindowDoesNot
 
 ### 3. Auto-Paste (Win32 API + pynput)
 - `save_frontmost_app()` saves the foreground window handle via `GetForegroundWindow()`
-- `Set-Clipboard` via PowerShell to copy text (handles UTF-8)
+- `_set_clipboard_text()` copies text using Win32 API directly (GlobalAlloc, GlobalLock, SetClipboardData, CF_UNICODETEXT) via ctypes — no subprocess/PowerShell
 - `SetForegroundWindow()` to restore focus
 - pynput `Controller` to simulate Ctrl+V
 
@@ -123,8 +123,11 @@ Default port is 5678. Auto-scans for free port if occupied.
 
 ### Hotkeys
 Edit `core/hotkey.py`:
-- **Hold mode**: Currently Ctrl+Alt. Change `is_ctrl`/`is_alt` checks.
-- **Hands-free mode**: Currently double-tap Ctrl within 400ms. Change `DOUBLE_TAP_INTERVAL` in config.py.
+- **Mode 1 (Ctrl+Alt hold)**: Press and hold Ctrl+Alt to transcribe; release to stop. Transcribed text auto-pastes.
+- **Mode 2 (Triple-tap Shift)**: Press Shift three times within 400ms to start hands-free transcription; press Shift once to stop.
+- **Mode 3 (Ctrl+Shift+Alt hold)**: Press and hold Ctrl+Shift+Alt (Shift before Alt) to translate from any language to target language.
+- **Mode 4 (AltGr+Space toggle)**: Press AltGr+Space once to start translation hands-free; press again to stop.
+- To customize intervals, edit `DOUBLE_TAP_INTERVAL` in `config.py`.
 
 ### UI Dimensions
 Edit `config.py`:
@@ -150,5 +153,10 @@ Edit `config.py`:
 | Paste doesn't work | Run as Administrator for global hotkey/paste access |
 | Ctrl+C doesn't kill the process | This is handled by `signal.signal(signal.SIGINT, signal.SIG_DFL)` in main.py |
 | Short taps trigger transcription | Adjust the 0.3s threshold in `main.py` `_on_hotkey_released` |
-| Web dashboard not loading | Port auto-selects from 5678. Check: `netstat -an | findstr 5678` |
+| Web dashboard not loading | Port auto-selects from 5678. Check: `netstat -an \| findstr 5678` |
 | Transcription hangs forever | API timeout is 10s. Check your GROQ_API_KEY is valid |
+| Only one instance should run | Single-instance mutex (Win32 `Local\VflowSingleInstance`) prevents multiple launches; second instance shows warning and exits |
+| Text doesn't paste after recording | If window verification fails, text is left in clipboard with tray notification; paste manually via Ctrl+V |
+| Transcription failed — audio saved | Failed recordings saved to `%APPDATA%\Vflow\last_failed_recording.wav` for debugging (API/network errors) |
+| Logs not showing up | Dev mode logs to project directory; bundled app logs to `%APPDATA%\Vflow\vflow.log` (RotatingFileHandler, 5 MB per file) |
+| Clipboard content changed after paste | By default, clipboard is not restored. Set `RESTORE_CLIPBOARD=true` in `.env` to keep original clipboard content |

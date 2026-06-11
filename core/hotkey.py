@@ -53,6 +53,14 @@ class HotkeyListener(QObject):
             self._listener.stop()
             self._listener = None
 
+    def reset(self):
+        """Resetea el estado tras un auto-stop externo (safety timer) para evitar releases espurios."""
+        self._recording = False
+        self._hands_free = False
+        self._alt_gr_space_mode = False
+        self._shift_tap_count = 0
+        self._last_shift_press = 0.0
+
     def _on_press(self, key):
         """Maneja press de teclas para los cuatro modos de activación."""
         is_ctrl   = key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r)

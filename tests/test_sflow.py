@@ -156,6 +156,18 @@ class TestAudioRecorder:
             expected_samples = 50 * BLOCK_SIZE
             assert wf.getnframes() == expected_samples
 
+    def test_get_wav_buffer_clears_frames(self):
+        """get_wav_buffer() returns WAV bytes and leaves recorder.frames empty."""
+        fake_audio = np.zeros((1024, 1), dtype=np.int16)
+        self.recorder.frames.append(fake_audio)
+        self.recorder.frames.append(fake_audio)
+        buf = self.recorder.get_wav_buffer()
+        assert isinstance(buf, io.BytesIO)
+        # Buffer should contain WAV data (non-empty)
+        assert len(buf.getvalue()) > 0
+        # frames must be cleared after the call
+        assert self.recorder.frames == []
+
     def test_extract_chunk_too_few_frames(self):
         """extract_chunk returns None if only overlap frames exist."""
         from config import SAMPLE_RATE, BLOCK_SIZE, CHUNK_OVERLAP_SECONDS
@@ -291,28 +303,69 @@ class TestHotkeyListener:
         assert self.listener._recording is False
         assert self.released_count == 1
 
-    def test_double_tap_hands_free(self):
+    def test_triple_tap_shift_hands_free(self):
+        """Three rapid Shift taps (press+release each) → hands-free recording starts."""
         from pynput import keyboard
-        self.listener._on_press(keyboard.Key.ctrl_l)
-        self.listener._on_release(keyboard.Key.ctrl_l)
-        self.listener._on_press(keyboard.Key.ctrl_l)
+        # Tap 1
+        self.listener._on_press(keyboard.Key.shift_l)
+        self.listener._on_release(keyboard.Key.shift_l)
+        # Tap 2
+        self.listener._on_press(keyboard.Key.shift_l)
+        self.listener._on_release(keyboard.Key.shift_l)
+        # Tap 3
+        self.listener._on_press(keyboard.Key.shift_l)
+        self.listener._on_release(keyboard.Key.shift_l)
         assert self.listener._hands_free is True
         assert self.listener._recording is True
         assert self.pressed_count == 1
 
-    def test_hands_free_stop_on_ctrl(self):
+    def test_hands_free_stop_on_shift_tap(self):
+        """After hands-free starts via triple-tap Shift, a single Shift tap stops it."""
         from pynput import keyboard
-        # Start hands-free
-        self.listener._on_press(keyboard.Key.ctrl_l)
-        self.listener._on_release(keyboard.Key.ctrl_l)
-        self.listener._on_press(keyboard.Key.ctrl_l)
-        self.listener._on_release(keyboard.Key.ctrl_l)
-        # Stop hands-free with another Ctrl press
-        import time
-        time.sleep(0.5)  # outside double-tap window
-        self.listener._on_press(keyboard.Key.ctrl_l)
+        # Start hands-free with triple-tap
+        self.listener._on_press(keyboard.Key.shift_l)
+        self.listener._on_release(keyboard.Key.shift_l)
+        self.listener._on_press(keyboard.Key.shift_l)
+        self.listener._on_release(keyboard.Key.shift_l)
+        self.listener._on_press(keyboard.Key.shift_l)
+        self.listener._on_release(keyboard.Key.shift_l)
+        assert self.listener._hands_free is True
+        assert self.listener._recording is True
+        # Single Shift tap to stop
+        self.listener._on_press(keyboard.Key.shift_l)
         assert self.listener._recording is False
+        assert self.listener._hands_free is False
         assert self.released_count == 1
+
+    def test_reset_clears_state(self):
+        """reset() clears hands-free state and allows a new triple-tap to fire pressed."""
+        from pynput import keyboard
+        # Start hands-free with triple-tap
+        self.listener._on_press(keyboard.Key.shift_l)
+        self.listener._on_release(keyboard.Key.shift_l)
+        self.listener._on_press(keyboard.Key.shift_l)
+        self.listener._on_release(keyboard.Key.shift_l)
+        self.listener._on_press(keyboard.Key.shift_l)
+        self.listener._on_release(keyboard.Key.shift_l)
+        assert self.listener._recording is True
+
+        # External reset (e.g. safety timer)
+        self.listener.reset()
+        assert self.listener._recording is False
+        assert self.listener._hands_free is False
+        assert self.listener._alt_gr_space_mode is False
+        assert self.listener._shift_tap_count == 0
+
+        # A new triple-tap should fire pressed again (listener not blocked)
+        prev_pressed = self.pressed_count
+        self.listener._on_press(keyboard.Key.shift_l)
+        self.listener._on_release(keyboard.Key.shift_l)
+        self.listener._on_press(keyboard.Key.shift_l)
+        self.listener._on_release(keyboard.Key.shift_l)
+        self.listener._on_press(keyboard.Key.shift_l)
+        self.listener._on_release(keyboard.Key.shift_l)
+        assert self.listener._recording is True
+        assert self.pressed_count == prev_pressed + 1
 
     def test_ctrl_autorepeat_ignored(self):
         from pynput import keyboard

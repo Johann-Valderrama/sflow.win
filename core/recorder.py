@@ -104,7 +104,8 @@ class AudioRecorder:
     def get_wav_buffer(self) -> io.BytesIO:
         """Convert remaining frames to in-memory WAV buffer."""
         with self._chunk_lock:
-            frames = list(self.frames)
+            frames = self.frames
+            self.frames = []
         if not frames:
             return io.BytesIO()
         audio_data = np.concatenate(frames, axis=0)
