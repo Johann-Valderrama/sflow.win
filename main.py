@@ -29,7 +29,7 @@ from core.clipboard import paste_text, save_frontmost_app
 from core.secrets import encrypt
 from db.database import TranscriptionDB
 from web.server import start_web_server
-from config import LOGO_PATH, APP_DATA_DIR, GROQ_API_KEY, CHUNK_SECONDS, MAX_RECORDING_SECONDS
+from config import LOGO_PATH, APP_DATA_DIR, GROQ_API_KEY, CHUNK_SECONDS, MAX_RECORDING_SECONDS, APP_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +182,18 @@ class FirstRunDialog(QDialog):
 # ---------------------------------------------------------------------------
 # Inicio automático con Windows (Registro)
 # ---------------------------------------------------------------------------
+def _expected_run_command() -> str:
+    """Devuelve el comando que debe escribirse en el registro para el inicio automático.
+
+    En modo bundle (.exe frozen) la ruta del ejecutable va entre comillas para
+    soportar rutas con espacios (ej. 'C:\\Program Files\\Vflow\\Vflow.exe').
+    En modo dev se incluyen intérprete y script, también entre comillas.
+    """
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    return f'"{sys.executable}" "{os.path.abspath(sys.argv[0])}"'
+
+
 def _is_launch_at_login() -> bool:
     """Verifica si Vflow está configurado para iniciar con Windows (registro)."""
     try:
@@ -200,11 +212,7 @@ def _set_launch_at_login(enabled: bool):
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REGISTRY_KEY, 0, winreg.KEY_SET_VALUE)
         if enabled:
-            if getattr(sys, "frozen", False):
-                exe = sys.executable
-            else:
-                exe = f'"{sys.executable}" "{os.path.abspath(sys.argv[0])}"'
-            winreg.SetValueEx(key, _REGISTRY_APP_NAME, 0, winreg.REG_SZ, exe)
+            winreg.SetValueEx(key, _REGISTRY_APP_NAME, 0, winreg.REG_SZ, _expected_run_command())
         else:
             try:
                 winreg.DeleteValue(key, _REGISTRY_APP_NAME)
@@ -213,6 +221,32 @@ def _set_launch_at_login(enabled: bool):
         winreg.CloseKey(key)
     except Exception as e:
         logger.error("Error al configurar inicio con Windows: %s", e)
+
+
+def _repair_launch_at_login():
+    """Repara la clave de registro si el inicio automático apunta a una ruta desactualizada.
+
+    Si el inicio con Windows está activado pero el valor almacenado en el registro
+    no coincide con la ubicación actual del ejecutable, reescribe la clave con el
+    comando correcto. Esto cubre el caso de que el usuario haya movido o reinstalado
+    el .exe. Toda la función está envuelta en try/except — nunca aborta el arranque.
+    """
+    try:
+        if not _is_launch_at_login():
+            return  # No activado: nada que reparar
+        expected = _expected_run_command()
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REGISTRY_KEY, 0, winreg.KEY_READ)
+        current_value, _ = winreg.QueryValueEx(key, _REGISTRY_APP_NAME)
+        winreg.CloseKey(key)
+        if current_value != expected:
+            logger.info(
+                "Auto-reparación de inicio con Windows: '%s' → '%s'",
+                current_value,
+                expected,
+            )
+            _set_launch_at_login(True)
+    except Exception as e:
+        logger.warning("_repair_launch_at_login: no se pudo comprobar/reparar la clave — %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +264,7 @@ def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
 
     menu = QMenu()
 
-    status = QAction("Vflow - Activo", menu)
+    status = QAction(f"Vflow v{APP_VERSION} - Activo", menu)
     status.setEnabled(False)
     menu.addAction(status)
     menu.addSeparator()
@@ -252,7 +286,7 @@ def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
     menu.addAction(quit_action)
 
     tray.setContextMenu(menu)
-    tray.setToolTip("Vflow - Voice to Text")
+    tray.setToolTip(f"Vflow v{APP_VERSION} - Voice to Text")
     tray.show()
     return tray
 
@@ -626,6 +660,12 @@ def main():
     # Permitir que Ctrl+C cierre la app
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+    # Reparar la clave de registro si el exe fue movido/reinstalado
+    try:
+        _repair_launch_at_login()
+    except Exception as _repair_exc:
+        logger.warning("Error inesperado en _repair_launch_at_login: %s", _repair_exc)
+
     # Primera ejecución: pedir API key si falta
     api_key = os.getenv("GROQ_API_KEY", "")
     if not api_key:
@@ -647,7 +687,7 @@ def main():
     tray = _setup_tray(app, port)  # noqa: F841 — debe mantenerse la referencia viva
     vflow.tray = tray  # exponer tray al controlador para mensajes de notificación
 
-    logger.info("Vflow activo. Dashboard en http://localhost:%s", port)
+    logger.info("Vflow v%s activo. Dashboard en http://localhost:%s", APP_VERSION, port)
 
     sys.exit(app.exec())
 

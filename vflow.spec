@@ -86,6 +86,7 @@ exe = EXE(
     argv_emulation=False,
     target_arch=None,
     icon='Vflow.ico',
+    version='version_info.txt',
 )
 
 coll = COLLECT(

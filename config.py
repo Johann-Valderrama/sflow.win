@@ -42,6 +42,9 @@ if not os.getenv("GROQ_API_KEY") and os.getenv("GROQ_API_KEY_ENC"):
         import logging as _logging
         _logging.getLogger(__name__).warning("config: no se pudo descifrar GROQ_API_KEY_ENC — %s", _e)
 
+# Versión de la aplicación
+APP_VERSION = "1.0.0"
+
 # Groq API
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = "whisper-large-v3-turbo"

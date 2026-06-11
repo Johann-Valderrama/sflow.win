@@ -32,9 +32,10 @@ build.bat
 The built app is in `dist\Vflow\Vflow.exe`. On first launch, if no API key exists in `%APPDATA%\Vflow\.env`, a dialog asks for it.
 
 ### Build Requirements
-- Python 3.12+ with venv
+- Python 3.12+ with venv (build.bat validates activation and aborts if PyInstaller fails — no silent build errors)
 - PyInstaller (installed automatically by build.bat)
 - Optional: Vflow.ico (256x256 icon file for the .exe)
+- **Reproducible builds**: requirements.txt has pinned versions for consistent .exe output across machines
 
 ## Permissions Required
 
@@ -46,9 +47,10 @@ The built app is in `dist\Vflow\Vflow.exe`. On first launch, if no API key exist
 ```
 vflow/
 ├── main.py                 # Entry point — tray icon, first-run dialog, launch-at-login, app controller
-├── config.py               # All configuration constants (UI, audio, paths, bundle detection)
+├── config.py               # All configuration constants (UI, audio, paths, bundle detection); includes APP_VERSION
 ├── vflow.spec              # PyInstaller spec for building .exe
-├── build.bat               # One-shot build script for Windows
+├── version_info.txt        # Version metadata for .exe (reduces SmartScreen false positives)
+├── build.bat               # One-shot build script for Windows (validates venv activation, aborts on PyInstaller failure)
 ├── ui/
 │   ├── pill_widget.py      # Floating pill overlay (PyQt6 window flags)
 │   └── audio_visualizer.py # Real-time audio bars
@@ -102,6 +104,8 @@ The pill uses `FramelessWindowHint | WindowStaysOnTopHint | Tool | WindowDoesNot
 sounddevice callback runs in audio thread — NEVER touch Qt widgets from it. Use `queue.Queue` as bridge:
 - Callback → puts audio chunks in queue
 - QTimer on main thread → polls queue → updates visualizer
+- **Microphone device caching**: Audio device resolution is cached on first access; device list is not re-scanned on each recording unless the configured device changes. This eliminates O(n) enumeration overhead per recording.
+- **Queue memory cleanup**: Visualization queue is cleared when recording stops, preventing memory bloat from long sessions.
 
 ### 5. Short Recording Filter
 Recordings under 0.3 seconds are accidental taps — skip transcription and return to idle.
@@ -115,9 +119,10 @@ If the microphone is disconnected during recording (e.g., Bluetooth headphones u
 - **Bundle mode**: read-only assets (logo) come from `sys._MEIPASS`, writable data (DB, .env) goes to `%APPDATA%\Vflow\`
 
 ### 8. Desktop App Features (main.py)
-- **System Tray**: QSystemTrayIcon with dashboard link, "Iniciar con Windows" toggle, quit
+- **System Tray**: QSystemTrayIcon with dashboard link, "Iniciar con Windows" toggle, quit; tray icon tooltip shows app version (from `APP_VERSION` in config.py)
+- **Version Display**: Current app version (e.g., "1.0.0") displayed in tray menu and tooltip
 - **First-Run Dialog**: If GROQ_API_KEY is empty, shows a QDialog to enter it (saves to %APPDATA%\Vflow)
-- **Launch at Login**: Uses Windows Registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`)
+- **Launch at Login**: Uses Windows Registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`); .exe path is quoted to handle spaces in folder names. Registry entry auto-repairs on startup if exe was moved.
 
 ### 9. Port Selection (web/server.py)
 Default port is 5678. Auto-scans for free port if occupied.
@@ -137,6 +142,10 @@ Set `HISTORY_RETENTION_DAYS` in `.env` (default: `0` = keep forever). If > 0, th
 The dashboard validates exact Origin/Referer hosts (`localhost`, `127.0.0.1`, or `::1` only) instead of prefix matching. This closes bypasses like `localhost.evil.com`.
 
 ## Customization
+
+### App Version
+Edit `config.py`:
+- `APP_VERSION` (default: "1.0.0") — Version string displayed in system tray menu and tooltip
 
 ### Hotkeys
 Edit `core/hotkey.py`:

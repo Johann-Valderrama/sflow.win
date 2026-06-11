@@ -6,7 +6,7 @@ import logging
 import threading
 import numpy as np
 import sounddevice as sd
-from config import SAMPLE_RATE, CHANNELS, AUDIO_DTYPE, BLOCK_SIZE, CHUNK_OVERLAP_SECONDS, MAX_RECORDING_SECONDS
+from config import SAMPLE_RATE, CHANNELS, AUDIO_DTYPE, BLOCK_SIZE, CHUNK_OVERLAP_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,9 @@ def _resolve_device(name: str) -> int | None:
 class AudioRecorder:
     """Captura audio del micrófono usando sounddevice y lo almacena en memoria."""
 
+    # Centinela para distinguir "aún no resuelto" de "" (dispositivo por defecto válido)
+    _UNSET = object()
+
     def __init__(self):
         """Inicializa la cola de audio, lista de frames y estado de grabación."""
         self.audio_queue = queue.Queue()  # For UI visualization
@@ -33,6 +36,9 @@ class AudioRecorder:
         self.is_recording = False
         self._chunk_lock = threading.Lock()
         self.samples_captured: int = 0  # Contador monótono de muestras recibidas
+        # Caché de resolución de dispositivo: evita llamar sd.query_devices() en cada grabación
+        self._cached_device_name: object = AudioRecorder._UNSET
+        self._cached_device_index: int | None = None
 
     def _callback(self, indata: np.ndarray, frames: int, time_info, status):
         """Callback de sounddevice: encola audio para visualización y almacena frames."""
@@ -42,9 +48,6 @@ class AudioRecorder:
         with self._chunk_lock:
             self.frames.append(indata.copy())
             self.samples_captured += indata.shape[0]
-            total_samples = sum(f.shape[0] for f in self.frames)
-            if total_samples / SAMPLE_RATE >= MAX_RECORDING_SECONDS:
-                self.is_recording = False
 
     def samples_count(self) -> int:
         """Devuelve el contador monótono de muestras capturadas en la sesión actual.
@@ -65,7 +68,11 @@ class AudioRecorder:
             except queue.Empty:
                 break
         self.is_recording = True
-        device = _resolve_device(os.getenv("AUDIO_DEVICE_NAME", ""))
+        name = os.getenv("AUDIO_DEVICE_NAME", "")
+        if name != self._cached_device_name:
+            self._cached_device_index = _resolve_device(name)
+            self._cached_device_name = name
+        device = self._cached_device_index
         self.stream = sd.InputStream(
             samplerate=SAMPLE_RATE,
             channels=CHANNELS,
@@ -83,6 +90,12 @@ class AudioRecorder:
             self.stream.stop()
             self.stream.close()
             self.stream = None
+        # Drenar buffers de visualización no consumidos para liberar memoria
+        while True:
+            try:
+                self.audio_queue.get_nowait()
+            except queue.Empty:
+                break
         with self._chunk_lock:
             if not self.frames:
                 return 0.0

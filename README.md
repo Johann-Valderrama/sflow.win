@@ -70,9 +70,10 @@ python main.py
 ```bash
 build.bat
 # Output: dist\Vflow\Vflow.exe
+# Validates Python venv activation; aborts if PyInstaller fails
 ```
 
-On first launch Vflow checks for a Groq API key. If none is found, a setup dialog appears — paste your key and you're done.
+On first launch Vflow checks for a Groq API key. If none is found, a setup dialog appears — paste your key and you're done. Builds use pinned dependency versions for reproducible binaries across machines.
 
 ---
 
@@ -93,8 +94,9 @@ On first launch Vflow checks for a Groq API key. If none is found, a setup dialo
 
 | Option | Description |
 |--------|-------------|
+| **Vflow v1.0.0** | App version shown in menu and tooltip |
 | **Abrir Dashboard (:5678)** | Opens the transcription history in your browser |
-| **Iniciar con Windows** | Toggle auto-start on login (writes to Windows Registry) |
+| **Iniciar con Windows** | Toggle auto-start on login (writes to Windows Registry with quoted exe path to handle folder spaces; auto-repairs if exe moved) |
 | **Salir** | Quit (or `Ctrl+C` in dev mode) |
 
 ### Pill States
@@ -184,6 +186,7 @@ Key technical decisions:
 - **Win32 API** — `GetForegroundWindow` saves target app; `GlobalAlloc`/`GlobalLock`/`SetClipboardData` via ctypes writes UTF-16 text directly (no subprocess); `SetForegroundWindow` restores focus before Ctrl+V
 - **FFT + spring physics** — visualizer uses frequency analysis and spring simulation for smooth, natural bar animations
 - **Chunked recording** — recordings split every 60 seconds with 1-second overlap; chunks transcribed concurrently; final chunk stitched with prompt continuity to avoid cut-off words
+- **Audio device caching** — microphone device is cached on first resolution; device list not re-scanned per-recording unless device name changes. Visualization queue cleared on stop to prevent memory bloat in long sessions.
 
 ---
 
@@ -192,6 +195,9 @@ Key technical decisions:
 All tunable constants live in `config.py`:
 
 ```python
+# Version
+APP_VERSION = "1.0.0"       # displayed in system tray menu and tooltip
+
 # Hotkey
 DOUBLE_TAP_INTERVAL = 0.4   # seconds between taps for hands-free detection
 ARMING_DELAY = 0.15         # seconds to hold Ctrl+Alt (or Ctrl+Shift+Alt) before recording starts

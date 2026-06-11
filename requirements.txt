@@ -1,7 +1,8 @@
-PyQt6>=6.7.0
-sounddevice>=0.4.6
-numpy>=1.26.0
-pynput>=1.7.6
-groq>=0.4.0
-python-dotenv>=1.0.0
-flask>=3.0.0
+# Versiones fijadas para builds reproducibles del .exe
+PyQt6==6.10.2
+sounddevice==0.5.5
+numpy==2.4.3
+pynput==1.8.1
+groq==1.1.1
+python-dotenv==1.2.2
+flask==3.1.3
