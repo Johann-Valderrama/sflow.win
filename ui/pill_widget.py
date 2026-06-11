@@ -4,7 +4,7 @@ import logging
 import math
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QPainter, QColor, QPainterPath, QPen, QPixmap
+from PyQt6.QtGui import QPainter, QColor, QPainterPath, QPen, QPixmap, QCursor
 from ui.audio_visualizer import AudioVisualizer
 from config import (
     PILL_WIDTH_IDLE,
@@ -117,16 +117,49 @@ class PillWidget(QWidget):
 
         self._position_on_screen()
 
+        # Reposicionar la pill si cambia la configuración de monitores
+        # (reutiliza la variable `app` ya asignada arriba)
+        if app:
+            app.primaryScreenChanged.connect(lambda _s: QTimer.singleShot(100, self._ensure_on_screen))
+            app.screenAdded.connect(lambda _s: QTimer.singleShot(100, self._ensure_on_screen))
+            app.screenRemoved.connect(lambda _s: QTimer.singleShot(100, self._ensure_on_screen))
+
     def _position_on_screen(self):
-        """Centra la pill horizontalmente en la parte inferior de la pantalla."""
-        screen = QApplication.primaryScreen()
+        """Centra la pill horizontalmente en la parte inferior del monitor donde está el cursor.
+
+        Si ``screenAt`` no puede determinar el monitor (por ejemplo, cuando el cursor
+        está fuera de todos los monitores), usa la pantalla primaria como fallback.
+        """
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         if screen:
             geo = screen.availableGeometry()
-            # Bottom anchor: pill's bottom edge stays here at all times
+            # Ancla inferior: el borde inferior de la pill se mantiene aquí siempre
             self._bottom_anchor_y = geo.bottom() - PILL_MARGIN_BOTTOM
             x = geo.center().x() - PILL_WIDTH_IDLE // 2
             y = self._bottom_anchor_y - int(self._current_height)
             self.move(x, y)
+
+    def _ensure_on_screen(self):
+        """Reposiciona la pill si quedó fuera de todos los monitores disponibles.
+
+        Se invoca automáticamente cuando se añade, elimina o cambia la pantalla
+        primaria. Solo actúa si el centro de la pill no cae dentro de ninguna
+        geometría disponible, para no interrumpir posiciones de arrastre válidas.
+        """
+        try:
+            center = self.frameGeometry().center()
+            visible = any(
+                s.availableGeometry().contains(center)
+                for s in QApplication.screens()
+            )
+            if not visible:
+                logger.debug(
+                    "_ensure_on_screen: pill fuera de pantalla (%s, %s) — reposicionando",
+                    center.x(), center.y(),
+                )
+                self._position_on_screen()
+        except Exception as exc:
+            logger.warning("_ensure_on_screen falló: %s", exc)
 
     def set_state(self, state: str):
         """Cambia el estado visual de la pill (idle, recording, processing, done, error)."""
@@ -315,10 +348,21 @@ class PillWidget(QWidget):
             event.accept()
 
     def mouseMoveEvent(self, event):
-        """Mueve la pill siguiendo el cursor durante el arrastre, limitada a la pantalla."""
+        """Mueve la pill siguiendo el cursor durante el arrastre, limitada al monitor activo.
+
+        El clamp se calcula contra el monitor donde se encuentra la nueva posición
+        propuesta. Esto permite arrastrar la pill a cualquier monitor: al cruzar el
+        borde, ``screenAt(new_pos)`` devuelve el nuevo monitor y el clamp se adapta
+        automáticamente. Si ``screenAt`` no puede identificar el monitor, se usa el
+        monitor donde está el frame actual y, como último recurso, la pantalla primaria.
+        """
         if event.buttons() == Qt.MouseButton.LeftButton and self._drag_pos:
             new_pos = event.globalPosition().toPoint() - self._drag_pos
-            screen = QApplication.primaryScreen()
+            screen = (
+                QApplication.screenAt(new_pos)
+                or QApplication.screenAt(self.frameGeometry().center())
+                or QApplication.primaryScreen()
+            )
             if screen:
                 geo = screen.availableGeometry()
                 x = max(geo.left(), min(new_pos.x(), geo.right() - self.width()))
@@ -326,7 +370,7 @@ class PillWidget(QWidget):
                 new_pos.setX(x)
                 new_pos.setY(y)
             self.move(new_pos)
-            self._bottom_anchor_y = new_pos.y() + self.height()  # track new anchor
+            self._bottom_anchor_y = new_pos.y() + self.height()  # actualiza ancla tras mover
             event.accept()
 
     def mouseReleaseEvent(self, event):

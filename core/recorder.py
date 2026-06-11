@@ -32,6 +32,7 @@ class AudioRecorder:
         self.stream: sd.InputStream | None = None
         self.is_recording = False
         self._chunk_lock = threading.Lock()
+        self.samples_captured: int = 0  # Contador monótono de muestras recibidas
 
     def _callback(self, indata: np.ndarray, frames: int, time_info, status):
         """Callback de sounddevice: encola audio para visualización y almacena frames."""
@@ -40,12 +41,22 @@ class AudioRecorder:
         self.audio_queue.put(indata.copy())
         with self._chunk_lock:
             self.frames.append(indata.copy())
+            self.samples_captured += indata.shape[0]
             total_samples = sum(f.shape[0] for f in self.frames)
             if total_samples / SAMPLE_RATE >= MAX_RECORDING_SECONDS:
                 self.is_recording = False
 
+    def samples_count(self) -> int:
+        """Devuelve el contador monótono de muestras capturadas en la sesión actual.
+
+        Lectura sin lock: el GIL garantiza atomicidad para enteros en CPython.
+        Solo es válido entre start() y stop(); se resetea en cada start().
+        """
+        return self.samples_captured
+
     def start(self):
         """Inicia la captura de audio abriendo un InputStream de sounddevice."""
+        self.samples_captured = 0
         self.frames.clear()
         # Drain any old data from the queue
         while not self.audio_queue.empty():

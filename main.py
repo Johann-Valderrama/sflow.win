@@ -119,6 +119,10 @@ def _play_sound(freq: int, duration_ms: int = 120):
 _REGISTRY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _REGISTRY_APP_NAME = "Vflow"
 
+# Número de comprobaciones consecutivas (cada 1 s) sin avance de muestras antes de
+# declarar que el micrófono se desconectó a mitad de grabación.
+_MIC_STALL_LIMIT = 2
+
 
 # ---------------------------------------------------------------------------
 # Diálogo de primera ejecución
@@ -304,6 +308,13 @@ class VflowApp(QObject):
         self._safety_timer.setSingleShot(True)
         self._safety_timer.timeout.connect(self._on_hotkey_released)
 
+        # Watchdog de micrófono: detecta si dejan de llegar muestras durante la grabación
+        self._mic_watchdog_timer = QTimer()
+        self._mic_watchdog_timer.setInterval(1000)  # comprobar cada 1 s
+        self._mic_watchdog_timer.timeout.connect(self._check_mic_alive)
+        self._last_samples_seen = 0
+        self._mic_stall_count = 0
+
         # Conectar visualizador a la cola de audio del recorder
         self.pill.visualizer.set_audio_queue(self.recorder.audio_queue)
 
@@ -339,6 +350,10 @@ class VflowApp(QObject):
             self._chunk_seq = 0
         self._chunk_timer.start(CHUNK_SECONDS * 1000)
         self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
+        # Arrancar watchdog de micrófono
+        self._last_samples_seen = 0
+        self._mic_stall_count = 0
+        self._mic_watchdog_timer.start()
         self.pill.set_state(PillWidget.STATE_RECORDING)
 
     @pyqtSlot()
@@ -361,6 +376,10 @@ class VflowApp(QObject):
             self._chunk_seq = 0
         # Sin chunk_timer en modo traducción — se envía audio completo al endpoint de traducción
         self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
+        # Arrancar watchdog de micrófono
+        self._last_samples_seen = 0
+        self._mic_stall_count = 0
+        self._mic_watchdog_timer.start()
         self.pill.set_state(PillWidget.STATE_RECORDING)
 
     def _flush_chunk(self):
@@ -407,6 +426,7 @@ class VflowApp(QObject):
 
         self._safety_timer.stop()
         self._chunk_timer.stop()
+        self._mic_watchdog_timer.stop()
         duration = self.recorder.stop()
         self.pill.set_state(PillWidget.STATE_PROCESSING)
 
@@ -502,6 +522,58 @@ class VflowApp(QObject):
                     "Vflow",
                     "No se pudo copiar el texto al portapapeles.",
                     QSystemTrayIcon.MessageIcon.Critical,
+                    4000,
+                )
+
+    @pyqtSlot()
+    def _check_mic_alive(self):
+        """Detecta si el micrófono dejó de entregar audio durante la grabación.
+
+        Se llama cada 1 s por _mic_watchdog_timer. Si tras _MIC_STALL_LIMIT
+        comprobaciones consecutivas el contador de muestras no avanzó, asume
+        que el dispositivo se desconectó y aborta la grabación con STATE_ERROR.
+        """
+        if not self._recording_active:
+            # Grabación ya terminada por otra ruta — apagar el watchdog y salir
+            self._mic_watchdog_timer.stop()
+            return
+
+        current = self.recorder.samples_count()
+
+        if current > self._last_samples_seen:
+            # Llegaron muestras nuevas: el micrófono sigue vivo
+            self._mic_stall_count = 0
+            self._last_samples_seen = current
+            return
+
+        # Sin avance. Ignorar la primera vez si aún no llegó ninguna muestra
+        # (el stream puede tardar unos ms en entregar el primer bloque).
+        if current == 0 and self._mic_stall_count == 0:
+            return
+
+        self._mic_stall_count += 1
+        if self._mic_stall_count >= _MIC_STALL_LIMIT:
+            logger.error(
+                "Watchdog: micrófono sin muestras nuevas durante %d s — asumiendo desconexión.",
+                _MIC_STALL_LIMIT,
+            )
+            self._mic_watchdog_timer.stop()
+            self._chunk_timer.stop()
+            self._safety_timer.stop()
+            self._recording_active = False
+            self.hotkey.reset()
+            try:
+                self.recorder.stop()
+            except Exception as exc:
+                logger.warning("Watchdog: error al cerrar stream del recorder: %s", exc)
+            # Incrementar generación para invalidar chunks en vuelo de esta sesión
+            self._generation += 1
+            self.pill.set_state(PillWidget.STATE_ERROR)
+            if self.tray:
+                self.tray.showMessage(
+                    "Vflow",
+                    "Micrófono desconectado durante la grabación.",
+                    QSystemTrayIcon.MessageIcon.Warning,
                     4000,
                 )
 

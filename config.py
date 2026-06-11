@@ -81,6 +81,8 @@ MAX_RECORDING_SECONDS = 600  # Auto-stop forgotten recordings (e.g. hands-free m
 
 # Hotkey
 DOUBLE_TAP_INTERVAL = 0.4  # seconds between taps for triple-tap detection
+ARMING_DELAY = 0.15         # segundos que Ctrl+Alt deben sostenerse SIN otra tecla antes de grabar
+                             # (evita disparos accidentales con atajos Ctrl+Alt+<tecla> de otras apps; 0 = inmediato)
 
 # Database (writable user data)
 DB_PATH = os.path.join(_DATA_DIR, "transcriptions.db")

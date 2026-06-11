@@ -90,7 +90,7 @@ Hotkey Release (pynput thread)
 pynput emits signals from its own thread. Both QObjects live in the main thread, so Qt's `AutoConnection` incorrectly chooses `DirectConnection`. But since `emit()` comes from pynput's thread, UI modifications happen on the wrong thread — undefined behavior. **Always use explicit `Qt.ConnectionType.QueuedConnection`.**
 
 ### 2. Floating Window (Qt Window Flags)
-The pill uses `FramelessWindowHint | WindowStaysOnTopHint | Tool | WindowDoesNotAcceptFocus` to float above all windows without stealing focus.
+The pill uses `FramelessWindowHint | WindowStaysOnTopHint | Tool | WindowDoesNotAcceptFocus` to float above all windows without stealing focus. The pill automatically detects the monitor where the cursor is located and appears there; it can be dragged between monitors and will reposition itself if a monitor is disconnected or changes resolution.
 
 ### 3. Auto-Paste (Win32 API + pynput)
 - `save_frontmost_app()` saves the foreground window handle via `GetForegroundWindow()`
@@ -106,17 +106,20 @@ sounddevice callback runs in audio thread — NEVER touch Qt widgets from it. Us
 ### 5. Short Recording Filter
 Recordings under 0.3 seconds are accidental taps — skip transcription and return to idle.
 
-### 6. Bundle vs Dev Mode (config.py)
+### 6. Microphone Watchdog
+If the microphone is disconnected during recording (e.g., Bluetooth headphones unplugged), the app detects silence after ~2 seconds with no audio data, automatically stops recording, shows an error state on the pill, and displays a system tray notification "Micrófono desconectado durante la grabación". This prevents the pill from hanging indefinitely. The watchdog monitors audio callback invocations; if no data arrives within the timeout window, recording terminates gracefully.
+
+### 7. Bundle vs Dev Mode (config.py)
 `config.py` detects `sys.frozen` to switch between dev and .exe bundle:
 - **Dev mode**: assets and data live in the project root directory
 - **Bundle mode**: read-only assets (logo) come from `sys._MEIPASS`, writable data (DB, .env) goes to `%APPDATA%\Vflow\`
 
-### 7. Desktop App Features (main.py)
+### 8. Desktop App Features (main.py)
 - **System Tray**: QSystemTrayIcon with dashboard link, "Iniciar con Windows" toggle, quit
 - **First-Run Dialog**: If GROQ_API_KEY is empty, shows a QDialog to enter it (saves to %APPDATA%\Vflow)
 - **Launch at Login**: Uses Windows Registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`)
 
-### 8. Port Selection (web/server.py)
+### 9. Port Selection (web/server.py)
 Default port is 5678. Auto-scans for free port if occupied.
 
 ## Security & Privacy
@@ -142,6 +145,7 @@ Edit `core/hotkey.py`:
 - **Mode 3 (Ctrl+Shift+Alt hold)**: Press and hold Ctrl+Shift+Alt (Shift before Alt) to translate from any language to target language.
 - **Mode 4 (AltGr+Space toggle)**: Press AltGr+Space once to start translation hands-free; press again to stop.
 - To customize intervals, edit `DOUBLE_TAP_INTERVAL` in `config.py`.
+- **Arming Delay** — Edit `ARMING_DELAY` in `config.py` (default: 0.15s). Modes 1 and 3 (hold keys) require the hotkey combination to be pressed for this duration *without other keys* before recording starts. This prevents accidental triggers when using IDE shortcuts like Ctrl+Alt+L. Set to 0 for immediate activation (at the cost of possible misfires).
 
 ### UI Dimensions
 Edit `config.py`:
@@ -185,3 +189,6 @@ Edit `config.py`:
 | Transcription failed — audio saved | Failed recordings saved to `%APPDATA%\Vflow\last_failed_recording.wav` for debugging (API/network errors) |
 | Logs not showing up | Dev mode logs to project directory; bundled app logs to `%APPDATA%\Vflow\vflow.log` (RotatingFileHandler, 5 MB per file) |
 | Clipboard content changed after paste | By default, clipboard is not restored. Set `RESTORE_CLIPBOARD=true` in `.env` to keep original clipboard content |
+| Accidental recording with IDE shortcuts | Increase `ARMING_DELAY` in `config.py` (default 0.15s) to require longer hold before recording starts in Ctrl+Alt/Ctrl+Shift+Alt modes |
+| Microphone disconnected mid-recording | App detects silence within ~2s, stops recording, shows error state on pill, and displays tray notification. Audio watchdog prevents hanging. |
+| Pill appears on wrong monitor | Pill auto-detects current monitor based on cursor position. If dragged between monitors and one disconnects, pill repositions to nearest active monitor. Check monitor layout in Windows Display Settings. |

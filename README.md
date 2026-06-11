@@ -28,7 +28,7 @@ Built as a replacement for [Wispr Flow](https://wispr.com) ($15/month). Vflow us
 - **System-wide dictation** — works in any app (VS Code, Chrome, Slack, Notepad, etc.)
 - **4 recording modes** — push-to-talk, hands-free toggle, translation hold, translation toggle
 - **Real-time translation** — dictate in any language, paste in another (12 languages supported)
-- **Floating pill UI** — minimal draggable overlay with real-time audio visualization
+- **Floating pill UI** — minimal draggable overlay with real-time audio visualization; appears on current monitor and repositions if monitors change
 - **No focus stealing** — pill floats above everything without interrupting your work
 - **Audio feedback** — distinct beeps on recording start and transcription done (configurable volume)
 - **Auto-paste** — text appears exactly where your cursor was
@@ -39,6 +39,8 @@ Built as a replacement for [Wispr Flow](https://wispr.com) ($15/month). Vflow us
 - **First-run setup** — asks for your Groq API key on first launch, no config files to edit
 - **Encrypted API key** — GROQ_API_KEY encrypted with Windows DPAPI (only your user on this machine can decrypt)
 - **Privacy controls** — disable history recording, set auto-deletion retention, no cloud sync
+- **Robust audio handling** — automatic microphone disconnect detection (~2s timeout) stops recording gracefully and displays error notification
+- **Accidental trigger prevention** — arming delay on hold-mode hotkeys prevents IDE shortcuts and other Ctrl+Alt combos from accidentally starting recording
 
 ---
 
@@ -192,6 +194,7 @@ All tunable constants live in `config.py`:
 ```python
 # Hotkey
 DOUBLE_TAP_INTERVAL = 0.4   # seconds between taps for hands-free detection
+ARMING_DELAY = 0.15         # seconds to hold Ctrl+Alt (or Ctrl+Shift+Alt) before recording starts
 
 # UI
 PILL_WIDTH_IDLE = 34          # width when idle (logo only)
@@ -266,6 +269,9 @@ Additional settings via environment variables (`.env` or dashboard):
 | API key plaintext in `.env` | On first launch, plaintext keys are automatically encrypted with DPAPI; no manual action needed |
 | Disable history recording | Set `SAVE_HISTORY=false` in `.env` or toggle in dashboard Settings; transcriptions paste but won't be stored |
 | Auto-delete old transcriptions | Set `HISTORY_RETENTION_DAYS=N` (e.g., `30`) to delete entries older than N days on startup |
+| IDE hotkeys trigger recording | Increase `ARMING_DELAY` in `config.py` (default 0.15s) to require longer hold in Ctrl+Alt/Ctrl+Shift+Alt modes before recording starts |
+| Microphone disconnected during recording | App detects silence within ~2s, stops recording, shows error on pill, and displays "Micrófono desconectado" tray notification |
+| Pill off-screen after monitor changes | Pill auto-redetects current monitor and repositions. If still off-screen, restart app or drag pill with mouse to visible area |
 
 ---
 
