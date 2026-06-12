@@ -60,6 +60,44 @@ def detect_platform(url: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Cookies para Instagram (experimental)
+# ---------------------------------------------------------------------------
+
+def _cookie_file_path() -> Optional[str]:
+    """Ruta de un cookies.txt provisto por el usuario en APP_DATA_DIR, si existe.
+
+    Es la vía más robusta para Instagram: no depende de que el navegador esté
+    cerrado ni del cifrado de la base de cookies de Chrome.
+    """
+    try:
+        from config import APP_DATA_DIR  # noqa: PLC0415
+    except Exception:
+        return None
+    for name in ("instagram_cookies.txt", "cookies.txt"):
+        p = os.path.join(APP_DATA_DIR, name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _instagram_cookie_strategies() -> list[dict]:
+    """Estrategias de cookies para Instagram, en orden de preferencia.
+
+    1. Archivo cookies.txt del usuario (sin bloqueos ni cifrado).
+    2. Cookies extraídas de cada navegador instalado; la extracción falla si el
+       navegador tiene la base bloqueada (abierto) o cifrada, por eso se prueban
+       varios hasta que uno funcione.
+    """
+    strategies: list[dict] = []
+    cf = _cookie_file_path()
+    if cf:
+        strategies.append({"cookiefile": cf})
+    for browser in ("chrome", "edge", "brave", "firefox", "vivaldi", "opera"):
+        strategies.append({"cookiesfrombrowser": (browser,)})
+    return strategies
+
+
+# ---------------------------------------------------------------------------
 # Parser VTT (extraído de web/server.py para reutilización)
 # ---------------------------------------------------------------------------
 
@@ -316,22 +354,73 @@ def _try_audio(
         # Sin postprocessors → yt-dlp no invoca ffmpeg externo
     }
 
-    # Instagram: necesita cookies del navegador para contenido privado/semi-privado
-    if platform == "instagram" and allow_instagram:
-        # Intentar con cookies de Chrome; si falla, el error de auth lo captura el caller
-        ydl_opts["cookiesfrombrowser"] = ("chrome",)
-
     if on_progress:
         on_progress("descargando audio")
 
+    # Estrategias de cookies: solo Instagram las necesita. Se prueba un archivo
+    # cookies.txt provisto por el usuario (lo más robusto) y luego cada navegador
+    # instalado, porque la extracción falla si el navegador tiene la base de
+    # cookies bloqueada (Chrome abierto) o cifrada.
+    if platform == "instagram" and allow_instagram:
+        cookie_strategies = _instagram_cookie_strategies()
+    else:
+        cookie_strategies = [{}]
+
     with tempfile.TemporaryDirectory() as tmpdir:
+        outtmpl = os.path.join(tmpdir, "%(id)s.%(ext)s")
+        info = None
+        last_err: Optional[Exception] = None
+        cookie_problem = False
+
+        for strat in cookie_strategies:
+            opts = dict(ydl_opts)
+            opts["outtmpl"] = outtmpl
+            opts.update(strat)
+            try:
+                with ydl_mod.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                last_err = None
+                break
+            except Exception as exc:  # DownloadError, CookieLoadError, etc.
+                last_err = exc
+                low = str(exc).lower()
+                if any(k in low for k in (
+                    "cookie", "private", "login required", "log in",
+                    "logged in", "sign in", "authenticat", "rate-limit",
+                )):
+                    cookie_problem = True
+                # Probar la siguiente estrategia de cookies (si la hay). Para
+                # plataformas sin cookies solo hay una estrategia, así el loop
+                # termina y cae al manejo de error de abajo.
+                continue
+
+        if info is None:
+            if cookie_problem or platform == "instagram":
+                try:
+                    from config import APP_DATA_DIR  # noqa: PLC0415
+                    cookies_hint = os.path.join(APP_DATA_DIR, "instagram_cookies.txt")
+                except Exception:
+                    cookies_hint = "instagram_cookies.txt"
+                return {
+                    "ok": False,
+                    "error": (
+                        "Instagram necesita tu sesión y no se pudieron leer las cookies del navegador "
+                        "(suele pasar con Chrome abierto o cifrado). Opciones: cierra el navegador por "
+                        f"completo e intenta de nuevo, o exporta tus cookies a un archivo y guárdalo como: {cookies_hint}"
+                    ),
+                    "error_kind": "needs_auth",
+                    "title": None,
+                    "duration": None,
+                }
+            return {
+                "ok": False,
+                "error": f"Error al descargar el video: {last_err}",
+                "error_kind": "network",
+                "title": None,
+                "duration": None,
+            }
+
         try:
-            outtmpl = os.path.join(tmpdir, "%(id)s.%(ext)s")
-            ydl_opts["outtmpl"] = outtmpl
-
-            with ydl_mod.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-
             title = info.get("title", "")
             duration_raw = info.get("duration")
             duration = float(duration_raw) if duration_raw is not None else None
@@ -397,19 +486,13 @@ def _try_audio(
                 "duration": duration,
             }
 
-        except ydl_mod.utils.DownloadError as exc:
-            msg = str(exc)
-            if "private" in msg.lower() or "login" in msg.lower() or "cookies" in msg.lower():
-                return {
-                    "ok": False,
-                    "error": "El video requiere autenticación. Para Instagram activa el modo experimental con cookies.",
-                    "error_kind": "needs_auth",
-                    "title": None,
-                    "duration": None,
-                }
+        except Exception as exc:
+            # Red de seguridad para fallos inesperados en decodificación/transcripción
+            # (los errores de descarga ya se manejan en el loop de estrategias arriba).
+            logger.warning("Fallo procesando audio de %s: %s", url, exc)
             return {
                 "ok": False,
-                "error": f"Error de red al descargar el video: {exc}",
+                "error": f"Error procesando el audio del video: {exc}",
                 "error_kind": "network",
                 "title": None,
                 "duration": None,
