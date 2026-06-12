@@ -50,6 +50,19 @@ class TranscriptionDB:
         "ALTER TABLE transcriptions ADD COLUMN source TEXT DEFAULT 'mic'",
     ]
 
+    # DDL adicional para la cola de URLs (Fase 3, paso 2)
+    _URL_QUEUE_DDL = """CREATE TABLE IF NOT EXISTS url_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        url TEXT NOT NULL,
+        platform TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        stage TEXT,
+        title TEXT,
+        error TEXT,
+        allow_instagram INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now'))
+    )"""
+
     def _init_db(self):
         """Crea la tabla de transcripciones y el índice por fecha si no existen."""
         try:
@@ -57,6 +70,7 @@ class TranscriptionDB:
             try:
                 for ddl in self._DDL:
                     conn.execute(ddl)
+                conn.execute(self._URL_QUEUE_DDL)
                 conn.commit()
                 # Migraciones seguras: ignorar "duplicate column" si ya existen
                 for migration in self._MIGRATIONS:
@@ -83,6 +97,7 @@ class TranscriptionDB:
             with sqlite3.connect(self.db_path) as conn:
                 for ddl in self._DDL:
                     conn.execute(ddl)
+                conn.execute(self._URL_QUEUE_DDL)
     def insert(self, text: str, language: str = None, duration_seconds: float = None, model: str = "whisper-large-v3-turbo", source: str = "mic") -> int:
         """Inserta una transcripción y retorna su ID."""
         with sqlite3.connect(self.db_path) as conn:
@@ -240,6 +255,97 @@ class TranscriptionDB:
                 (1 if enabled else 0, entry_id),
             )
             return cursor.rowcount
+
+    # ------------------------------------------------------------------
+    # URL Queue CRUD (Fase 3, paso 2)
+    # ------------------------------------------------------------------
+
+    def url_queue_enqueue(self, url: str, platform: str = None, allow_instagram: bool = False) -> int:
+        """Añade una URL a la cola con status 'pending'. Devuelve el id insertado."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "INSERT INTO url_queue (url, platform, status, allow_instagram) VALUES (?, ?, 'pending', ?)",
+                (url, platform, 1 if allow_instagram else 0),
+            )
+            return cursor.lastrowid
+
+    def url_queue_next_pending(self) -> dict | None:
+        """Devuelve el item 'pending' más antiguo (FIFO) o None si no hay ninguno."""
+        with sqlite3.connect(self.db_path, check_same_thread=False) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM url_queue WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else None
+
+    def url_queue_set_processing(self, item_id: int, stage: str = "iniciando") -> None:
+        """Marca un item como 'processing' con una etapa inicial."""
+        with sqlite3.connect(self.db_path, check_same_thread=False) as conn:
+            conn.execute(
+                "UPDATE url_queue SET status = 'processing', stage = ? WHERE id = ?",
+                (stage, item_id),
+            )
+
+    def url_queue_update_stage(self, item_id: int, stage: str) -> None:
+        """Actualiza la etapa descriptiva de un item 'processing'."""
+        with sqlite3.connect(self.db_path, check_same_thread=False) as conn:
+            conn.execute(
+                "UPDATE url_queue SET stage = ? WHERE id = ?",
+                (stage, item_id),
+            )
+
+    def url_queue_set_done(self, item_id: int, title: str = None) -> None:
+        """Marca un item como 'done'."""
+        with sqlite3.connect(self.db_path, check_same_thread=False) as conn:
+            conn.execute(
+                "UPDATE url_queue SET status = 'done', stage = 'listo', title = ? WHERE id = ?",
+                (title, item_id),
+            )
+
+    def url_queue_set_error(self, item_id: int, error: str) -> None:
+        """Marca un item como 'error' con mensaje."""
+        with sqlite3.connect(self.db_path, check_same_thread=False) as conn:
+            conn.execute(
+                "UPDATE url_queue SET status = 'error', stage = 'error', error = ? WHERE id = ?",
+                (error, item_id),
+            )
+
+    def url_queue_list(self) -> list:
+        """Devuelve todos los items de la cola ordenados por created_at DESC."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM url_queue ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def url_queue_clear_finished(self) -> int:
+        """Elimina filas con status 'done' o 'error'. Devuelve filas eliminadas."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "DELETE FROM url_queue WHERE status IN ('done', 'error')"
+            )
+            return cursor.rowcount
+
+    def url_queue_cancel_pending(self) -> int:
+        """Elimina filas con status 'pending' (no toca 'processing'). Devuelve filas eliminadas."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "DELETE FROM url_queue WHERE status = 'pending'"
+            )
+            return cursor.rowcount
+
+    def url_queue_summary(self) -> dict:
+        """Devuelve un resumen de conteos por status."""
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT status, COUNT(*) as cnt FROM url_queue GROUP BY status"
+            ).fetchall()
+        counts = {"pending": 0, "processing": 0, "done": 0, "error": 0}
+        for status, cnt in rows:
+            if status in counts:
+                counts[status] = cnt
+        return counts
 
     def prune_older_than(self, days: int) -> int:
         """Elimina transcripciones más antiguas que *days* días.

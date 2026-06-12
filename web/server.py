@@ -24,6 +24,109 @@ _download_state = {
 
 _ENV_PATH = os.path.join(APP_DATA_DIR, ".env")
 
+# ---------------------------------------------------------------------------
+# Worker serial de la cola de URLs (Fase 3, paso 2)
+# ---------------------------------------------------------------------------
+_url_worker_lock = threading.Lock()
+_url_worker_started = False
+
+
+def _url_queue_worker() -> None:
+    """Loop infinito que procesa la cola url_queue de forma serial (FIFO).
+
+    - Toma el item 'pending' más antiguo.
+    - Lo marca 'processing'.
+    - Llama a transcribe_url con on_progress → actualiza stage en DB.
+    - Si ok: inserta en transcriptions (respetando SAVE_HISTORY) y marca 'done'.
+    - Si no ok: marca 'error'.
+    - Pausa ~1.5s entre items (cortesía anti-baneo).
+    - Items 'processing' huérfanos al arranque (crash anterior) se reencolan como 'pending'.
+    """
+    import time
+    import logging as _log
+    from core.url_transcribe import transcribe_url  # noqa: PLC0415
+
+    _logger = _log.getLogger(__name__)
+
+    # DB con su propia conexión (thread distinto)
+    from db.database import TranscriptionDB  # noqa: PLC0415
+    from config import DB_PATH  # noqa: PLC0415
+    worker_db = TranscriptionDB(DB_PATH)
+
+    # Reparar items 'processing' huérfanos de un crash anterior
+    try:
+        import sqlite3 as _sqlite3
+        with _sqlite3.connect(DB_PATH) as _c:
+            _c.execute("UPDATE url_queue SET status='pending', stage=NULL WHERE status='processing'")
+    except Exception as _exc:
+        _logger.warning("No se pudo reparar items processing huérfanos: %s", _exc)
+
+    while True:
+        try:
+            item = worker_db.url_queue_next_pending()
+            if item is None:
+                time.sleep(1.0)
+                continue
+
+            item_id = item["id"]
+            url = item["url"]
+            allow_instagram = bool(item.get("allow_instagram", 0))
+
+            _logger.info("URL queue: procesando id=%d url=%s", item_id, url)
+            worker_db.url_queue_set_processing(item_id, "iniciando")
+
+            def _on_progress(stage: str, _id=item_id) -> None:
+                try:
+                    worker_db.url_queue_update_stage(_id, stage)
+                except Exception:
+                    pass
+
+            result = transcribe_url(url, allow_instagram=allow_instagram, on_progress=_on_progress)
+
+            if result["ok"]:
+                title = result.get("title") or ""
+                if os.getenv("SAVE_HISTORY", "true").lower() == "true":
+                    model_label = (
+                        "youtube-subtitles" if result.get("method") == "subtitles"
+                        else "url-audio"
+                    )
+                    worker_db.insert(
+                        text=result["text"],
+                        language=result.get("language"),
+                        duration_seconds=result.get("duration"),
+                        model=model_label,
+                        source=result.get("source") or "url",
+                    )
+                worker_db.url_queue_set_done(item_id, title)
+                _logger.info("URL queue: id=%d completado — %s", item_id, title)
+            else:
+                error_msg = result.get("error") or "Error desconocido"
+                worker_db.url_queue_set_error(item_id, error_msg)
+                _logger.warning("URL queue: id=%d error — %s", item_id, error_msg)
+
+        except Exception as exc:
+            _logger.error("URL queue worker: excepción inesperada: %s", exc, exc_info=True)
+            # Intentar marcar el item como error para no bloquear la cola
+            try:
+                if "item_id" in dir():
+                    worker_db.url_queue_set_error(item_id, f"Error interno: {exc}")  # type: ignore[name-defined]
+            except Exception:
+                pass
+
+        time.sleep(1.5)
+
+
+def _start_url_queue_worker() -> None:
+    """Arranca el worker de la cola de URLs una sola vez (guard contra doble arranque)."""
+    global _url_worker_started
+    with _url_worker_lock:
+        if _url_worker_started:
+            return
+        _url_worker_started = True
+    t = threading.Thread(target=_url_queue_worker, daemon=True, name="url-queue-worker")
+    t.start()
+
+
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
 app.config["SECRET_KEY"] = secrets.token_hex(32)
@@ -135,7 +238,7 @@ HTML_TEMPLATE = """
                 <button onclick="toggleSettings()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Configuración">&#9881;</button>
                 <button onclick="toggleDictionary()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Diccionario">&#128218;</button>
                 <button onclick="toggleShortcuts()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Atajos de teclado">&#9000;</button>
-                <button onclick="toggleYoutube()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Transcribir YouTube">&#9654;</button>
+                <button onclick="toggleUrlQueue()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Transcribir desde URL">&#9654;</button>
             </div>
         </div>
 
@@ -188,26 +291,48 @@ HTML_TEMPLATE = """
             <p class="text-xs text-white/25 mt-4">El idioma de transcripción y el idioma de destino (traducción) se configuran en el panel de Configuración.</p>
         </div>
 
-        <!-- YouTube panel -->
-        <div id="youtube-panel" class="glass rounded-xl p-5 mb-6 hidden">
-            <div class="text-sm font-medium text-white/60 mb-3">Transcribir desde YouTube</div>
-            <p class="text-xs text-white/30 mb-3">Pega una URL de YouTube para obtener la transcripción de sus subtítulos sin grabar audio ni gastar Groq.</p>
-            <div class="flex gap-2">
-                <input type="text" id="yt-url" placeholder="https://www.youtube.com/watch?v=..."
+        <!-- URL Queue panel -->
+        <div id="url-queue-panel" class="glass rounded-xl p-5 mb-6 hidden">
+            <div class="text-sm font-medium text-white/60 mb-1">Transcribir desde URL</div>
+            <p class="text-xs text-white/30 mb-3">Pega una o varias URLs de YouTube, TikTok u otras plataformas (una por línea) para transcribirlas en cola.</p>
+
+            <!-- URL única -->
+            <div class="flex gap-2 mb-2">
+                <input type="text" id="uq-url" placeholder="https://www.youtube.com/watch?v=..."
                     class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80
                     placeholder-white/30 focus:outline-none focus:border-white/20 flex-1">
-                <button onclick="fetchYoutubeTranscript()"
-                    class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 whitespace-nowrap" id="yt-btn">
-                    Obtener transcripción
+                <button onclick="enqueueUrls()"
+                    class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 whitespace-nowrap" id="uq-btn">
+                    Añadir a la cola
                 </button>
             </div>
-            <div id="yt-status" class="text-xs mt-2 hidden"></div>
-            <div id="yt-result" class="hidden mt-3 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06]">
-                <div class="flex items-center justify-between mb-2">
-                    <span class="text-xs text-white/50" id="yt-result-title"></span>
-                    <button onclick="copyYoutubeText()" class="text-white/30 hover:text-white/70 text-xs px-2 py-1 rounded hover:bg-white/5">Copiar</button>
+
+            <!-- Bulk textarea -->
+            <textarea id="uq-bulk" rows="3" placeholder="Una URL por línea para añadir varias a la vez…"
+                class="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80
+                placeholder-white/30 focus:outline-none focus:border-white/20 w-full resize-y mb-2"></textarea>
+
+            <!-- Opciones -->
+            <div class="flex items-center gap-4 mb-3 flex-wrap">
+                <label class="flex items-center gap-2 text-xs text-white/40 cursor-pointer select-none">
+                    <input type="checkbox" id="uq-instagram" class="accent-purple-500">
+                    Instagram (experimental, requiere cookies del navegador)
+                </label>
+                <p class="text-xs text-white/20 flex-1">La cola usa el backend de transcripción actual. Para que sea gratis, usa el backend local (Configuración).</p>
+            </div>
+
+            <div id="uq-feedback" class="text-xs mb-3 hidden"></div>
+
+            <!-- Lista de progreso -->
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-xs text-white/40">Cola de transcripción</span>
+                <div class="flex gap-2">
+                    <button onclick="cancelPendingUrls()" class="text-xs px-2 py-1 rounded text-white/30 hover:text-white/60 hover:bg-white/5">Cancelar pendientes</button>
+                    <button onclick="clearQueueFinished()" class="text-xs px-2 py-1 rounded text-white/30 hover:text-white/60 hover:bg-white/5">Limpiar terminadas</button>
                 </div>
-                <div class="text-sm text-white/80 leading-relaxed" id="yt-result-text" style="max-height:260px;overflow-y:auto;white-space:pre-wrap;"></div>
+            </div>
+            <div id="uq-list" class="space-y-1 max-h-64 overflow-y-auto">
+                <div class="text-xs text-white/20">Sin items en la cola.</div>
             </div>
         </div>
 
@@ -1175,68 +1300,162 @@ HTML_TEMPLATE = """
             }
         }
 
-        // --- YouTube panel ---
-        function toggleYoutube() {
-            const panel = document.getElementById('youtube-panel');
+        // --- URL Queue panel ---
+        let _uqPollInterval = null;
+
+        function toggleUrlQueue() {
+            const panel = document.getElementById('url-queue-panel');
+            const isHidden = panel.classList.contains('hidden');
             panel.classList.toggle('hidden');
+            if (isHidden) {
+                loadUrlQueue().then(summary => {
+                    if (summary && (summary.pending > 0 || summary.processing > 0)) _startUqPoll();
+                });
+            } else {
+                _stopUqPoll();
+            }
         }
 
-        async function fetchYoutubeTranscript() {
-            const urlInput = document.getElementById('yt-url');
-            const btn = document.getElementById('yt-btn');
-            const status = document.getElementById('yt-status');
-            const result = document.getElementById('yt-result');
-            const url = urlInput.value.trim();
-            if (!url) return;
+        function _stopUqPoll() {
+            if (_uqPollInterval) { clearInterval(_uqPollInterval); _uqPollInterval = null; }
+        }
 
-            btn.disabled = true;
-            result.classList.add('hidden');
-            status.classList.remove('hidden');
-            status.style.color = 'rgba(255,255,255,0.4)';
-            status.textContent = 'Descargando subtítulos… esto puede tardar unos segundos.';
+        function _startUqPoll() {
+            if (_uqPollInterval) return;
+            _uqPollInterval = setInterval(async () => {
+                const summary = await loadUrlQueue();
+                if (summary && summary.pending === 0 && summary.processing === 0) {
+                    _stopUqPoll();
+                    loadData();
+                }
+            }, 2000);
+        }
+
+        async function loadUrlQueue() {
+            try {
+                const res = await fetch('/api/url-queue');
+                const data = await res.json();
+                renderUqList(data.items || []);
+                return data.summary || {};
+            } catch(e) { return {}; }
+        }
+
+        const _platformIcons = { youtube: '▶', tiktok: '♪', instagram: '◎', other: '🔗' };
+        const _statusLabels = {
+            pending: '<span class="text-white/30">Pendiente</span>',
+            processing: '<span class="text-yellow-400/80">Procesando…</span>',
+            done: '<span class="text-green-400/80">Listo ✓</span>',
+            error: '<span class="text-red-400/80">Error</span>',
+        };
+
+        function _shortUrl(url) {
+            try {
+                const u = new URL(url);
+                const path = u.pathname.slice(0, 30) + (u.pathname.length > 30 ? '…' : '');
+                return u.hostname + path;
+            } catch(e) { return url.slice(0, 40) + (url.length > 40 ? '…' : ''); }
+        }
+
+        function renderUqList(items) {
+            const container = document.getElementById('uq-list');
+            if (!items.length) {
+                container.innerHTML = '<div class="text-xs text-white/20 py-2">Sin items en la cola.</div>';
+                return;
+            }
+            container.innerHTML = items.map(item => {
+                const icon = _platformIcons[item.platform] || '🔗';
+                const statusHtml = _statusLabels[item.status] || item.status;
+                const stageHtml = item.stage && item.status === 'processing'
+                    ? '<span class="text-white/25 ml-1">(' + escapeHtml(item.stage) + ')</span>' : '';
+                const titleHtml = item.title
+                    ? '<span class="text-white/40 ml-1 truncate" style="max-width:200px" title="' + escapeHtml(item.title) + '">' + escapeHtml(item.title) + '</span>'
+                    : '';
+                const errorHtml = item.error && item.status === 'error'
+                    ? '<div class="text-xs text-red-400/60 mt-0.5 truncate" title="' + escapeHtml(item.error) + '">' + escapeHtml(item.error) + '</div>'
+                    : '';
+                return '<div class="flex items-start gap-2 py-1.5 border-b border-white/[0.04]">' +
+                    '<span class="text-white/30 text-xs mt-0.5 flex-shrink-0">' + icon + '</span>' +
+                    '<div class="flex-1 min-w-0">' +
+                    '<div class="flex items-center gap-2 flex-wrap">' +
+                    '<span class="text-xs text-white/50 truncate" title="' + escapeHtml(item.url) + '">' + escapeHtml(_shortUrl(item.url)) + '</span>' +
+                    '<span class="text-xs">' + statusHtml + stageHtml + '</span>' +
+                    titleHtml +
+                    '</div>' + errorHtml + '</div></div>';
+            }).join('');
+        }
+
+        async function enqueueUrls() {
+            const singleUrl = (document.getElementById('uq-url').value || '').trim();
+            const bulkText = (document.getElementById('uq-bulk').value || '').trim();
+            const allowInstagram = document.getElementById('uq-instagram').checked;
+            const feedback = document.getElementById('uq-feedback');
+
+            const combined = [singleUrl, bulkText].filter(Boolean).join('\n');
+            if (!combined.trim()) return;
 
             try {
-                const res = await fetch('/api/youtube-transcript', {
+                const res = await fetch('/api/url-queue', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({url}),
+                    body: JSON.stringify({text: combined, allow_instagram: allowInstagram}),
                 });
                 const data = await res.json();
-                if (!res.ok) {
-                    status.style.color = '#f87171';
-                    status.textContent = data.error || ('Error ' + res.status);
-                    return;
+                feedback.classList.remove('hidden');
+                if (data.enqueued > 0) {
+                    feedback.style.color = '#4ade80';
+                    let msg = data.enqueued + ' URL' + (data.enqueued > 1 ? 's' : '') + ' a\xf1adida' + (data.enqueued > 1 ? 's' : '') + ' a la cola.';
+                    if (data.rejected && data.rejected.length > 0) {
+                        msg += ' Rechazadas (' + data.rejected.length + '): ' + data.rejected.slice(0,3).join(', ');
+                    }
+                    feedback.textContent = msg;
+                } else {
+                    feedback.style.color = '#f87171';
+                    feedback.textContent = 'No se a\xf1adi\xf3 ninguna URL. ' +
+                        (data.rejected && data.rejected.length ? 'L\xedneas rechazadas: ' + data.rejected.slice(0,3).join(', ') : 'Verifica las URLs.');
                 }
-                const autoLabel = data.auto_generated ? ' (auto-generado)' : '';
-                status.style.color = '#4ade80';
-                status.textContent = 'Subtítulos obtenidos — idioma: ' + data.language + autoLabel;
-                document.getElementById('yt-result-title').textContent = data.title;
-                document.getElementById('yt-result-text').textContent = data.text;
-                result.classList.remove('hidden');
-                // Refrescar historial si se guardó
-                loadData();
+                document.getElementById('uq-url').value = '';
+                document.getElementById('uq-bulk').value = '';
+                setTimeout(() => feedback.classList.add('hidden'), 6000);
+                await loadUrlQueue();
+                _startUqPoll();
             } catch(ex) {
-                status.style.color = '#f87171';
-                status.textContent = 'Error de red: ' + ex;
-            } finally {
-                btn.disabled = false;
+                feedback.classList.remove('hidden');
+                feedback.style.color = '#f87171';
+                feedback.textContent = 'Error de red: ' + ex;
             }
         }
 
-        function copyYoutubeText() {
-            const text = document.getElementById('yt-result-text').textContent;
-            navigator.clipboard.writeText(text);
+        async function clearQueueFinished() {
+            await fetch('/api/url-queue/clear', {method: 'POST'});
+            await loadUrlQueue();
         }
 
-        // Permitir Enter en el input de URL
+        async function cancelPendingUrls() {
+            await fetch('/api/url-queue/cancel-pending', {method: 'POST'});
+            await loadUrlQueue();
+            _stopUqPoll();
+        }
+
+        // Enter en campo URL único encola
         document.addEventListener('DOMContentLoaded', () => {
-            const ytInput = document.getElementById('yt-url');
-            if (ytInput) {
-                ytInput.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter') fetchYoutubeTranscript();
-                });
-            }
+            const uqInput = document.getElementById('uq-url');
+            if (uqInput) uqInput.addEventListener('keydown', e => { if (e.key === 'Enter') enqueueUrls(); });
         });
+
+        // Watcher global: refrescar historial cuando se completan items de la cola
+        let _lastQueueDone = 0;
+        setInterval(async () => {
+            const panel = document.getElementById('url-queue-panel');
+            if (!panel || panel.classList.contains('hidden')) return;
+            try {
+                const res = await fetch('/api/url-queue');
+                const data = await res.json();
+                const nowDone = data.summary ? data.summary.done : 0;
+                if (nowDone > _lastQueueDone) { _lastQueueDone = nowDone; loadData(); }
+                renderUqList(data.items || []);
+                if (data.summary && (data.summary.pending > 0 || data.summary.processing > 0)) _startUqPoll();
+            } catch(e) {}
+        }, 3000);
     </script>
 </body>
 </html>
@@ -1690,62 +1909,103 @@ def patch_dictionary_entry(eid):
     return jsonify({"ok": True})
 
 
-def _parse_vtt_to_text(content: str) -> str:
-    """Convierte subtítulos VTT a texto plano deduplicando cues rolling típicos de YouTube."""
-    lines = content.splitlines()
-    seen: list[str] = []
-    in_cue = False
-    for line in lines:
-        line = line.strip()
-        # Saltar cabecera WEBVTT, metadata y timestamps
-        if line.startswith("WEBVTT") or not line:
-            in_cue = False
-            continue
-        if re.match(r"^\d{2}:\d{2}", line) or "-->" in line:
-            in_cue = True
-            continue
-        # Número de cue (solo dígitos)
-        if re.match(r"^\d+$", line):
-            in_cue = True
-            continue
-        if in_cue and line:
-            # Eliminar tags HTML como <c>, </c>, <00:00:00.000>
-            clean = re.sub(r"<[^>]+>", "", line).strip()
-            if clean and (not seen or seen[-1] != clean):
-                seen.append(clean)
-    return " ".join(seen)
+# ---------------------------------------------------------------------------
+# Endpoints de la cola de URLs (Fase 3, paso 2)
+# ---------------------------------------------------------------------------
+
+_URL_LINE_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
 
-def _parse_json3_to_text(content: str) -> str:
-    """Convierte formato json3 de YouTube a texto plano deduplicando cues rolling."""
-    import json as _json
-    data = _json.loads(content)
-    events = data.get("events", [])
-    seen: list[str] = []
-    for ev in events:
-        segs = ev.get("segs")
-        if not segs:
+def _parse_url_body(data: dict) -> tuple[list[str], list[str]]:
+    """Extrae URLs válidas y rechazadas del body JSON.
+
+    Acepta {text: "...\\n..."} (multilínea) o {urls: [...]} más allow_instagram.
+    Devuelve (validas, rechazadas).
+    """
+    from core.url_transcribe import detect_platform  # noqa: PLC0415
+
+    raw_lines: list[str] = []
+    if "urls" in data:
+        raw_lines = [str(u).strip() for u in (data["urls"] or [])]
+    elif "text" in data:
+        raw_lines = [line.strip() for line in str(data.get("text", "")).splitlines()]
+    else:
+        raw_lines = []
+
+    validas: list[str] = []
+    rechazadas: list[str] = []
+    for line in raw_lines:
+        if not line:
             continue
-        line = "".join(s.get("utf8", "") for s in segs).strip()
-        if not line or line == "\n":
-            continue
-        # Eliminar saltos de línea internos
-        line = line.replace("\n", " ").strip()
-        if line and (not seen or seen[-1] != line):
-            seen.append(line)
-    return " ".join(seen)
+        plat = detect_platform(line)
+        if plat is None:
+            rechazadas.append(line)
+        else:
+            validas.append(line)
+    return validas, rechazadas
+
+
+@app.route("/api/url-queue", methods=["POST"])
+def url_queue_enqueue():
+    """Encola una o varias URLs para transcripción en background.
+
+    Body JSON:
+        {text: "url1\\nurl2\\n..."} o {urls: ["url1", "url2"]}
+        Opcional: {allow_instagram: true}
+
+    Responde:
+        {enqueued: N, rejected: [...]}
+    """
+    from core.url_transcribe import detect_platform  # noqa: PLC0415
+
+    data = request.get_json() or {}
+    allow_instagram = bool(data.get("allow_instagram", False))
+
+    validas, rechazadas = _parse_url_body(data)
+
+    enqueued = 0
+    for url in validas:
+        platform = detect_platform(url)
+        _db.url_queue_enqueue(url, platform=platform, allow_instagram=allow_instagram)
+        enqueued += 1
+
+    return jsonify({"enqueued": enqueued, "rejected": rechazadas})
+
+
+@app.route("/api/url-queue")
+def url_queue_list():
+    """Devuelve la lista completa de items de la cola y un resumen por status."""
+    items = _db.url_queue_list()
+    summary = _db.url_queue_summary()
+    return jsonify({"items": items, "summary": summary})
+
+
+@app.route("/api/url-queue/clear", methods=["POST"])
+def url_queue_clear():
+    """Elimina filas con status 'done' o 'error'. Deja pending/processing intactos."""
+    deleted = _db.url_queue_clear_finished()
+    return jsonify({"deleted": deleted})
+
+
+@app.route("/api/url-queue/cancel-pending", methods=["POST"])
+def url_queue_cancel_pending():
+    """Elimina filas 'pending' sin tocar la que está procesando."""
+    deleted = _db.url_queue_cancel_pending()
+    return jsonify({"deleted": deleted})
 
 
 @app.route("/api/youtube-transcript", methods=["POST"])
 def youtube_transcript():
-    """Descarga subtítulos de YouTube y los devuelve como texto plano.
+    """Transcribe contenido de YouTube (subtítulos o audio) y lo devuelve como texto plano.
+
+    Delega en core.url_transcribe.transcribe_url y persiste en DB si SAVE_HISTORY=true.
 
     Body JSON: {url: str}
     Responde: {ok, title, language, auto_generated, text}
-    Errores: 400 URL inválida, 404 sin subtítulos, 502 error de red.
+    Errores: 400 URL inválida, 401 requiere auth, 404 sin contenido, 502 red, 500 otro.
     """
-    import tempfile
     import logging as _log
+    from core.url_transcribe import transcribe_url  # noqa: PLC0415
 
     _logger = _log.getLogger(__name__)
 
@@ -1754,126 +2014,42 @@ def youtube_transcript():
         return jsonify({"error": "url field required"}), 400
 
     url = data["url"].strip()
+
+    # Validación rápida: solo YouTube en este endpoint (compatibilidad con la UI existente)
     if not _YOUTUBE_RE.match(url):
         return jsonify({"error": "URL no reconocida como YouTube. Solo se admiten URLs de youtube.com o youtu.be"}), 400
 
-    try:
-        import yt_dlp  # noqa: PLC0415 — importación lazy
-    except ImportError:
-        return jsonify({"error": "yt-dlp no está instalado. Ejecuta: pip install yt-dlp"}), 500
+    result = transcribe_url(url)
 
-    preferred_lang = os.getenv("WHISPER_LANGUAGE", "es")
+    if not result["ok"]:
+        _kind_to_http = {
+            "invalid_url": 400,
+            "no_subtitles": 404,
+            "needs_auth": 401,
+            "network": 502,
+            "empty": 404,
+        }
+        http_code = _kind_to_http.get(result.get("error_kind") or "", 500)
+        return jsonify({"error": result.get("error", "Error desconocido")}), http_code
 
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ydl_opts = {
-                "skip_download": True,
-                "quiet": True,
-                "no_warnings": True,
-                "socket_timeout": 30,
-                "outtmpl": os.path.join(tmpdir, "%(id)s.%(ext)s"),
-                "writesubtitles": True,
-                "writeautomaticsub": True,
-                "subtitlesformat": "vtt",
-                "subtitleslangs": [preferred_lang, "en", "es"],
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                try:
-                    info = ydl.extract_info(url, download=False)
-                except yt_dlp.utils.DownloadError as exc:
-                    _logger.warning("yt-dlp DownloadError: %s", exc)
-                    return jsonify({"error": f"No se pudo acceder al video: {exc}"}), 502
+    # Persistir en DB si SAVE_HISTORY=true
+    if os.getenv("SAVE_HISTORY", "true").lower() == "true":
+        model_label = "youtube-subtitles" if result.get("method") == "subtitles" else "youtube-audio"
+        _db.insert(
+            text=result["text"],
+            language=result.get("language"),
+            duration_seconds=result.get("duration"),
+            model=model_label,
+            source=result.get("source", "youtube"),
+        )
 
-                title = info.get("title", "")
-                duration = info.get("duration")
-
-                # Seleccionar pista de subtítulos: manual > automático, idioma preferido > en > primero
-                subs_manual = info.get("subtitles") or {}
-                subs_auto = info.get("automatic_captions") or {}
-
-                chosen_lang = None
-                auto_generated = False
-
-                for lang in [preferred_lang, "en"]:
-                    if lang in subs_manual and subs_manual[lang]:
-                        chosen_lang = lang
-                        auto_generated = False
-                        break
-
-                if chosen_lang is None:
-                    if subs_manual:
-                        chosen_lang = next(iter(subs_manual))
-                        auto_generated = False
-                    elif preferred_lang in subs_auto and subs_auto[preferred_lang]:
-                        chosen_lang = preferred_lang
-                        auto_generated = True
-                    elif "en" in subs_auto and subs_auto["en"]:
-                        chosen_lang = "en"
-                        auto_generated = True
-                    elif subs_auto:
-                        chosen_lang = next(iter(subs_auto))
-                        auto_generated = True
-
-                if chosen_lang is None:
-                    return jsonify({
-                        "error": "Este video no tiene subtítulos disponibles (ni oficiales ni generados automáticamente)."
-                    }), 404
-
-                # Descargar la pista elegida
-                ydl_dl_opts = {
-                    "skip_download": True,
-                    "quiet": True,
-                    "no_warnings": True,
-                    "socket_timeout": 30,
-                    "outtmpl": os.path.join(tmpdir, "%(id)s.%(ext)s"),
-                    "writesubtitles": not auto_generated,
-                    "writeautomaticsub": auto_generated,
-                    "subtitlesformat": "vtt",
-                    "subtitleslangs": [chosen_lang],
-                }
-                with yt_dlp.YoutubeDL(ydl_dl_opts) as ydl2:
-                    ydl2.download([url])
-
-                # Buscar el archivo descargado
-                sub_text = None
-                for fname in os.listdir(tmpdir):
-                    fpath = os.path.join(tmpdir, fname)
-                    if fname.endswith(".vtt"):
-                        with open(fpath, encoding="utf-8") as f:
-                            sub_text = _parse_vtt_to_text(f.read())
-                        break
-                    elif fname.endswith(".json3"):
-                        with open(fpath, encoding="utf-8") as f:
-                            sub_text = _parse_json3_to_text(f.read())
-                        break
-
-                if not sub_text:
-                    return jsonify({"error": "No se pudo extraer texto de los subtítulos."}), 404
-
-                # Aplicar diccionario personal
-                sub_text = _dictionary.apply_replacements(sub_text)
-
-                # Guardar en DB si SAVE_HISTORY=true
-                if os.getenv("SAVE_HISTORY", "true").lower() == "true":
-                    _db.insert(
-                        text=sub_text,
-                        language=chosen_lang,
-                        duration_seconds=duration,
-                        model="youtube-subtitles",
-                        source="youtube",
-                    )
-
-                return jsonify({
-                    "ok": True,
-                    "title": title,
-                    "language": chosen_lang,
-                    "auto_generated": auto_generated,
-                    "text": sub_text,
-                })
-
-    except Exception as exc:
-        _logger.error("Error descargando subtítulos de YouTube: %s", exc, exc_info=True)
-        return jsonify({"error": f"Error al obtener subtítulos: {exc}"}), 502
+    return jsonify({
+        "ok": True,
+        "title": result.get("title", ""),
+        "language": result.get("language", ""),
+        "auto_generated": result.get("method") == "subtitles",
+        "text": result["text"],
+    })
 
 
 def _find_free_port(start: int = 5678, attempts: int = 50) -> int:
@@ -1892,6 +2068,7 @@ def start_web_server(port: int = None) -> int:
     """Start Flask in a daemon thread so it doesn't block the Qt event loop."""
     if port is None:
         port = _find_free_port()
+    _start_url_queue_worker()
     thread = threading.Thread(
         target=lambda: app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False),
         daemon=True,
