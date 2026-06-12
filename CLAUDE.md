@@ -165,7 +165,9 @@ If the microphone is disconnected during recording (e.g., Bluetooth headphones u
 Default port is 5678. Auto-scans for free port if occupied.
 
 ### 10. Dashboard Panels (web/server.py)
-The header contains three icon-button panels: **Configuración** (⚙), **Diccionario** (📖), and **Atajos de teclado** (⌨, `id="shortcuts-panel"`). The shortcuts panel is static HTML — no API endpoint required — and renders all four hotkey modes as `<kbd>`-styled cards.
+The header contains four icon-button panels: **Configuración** (⚙), **Diccionario** (📖), **Atajos de teclado** (⌨, `id="shortcuts-panel"`), and **YouTube** (▶). The shortcuts panel is static HTML — no API endpoint required — and renders all four hotkey modes as `<kbd>`-styled cards.
+
+The YouTube panel is a free fast-path for transcripts: paste a YouTube URL → `POST /api/youtube-transcript` downloads existing subtitles with yt-dlp (manual > auto-generated; language preference: `WHISPER_LANGUAGE` > en > first available), parses VTT to plain text (dedup of rolling cues), applies `dictionary.apply_replacements`, and stores in the DB with `source='youtube'` (respecting `SAVE_HISTORY`). No audio is recorded and Groq is not called. Errors: 400 invalid URL, 404 video without subtitles, 502 network failure. History rows show a small source badge (▶ youtube, 🔊 system, none for mic).
 
 ## Security & Privacy
 

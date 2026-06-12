@@ -10,3 +10,4 @@ python-dotenv
 flask
 faster-whisper
 pyaudiowpatch
+yt-dlp

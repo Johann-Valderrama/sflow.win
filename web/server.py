@@ -135,6 +135,7 @@ HTML_TEMPLATE = """
                 <button onclick="toggleSettings()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Configuración">&#9881;</button>
                 <button onclick="toggleDictionary()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Diccionario">&#128218;</button>
                 <button onclick="toggleShortcuts()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Atajos de teclado">&#9000;</button>
+                <button onclick="toggleYoutube()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Transcribir YouTube">&#9654;</button>
             </div>
         </div>
 
@@ -185,6 +186,29 @@ HTML_TEMPLATE = """
                 </div>
             </div>
             <p class="text-xs text-white/25 mt-4">El idioma de transcripción y el idioma de destino (traducción) se configuran en el panel de Configuración.</p>
+        </div>
+
+        <!-- YouTube panel -->
+        <div id="youtube-panel" class="glass rounded-xl p-5 mb-6 hidden">
+            <div class="text-sm font-medium text-white/60 mb-3">Transcribir desde YouTube</div>
+            <p class="text-xs text-white/30 mb-3">Pega una URL de YouTube para obtener la transcripción de sus subtítulos sin grabar audio ni gastar Groq.</p>
+            <div class="flex gap-2">
+                <input type="text" id="yt-url" placeholder="https://www.youtube.com/watch?v=..."
+                    class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80
+                    placeholder-white/30 focus:outline-none focus:border-white/20 flex-1">
+                <button onclick="fetchYoutubeTranscript()"
+                    class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 whitespace-nowrap" id="yt-btn">
+                    Obtener transcripción
+                </button>
+            </div>
+            <div id="yt-status" class="text-xs mt-2 hidden"></div>
+            <div id="yt-result" class="hidden mt-3 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06]">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs text-white/50" id="yt-result-title"></span>
+                    <button onclick="copyYoutubeText()" class="text-white/30 hover:text-white/70 text-xs px-2 py-1 rounded hover:bg-white/5">Copiar</button>
+                </div>
+                <div class="text-sm text-white/80 leading-relaxed" id="yt-result-text" style="max-height:260px;overflow-y:auto;white-space:pre-wrap;"></div>
+            </div>
         </div>
 
         <!-- Settings panel -->
@@ -445,6 +469,11 @@ HTML_TEMPLATE = """
                     hour: '2-digit', minute: '2-digit', second: '2-digit'
                 });
                 const dur = t.duration_seconds ? t.duration_seconds.toFixed(1) + 's' : '-';
+                const srcBadge = t.source === 'youtube'
+                    ? '<span class="text-white/25 text-xs ml-1" title="YouTube">▶</span>'
+                    : t.source === 'system'
+                        ? '<span class="text-white/25 text-xs ml-1" title="Audio del sistema">🔊</span>'
+                        : '';
                 const isEditing = editingId === t.id;
                 const checked = selectedIds.has(t.id) ? 'checked' : '';
                 const rowClass = selectedIds.has(t.id) ? 'selected-row' : '';
@@ -463,7 +492,7 @@ HTML_TEMPLATE = """
                         <input type="checkbox" class="row-check accent-purple-500 cursor-pointer" data-id="${t.id}"
                             ${checked} onclick="event.stopPropagation(); handleRowSelect(event, ${i})">
                     </td>
-                    <td class="py-3 px-4 text-white/30 text-xs whitespace-nowrap align-top">${time}</td>
+                    <td class="py-3 px-4 text-white/30 text-xs whitespace-nowrap align-top">${time}${srcBadge}</td>
                     <td class="py-3 px-4 text-white/80 text-sm align-top text-cell">${textCell}</td>
                     <td class="py-3 px-4 text-white/20 text-xs text-right align-top">${dur}</td>
                     <td class="py-3 px-4 text-center align-top whitespace-nowrap">
@@ -1145,12 +1174,79 @@ HTML_TEMPLATE = """
                 alert('Error al iniciar descarga: ' + e);
             }
         }
+
+        // --- YouTube panel ---
+        function toggleYoutube() {
+            const panel = document.getElementById('youtube-panel');
+            panel.classList.toggle('hidden');
+        }
+
+        async function fetchYoutubeTranscript() {
+            const urlInput = document.getElementById('yt-url');
+            const btn = document.getElementById('yt-btn');
+            const status = document.getElementById('yt-status');
+            const result = document.getElementById('yt-result');
+            const url = urlInput.value.trim();
+            if (!url) return;
+
+            btn.disabled = true;
+            result.classList.add('hidden');
+            status.classList.remove('hidden');
+            status.style.color = 'rgba(255,255,255,0.4)';
+            status.textContent = 'Descargando subtítulos… esto puede tardar unos segundos.';
+
+            try {
+                const res = await fetch('/api/youtube-transcript', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({url}),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    status.style.color = '#f87171';
+                    status.textContent = data.error || ('Error ' + res.status);
+                    return;
+                }
+                const autoLabel = data.auto_generated ? ' (auto-generado)' : '';
+                status.style.color = '#4ade80';
+                status.textContent = 'Subtítulos obtenidos — idioma: ' + data.language + autoLabel;
+                document.getElementById('yt-result-title').textContent = data.title;
+                document.getElementById('yt-result-text').textContent = data.text;
+                result.classList.remove('hidden');
+                // Refrescar historial si se guardó
+                loadData();
+            } catch(ex) {
+                status.style.color = '#f87171';
+                status.textContent = 'Error de red: ' + ex;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function copyYoutubeText() {
+            const text = document.getElementById('yt-result-text').textContent;
+            navigator.clipboard.writeText(text);
+        }
+
+        // Permitir Enter en el input de URL
+        document.addEventListener('DOMContentLoaded', () => {
+            const ytInput = document.getElementById('yt-url');
+            if (ytInput) {
+                ytInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') fetchYoutubeTranscript();
+                });
+            }
+        });
     </script>
 </body>
 </html>
 """
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_YOUTUBE_RE = re.compile(
+    r"^https?://(?:www\.|m\.)?(?:youtube\.com/watch|youtu\.be/|youtube\.com/shorts/|youtube\.com/embed/)",
+    re.IGNORECASE,
+)
 
 _LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "::1"}
 
@@ -1592,6 +1688,192 @@ def patch_dictionary_entry(eid):
         return jsonify({"error": "not found"}), 404
     _dictionary.invalidate()
     return jsonify({"ok": True})
+
+
+def _parse_vtt_to_text(content: str) -> str:
+    """Convierte subtítulos VTT a texto plano deduplicando cues rolling típicos de YouTube."""
+    lines = content.splitlines()
+    seen: list[str] = []
+    in_cue = False
+    for line in lines:
+        line = line.strip()
+        # Saltar cabecera WEBVTT, metadata y timestamps
+        if line.startswith("WEBVTT") or not line:
+            in_cue = False
+            continue
+        if re.match(r"^\d{2}:\d{2}", line) or "-->" in line:
+            in_cue = True
+            continue
+        # Número de cue (solo dígitos)
+        if re.match(r"^\d+$", line):
+            in_cue = True
+            continue
+        if in_cue and line:
+            # Eliminar tags HTML como <c>, </c>, <00:00:00.000>
+            clean = re.sub(r"<[^>]+>", "", line).strip()
+            if clean and (not seen or seen[-1] != clean):
+                seen.append(clean)
+    return " ".join(seen)
+
+
+def _parse_json3_to_text(content: str) -> str:
+    """Convierte formato json3 de YouTube a texto plano deduplicando cues rolling."""
+    import json as _json
+    data = _json.loads(content)
+    events = data.get("events", [])
+    seen: list[str] = []
+    for ev in events:
+        segs = ev.get("segs")
+        if not segs:
+            continue
+        line = "".join(s.get("utf8", "") for s in segs).strip()
+        if not line or line == "\n":
+            continue
+        # Eliminar saltos de línea internos
+        line = line.replace("\n", " ").strip()
+        if line and (not seen or seen[-1] != line):
+            seen.append(line)
+    return " ".join(seen)
+
+
+@app.route("/api/youtube-transcript", methods=["POST"])
+def youtube_transcript():
+    """Descarga subtítulos de YouTube y los devuelve como texto plano.
+
+    Body JSON: {url: str}
+    Responde: {ok, title, language, auto_generated, text}
+    Errores: 400 URL inválida, 404 sin subtítulos, 502 error de red.
+    """
+    import tempfile
+    import logging as _log
+
+    _logger = _log.getLogger(__name__)
+
+    data = request.get_json()
+    if not data or not data.get("url"):
+        return jsonify({"error": "url field required"}), 400
+
+    url = data["url"].strip()
+    if not _YOUTUBE_RE.match(url):
+        return jsonify({"error": "URL no reconocida como YouTube. Solo se admiten URLs de youtube.com o youtu.be"}), 400
+
+    try:
+        import yt_dlp  # noqa: PLC0415 — importación lazy
+    except ImportError:
+        return jsonify({"error": "yt-dlp no está instalado. Ejecuta: pip install yt-dlp"}), 500
+
+    preferred_lang = os.getenv("WHISPER_LANGUAGE", "es")
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ydl_opts = {
+                "skip_download": True,
+                "quiet": True,
+                "no_warnings": True,
+                "socket_timeout": 30,
+                "outtmpl": os.path.join(tmpdir, "%(id)s.%(ext)s"),
+                "writesubtitles": True,
+                "writeautomaticsub": True,
+                "subtitlesformat": "vtt",
+                "subtitleslangs": [preferred_lang, "en", "es"],
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                try:
+                    info = ydl.extract_info(url, download=False)
+                except yt_dlp.utils.DownloadError as exc:
+                    _logger.warning("yt-dlp DownloadError: %s", exc)
+                    return jsonify({"error": f"No se pudo acceder al video: {exc}"}), 502
+
+                title = info.get("title", "")
+                duration = info.get("duration")
+
+                # Seleccionar pista de subtítulos: manual > automático, idioma preferido > en > primero
+                subs_manual = info.get("subtitles") or {}
+                subs_auto = info.get("automatic_captions") or {}
+
+                chosen_lang = None
+                auto_generated = False
+
+                for lang in [preferred_lang, "en"]:
+                    if lang in subs_manual and subs_manual[lang]:
+                        chosen_lang = lang
+                        auto_generated = False
+                        break
+
+                if chosen_lang is None:
+                    if subs_manual:
+                        chosen_lang = next(iter(subs_manual))
+                        auto_generated = False
+                    elif preferred_lang in subs_auto and subs_auto[preferred_lang]:
+                        chosen_lang = preferred_lang
+                        auto_generated = True
+                    elif "en" in subs_auto and subs_auto["en"]:
+                        chosen_lang = "en"
+                        auto_generated = True
+                    elif subs_auto:
+                        chosen_lang = next(iter(subs_auto))
+                        auto_generated = True
+
+                if chosen_lang is None:
+                    return jsonify({
+                        "error": "Este video no tiene subtítulos disponibles (ni oficiales ni generados automáticamente)."
+                    }), 404
+
+                # Descargar la pista elegida
+                ydl_dl_opts = {
+                    "skip_download": True,
+                    "quiet": True,
+                    "no_warnings": True,
+                    "socket_timeout": 30,
+                    "outtmpl": os.path.join(tmpdir, "%(id)s.%(ext)s"),
+                    "writesubtitles": not auto_generated,
+                    "writeautomaticsub": auto_generated,
+                    "subtitlesformat": "vtt",
+                    "subtitleslangs": [chosen_lang],
+                }
+                with yt_dlp.YoutubeDL(ydl_dl_opts) as ydl2:
+                    ydl2.download([url])
+
+                # Buscar el archivo descargado
+                sub_text = None
+                for fname in os.listdir(tmpdir):
+                    fpath = os.path.join(tmpdir, fname)
+                    if fname.endswith(".vtt"):
+                        with open(fpath, encoding="utf-8") as f:
+                            sub_text = _parse_vtt_to_text(f.read())
+                        break
+                    elif fname.endswith(".json3"):
+                        with open(fpath, encoding="utf-8") as f:
+                            sub_text = _parse_json3_to_text(f.read())
+                        break
+
+                if not sub_text:
+                    return jsonify({"error": "No se pudo extraer texto de los subtítulos."}), 404
+
+                # Aplicar diccionario personal
+                sub_text = _dictionary.apply_replacements(sub_text)
+
+                # Guardar en DB si SAVE_HISTORY=true
+                if os.getenv("SAVE_HISTORY", "true").lower() == "true":
+                    _db.insert(
+                        text=sub_text,
+                        language=chosen_lang,
+                        duration_seconds=duration,
+                        model="youtube-subtitles",
+                        source="youtube",
+                    )
+
+                return jsonify({
+                    "ok": True,
+                    "title": title,
+                    "language": chosen_lang,
+                    "auto_generated": auto_generated,
+                    "text": sub_text,
+                })
+
+    except Exception as exc:
+        _logger.error("Error descargando subtítulos de YouTube: %s", exc, exc_info=True)
+        return jsonify({"error": f"Error al obtener subtítulos: {exc}"}), 502
 
 
 def _find_free_port(start: int = 5678, attempts: int = 50) -> int:
