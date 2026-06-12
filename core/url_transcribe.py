@@ -13,6 +13,7 @@ Este módulo NO toca la DB ni la UI.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import logging
 import os
@@ -99,6 +100,100 @@ def _instagram_cookie_strategies() -> list[dict]:
     for browser in ("opera", "chrome", "edge", "brave", "firefox", "vivaldi"):
         strategies.append({"cookiesfrombrowser": (browser,)})
     return strategies
+
+
+class _SilentLogger:
+    def debug(self, m): pass
+    def info(self, m): pass
+    def warning(self, m): pass
+    def error(self, m): pass
+
+
+@contextlib.contextmanager
+def _clean_crypt32_argtypes():
+    """Limpia temporalmente los argtypes que core.secrets fija en crypt32.
+
+    `core/secrets.py` fija `CryptUnprotectData.argtypes` a su propia clase
+    `_DATA_BLOB` (crypt32 es un singleton de proceso). yt-dlp pasa su propia
+    `DATA_BLOB` al leer cookies, lo que provoca "expected LP__DATA_BLOB instance
+    instead of pointer to DATA_BLOB". Como toda la app importa secrets, la
+    extracción de cookies fallaría siempre. Aquí limpiamos argtypes mientras
+    yt-dlp trabaja y los restauramos al salir (secrets tolera argtypes=None).
+    Fail-open fuera de Windows o si ctypes no está disponible.
+    """
+    saved = None
+    fn = None
+    try:
+        import ctypes  # noqa: PLC0415
+        fn = ctypes.windll.crypt32.CryptUnprotectData
+        try:
+            saved = fn.argtypes
+        except Exception:
+            saved = None
+        fn.argtypes = None
+    except Exception:
+        fn = None
+    try:
+        yield
+    finally:
+        if fn is not None:
+            try:
+                fn.argtypes = saved
+            except Exception:
+                pass
+
+
+def sync_instagram_cookies(browser: Optional[str] = None) -> dict:
+    """Extrae las cookies de Instagram de un navegador y las guarda en cookies.txt.
+
+    Vuelca solo las cookies de dominios de Instagram (no todo el navegador, por
+    privacidad) a un archivo Netscape que la descarga usa directamente. La
+    extracción se hace bajo `_clean_crypt32_argtypes()` para evitar el choque de
+    ctypes con core.secrets. Devuelve {ok, browser, count, path, error}.
+    """
+    from yt_dlp.cookies import extract_cookies_from_browser, YoutubeDLCookieJar  # noqa: PLC0415
+    try:
+        from config import APP_DATA_DIR  # noqa: PLC0415
+    except Exception:
+        APP_DATA_DIR = os.getcwd()
+
+    candidates = [browser] if browser else ["opera", "chrome", "edge", "brave", "vivaldi", "firefox"]
+    out_path = os.path.join(APP_DATA_DIR, "instagram_cookies.txt")
+    last_err: Optional[str] = None
+
+    for b in candidates:
+        jar = None
+        try:
+            with _clean_crypt32_argtypes():
+                jar = extract_cookies_from_browser(b, None, _SilentLogger())
+        except Exception as exc:
+            last_err = f"{b}: {str(exc).splitlines()[0][:80]}"
+            jar = None
+        if jar is None:
+            continue
+        ig = [c for c in jar if "instagram" in (c.domain or "").lower()]
+        if not ig:
+            continue
+        out = YoutubeDLCookieJar()
+        for c in ig:
+            out.set_cookie(c)
+        try:
+            out.save(out_path, ignore_discard=True, ignore_expires=True)
+        except Exception as exc:
+            return {"ok": False, "browser": b, "count": 0, "path": out_path,
+                    "error": f"No se pudo guardar el archivo de cookies: {exc}"}
+        has_session = any(c.name == "sessionid" for c in ig)
+        if not has_session:
+            return {"ok": False, "browser": b, "count": len(ig), "path": out_path,
+                    "error": (f"Se encontraron cookies de Instagram en {b} pero sin sesión activa "
+                              "(sessionid). Inicia sesión en instagram.com en ese navegador.")}
+        logger.info("Cookies de Instagram sincronizadas desde %s: %d cookies", b, len(ig))
+        return {"ok": True, "browser": b, "count": len(ig), "path": out_path, "error": None}
+
+    return {"ok": False, "browser": None, "count": 0, "path": out_path,
+            "error": ("No se encontró una sesión de Instagram en ningún navegador legible. "
+                      "Inicia sesión en instagram.com (Opera es el más compatible en este equipo) "
+                      f"y vuelve a sincronizar. Detalle: {last_err or 'sin navegadores compatibles'}")}
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +444,7 @@ def _try_audio(
     import av  # noqa: PLC0415 — validar disponibilidad antes de descargar
     from core.transcriber import Transcriber  # noqa: PLC0415
 
+
     ydl_opts: dict = {
         "format": "bestaudio/best",
         "quiet": True,
@@ -381,7 +477,9 @@ def _try_audio(
             opts["outtmpl"] = outtmpl
             opts.update(strat)
             try:
-                with ydl_mod.YoutubeDL(opts) as ydl:
+                # _clean_crypt32_argtypes evita el choque ctypes con core.secrets
+                # cuando la estrategia usa cookiesfrombrowser (sin efecto en las demás).
+                with _clean_crypt32_argtypes(), ydl_mod.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(url, download=True)
                 last_err = None
                 break
