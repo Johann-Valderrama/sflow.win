@@ -92,7 +92,11 @@ def _instagram_cookie_strategies() -> list[dict]:
     cf = _cookie_file_path()
     if cf:
         strategies.append({"cookiefile": cf})
-    for browser in ("chrome", "edge", "brave", "firefox", "vivaldi", "opera"):
+    # Opera primero: es el navegador que yt-dlp puede leer en este equipo (Chrome
+    # bloquea su base abierta; Edge/Brave usan cifrado ABE que no se descifra). El
+    # resto queda como fallback. El loop solo "gana" cuando la descarga tiene éxito,
+    # así que un navegador sin la sesión de Instagram simplemente cae al siguiente.
+    for browser in ("opera", "chrome", "edge", "brave", "firefox", "vivaldi"):
         strategies.append({"cookiesfrombrowser": (browser,)})
     return strategies
 
