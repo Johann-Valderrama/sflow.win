@@ -228,13 +228,34 @@ class Transcriber:
             es una alucinación.
         """
         backend_name = os.getenv("TRANSCRIPTION_BACKEND", "groq").strip().lower()
+
+        # El backend local solo traduce a inglés: con target != "en" degrada a
+        # transcripción sin traducir. Si el usuario activó GROQ_FALLBACK, esa
+        # degradación también cuenta como "el local no puede" → usar Groq
+        # directamente (el opt-in ya autoriza enviar el audio a internet).
+        if (
+            backend_name == "local"
+            and target_lang.strip().lower() != "en"
+            and self._should_use_groq_fallback(backend_name)
+        ):
+            logger.warning(
+                "Backend local no traduce a '%s'; usando Groq como respaldo (GROQ_FALLBACK=true).",
+                target_lang,
+            )
+            backend_name = "groq"
+
         # El backend local solo traduce a inglés con task=translate nativa;
         # no inyectar vocab en ese caso.
         include_vocab = (backend_name == "groq")
         effective_prompt = dictionary.compose_prompt(None, include_vocab=include_vocab)
 
+        # Usar el backend redirigido si aplica (get_backend es singleton por nombre)
+        active_backend = (
+            get_backend("groq") if backend_name == "groq" and os.getenv("TRANSCRIPTION_BACKEND", "groq").strip().lower() == "local"
+            else self._get_backend()
+        )
         try:
-            text = self._get_backend().translate(wav_buffer, target_lang=target_lang, prompt=effective_prompt)
+            text = active_backend.translate(wav_buffer, target_lang=target_lang, prompt=effective_prompt)
         except Exception as local_exc:
             if self._should_use_groq_fallback(backend_name):
                 logger.warning(
