@@ -26,6 +26,25 @@ class TranscriptionDB:
         )""",
         """CREATE INDEX IF NOT EXISTS idx_transcriptions_created_at
            ON transcriptions(created_at)""",
+        """CREATE TABLE IF NOT EXISTS dictionary (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            replace_from TEXT,
+            replace_to TEXT NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now')),
+            pinned INTEGER DEFAULT 0,
+            source TEXT DEFAULT 'manual',
+            hit_count INTEGER DEFAULT 0
+        )""",
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_dict_from
+           ON dictionary(replace_from) WHERE replace_from IS NOT NULL""",
+    ]
+
+    # Migraciones para columnas añadidas en versiones posteriores (ALTER TABLE idempotente)
+    _MIGRATIONS = [
+        "ALTER TABLE dictionary ADD COLUMN pinned INTEGER DEFAULT 0",
+        "ALTER TABLE dictionary ADD COLUMN source TEXT DEFAULT 'manual'",
+        "ALTER TABLE dictionary ADD COLUMN hit_count INTEGER DEFAULT 0",
     ]
 
     def _init_db(self):
@@ -36,6 +55,14 @@ class TranscriptionDB:
                 for ddl in self._DDL:
                     conn.execute(ddl)
                 conn.commit()
+                # Migraciones seguras: ignorar "duplicate column" si ya existen
+                for migration in self._MIGRATIONS:
+                    try:
+                        conn.execute(migration)
+                        conn.commit()
+                    except sqlite3.OperationalError as e:
+                        if "duplicate column" not in str(e).lower():
+                            raise
             finally:
                 conn.close()
         except sqlite3.DatabaseError as e:
@@ -130,6 +157,85 @@ class TranscriptionDB:
         """Actualiza el texto de una transcripción existente."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("UPDATE transcriptions SET text = ? WHERE id = ?", (new_text, transcription_id))
+            return cursor.rowcount
+
+    # ------------------------------------------------------------------
+    # Dictionary CRUD
+    # ------------------------------------------------------------------
+
+    def list_dictionary(self) -> list:
+        """Retorna todas las entradas del diccionario, ordenadas por pinned desc, hit_count desc, created_at desc."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM dictionary ORDER BY pinned DESC, hit_count DESC, created_at DESC"
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def add_dictionary_entry(self, replace_to: str, replace_from: str = None) -> int:
+        """Inserta o actualiza una entrada del diccionario (UPSERT por replace_from).
+
+        Si replace_from es None, inserta una nueva entrada de vocabulario.
+        Si replace_from ya existe, actualiza replace_to y enabled=1.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            if replace_from is not None:
+                # Intentar UPDATE primero; si no afecta filas, INSERT
+                cursor = conn.execute(
+                    "UPDATE dictionary SET replace_to=?, enabled=1 WHERE replace_from=?",
+                    (replace_to, replace_from),
+                )
+                if cursor.rowcount > 0:
+                    row = conn.execute(
+                        "SELECT id FROM dictionary WHERE replace_from=?", (replace_from,)
+                    ).fetchone()
+                    return row[0] if row else -1
+                cursor = conn.execute(
+                    "INSERT INTO dictionary (replace_from, replace_to, enabled) VALUES (?, ?, 1)",
+                    (replace_from, replace_to),
+                )
+                return cursor.lastrowid
+            else:
+                cursor = conn.execute(
+                    "INSERT INTO dictionary (replace_from, replace_to, enabled) VALUES (NULL, ?, 1)",
+                    (replace_to,),
+                )
+                return cursor.lastrowid
+
+    def delete_dictionary_entry(self, entry_id: int) -> int:
+        """Elimina una entrada del diccionario por ID. Retorna filas eliminadas."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM dictionary WHERE id = ?", (entry_id,))
+            return cursor.rowcount
+
+    def set_dictionary_pinned(self, entry_id: int, pinned: bool) -> int:
+        """Fija o desfija una entrada del diccionario. Retorna filas actualizadas."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "UPDATE dictionary SET pinned = ? WHERE id = ?",
+                (1 if pinned else 0, entry_id),
+            )
+            return cursor.rowcount
+
+    def increment_dictionary_hits(self, ids: list) -> int:
+        """Incrementa hit_count en 1 para cada id de la lista. Retorna filas actualizadas."""
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                f"UPDATE dictionary SET hit_count = hit_count + 1 WHERE id IN ({placeholders})",
+                ids,
+            )
+            return cursor.rowcount
+
+    def set_dictionary_enabled(self, entry_id: int, enabled: bool) -> int:
+        """Activa o desactiva una entrada del diccionario. Retorna filas actualizadas."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "UPDATE dictionary SET enabled = ? WHERE id = ?",
+                (1 if enabled else 0, entry_id),
+            )
             return cursor.rowcount
 
     def prune_older_than(self, days: int) -> int:

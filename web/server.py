@@ -9,6 +9,18 @@ from flask import Flask, jsonify, render_template_string, request, send_file
 from dotenv import set_key
 from db.database import TranscriptionDB
 from config import APP_DATA_DIR
+from core import dictionary as _dictionary
+
+# ---------------------------------------------------------------------------
+# Estado de descarga del modelo local (compartido entre endpoints)
+# ---------------------------------------------------------------------------
+_download_lock = threading.Lock()
+_download_state = {
+    "downloading": False,
+    "model": None,      # str — nombre del modelo que se está descargando/descargó
+    "progress": None,   # float 0.0–1.0 o None
+    "error": None,      # str o None
+}
 
 _ENV_PATH = os.path.join(APP_DATA_DIR, ".env")
 
@@ -81,7 +93,16 @@ HTML_TEMPLATE = """
         .selection-bar .cancel-btn { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.5); }
         .selection-bar .cancel-btn:hover { background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.8); }
         tr.selected-row { background: rgba(140,80,220,0.08); }
-        tr.row-hover { user-select: none; -webkit-user-select: none; }
+        tr.row-hover { user-select: text; }
+        tr.row-hover td:not(.text-cell) { user-select: none; -webkit-user-select: none; }
+        .dict-entry-dimmed { opacity: 0.4; }
+        .dict-pin-btn { background: none; border: none; cursor: pointer; padding: 2px 4px; border-radius: 4px; font-size: 14px; line-height: 1; color: rgba(255,255,255,0.25); transition: color 0.15s; }
+        .dict-pin-btn:hover { color: rgba(255,200,0,0.8); }
+        .dict-pin-btn.pinned { color: rgba(255,200,0,0.9); }
+        .dict-budget-bar { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.08); margin-top: 4px; }
+        .dict-budget-bar-fill { height: 100%; border-radius: 2px; background: rgba(140,80,220,0.6); transition: width 0.3s; }
+        .dict-add-from-history { position: fixed; background: #1a1a1a; border: 1px solid rgba(140,80,220,0.5); border-radius: 8px; padding: 6px 12px; font-size: 12px; color: #c4b5fd; cursor: pointer; z-index: 200; box-shadow: 0 4px 16px rgba(0,0,0,0.4); display: none; }
+        .dict-add-from-history:hover { background: rgba(140,80,220,0.2); }
     </style>
 </head>
 <body class="min-h-screen p-6">
@@ -112,6 +133,7 @@ HTML_TEMPLATE = """
                 </div>
                 <button onclick="loadData()" class="text-white/40 hover:text-white/70 text-sm">Actualizar</button>
                 <button onclick="toggleSettings()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Configuración">&#9881;</button>
+                <button onclick="toggleDictionary()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Diccionario">&#128218;</button>
             </div>
         </div>
 
@@ -189,10 +211,87 @@ HTML_TEMPLATE = """
                         <option value="90">90 días</option>
                     </select>
                 </div>
+                <div>
+                    <label class="text-xs text-white/40 block mb-1">Backend de transcripción</label>
+                    <select id="cfg-backend" class="cfg-select" onchange="onBackendChange()">
+                        <option value="groq">Groq API (nube)</option>
+                        <option value="local">Local sin internet</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-xs text-white/40 block mb-1">Modelo local</label>
+                    <select id="cfg-local-model" class="cfg-select">
+                        <option value="small">small — rápido (~466 MB)</option>
+                        <option value="medium">medium — más preciso (~1.5 GB)</option>
+                    </select>
+                </div>
+            </div>
+            <!-- Sección modelo local -->
+            <div id="local-model-section" class="mt-4 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs text-white/50" id="local-model-status-text">Verificando...</span>
+                    <button onclick="downloadModel()" id="btn-download-model"
+                        class="text-xs px-3 py-1 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 disabled:opacity-40 disabled:cursor-not-allowed">
+                        Descargar modelo
+                    </button>
+                </div>
+                <div id="local-download-progress-wrap" class="hidden">
+                    <div class="w-full bg-white/10 rounded-full h-1.5 mt-1">
+                        <div id="local-download-bar" class="bg-purple-500 h-1.5 rounded-full transition-all" style="width:0%"></div>
+                    </div>
+                    <span class="text-xs text-white/30 mt-1 block" id="local-download-pct">0%</span>
+                </div>
+                <p class="text-xs text-white/25 mt-2">El modo local solo traduce a inglés; para otros idiomas usa Groq.</p>
             </div>
             <div class="flex justify-end items-center mt-4 gap-3">
                 <span id="cfg-saved" class="text-xs text-green-400" style="opacity:0;transition:opacity 0.3s">Guardado ✓</span>
                 <button onclick="saveSettings()" class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50">Guardar</button>
+            </div>
+        </div>
+
+        <!-- Dictionary panel -->
+        <div id="dictionary-panel" class="glass rounded-xl p-5 mb-6 hidden">
+            <div class="flex items-center justify-between mb-1">
+                <div class="text-sm font-medium text-white/60">Diccionario personal</div>
+                <div class="flex items-center gap-2">
+                    <a href="/api/dictionary/export" class="text-xs px-2 py-1 rounded bg-white/5 text-white/40 hover:text-white/70 hover:bg-white/10" title="Exportar CSV">&#11015; CSV</a>
+                    <label class="text-xs px-2 py-1 rounded bg-white/5 text-white/40 hover:text-white/70 hover:bg-white/10 cursor-pointer" title="Importar CSV">&#11014; CSV
+                        <input type="file" accept=".csv,text/csv" class="hidden" onchange="importDictCSV(this)">
+                    </label>
+                </div>
+            </div>
+            <p class="text-xs text-white/30 mb-2">Las palabras se usan para que el modelo las reconozca; los pares corrigen la transcripción (ej. Johan → Johann).</p>
+            <!-- Budget bar -->
+            <div class="mb-3">
+                <div class="text-xs text-white/30" id="dict-budget-label">Vocabulario en prompt: — de —</div>
+                <div class="dict-budget-bar mt-1"><div class="dict-budget-bar-fill" id="dict-budget-fill" style="width:0%"></div></div>
+            </div>
+            <!-- Search -->
+            <input type="text" id="dict-search" placeholder="Buscar en el diccionario…"
+                class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80
+                placeholder-white/30 focus:outline-none focus:border-white/20 w-full mb-3"
+                oninput="filterDictList()">
+            <form onsubmit="addDictEntry(event)" class="flex flex-wrap gap-2 mb-4 items-end">
+                <div>
+                    <label class="text-xs text-white/40 block mb-1">Palabra / forma canónica <span class="text-red-400">*</span></label>
+                    <input type="text" id="dict-replace-to" placeholder="Johann"
+                        class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80
+                        placeholder-white/30 focus:outline-none focus:border-white/20 w-40" required>
+                </div>
+                <div>
+                    <label class="text-xs text-white/40 block mb-1">Cuando escuche… (opcional)</label>
+                    <input type="text" id="dict-replace-from" placeholder="Johan"
+                        class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80
+                        placeholder-white/30 focus:outline-none focus:border-white/20 w-40">
+                </div>
+                <button type="submit"
+                    class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50">
+                    Añadir
+                </button>
+            </form>
+            <div id="dict-import-result" class="text-xs mb-2 hidden"></div>
+            <div id="dict-list" class="space-y-1">
+                <div class="text-xs text-white/20">Cargando...</div>
             </div>
         </div>
 
@@ -222,6 +321,11 @@ HTML_TEMPLATE = """
             Vflow &middot; Ctrl+Shift para grabar &middot; Groq Whisper
         </div>
     </div>
+
+    <!-- Add to dictionary floating button (appears on text selection in transcription table) -->
+    <button class="dict-add-from-history" id="dict-from-history-btn" onclick="addSelectedTextToDict()">
+        📖 Añadir al diccionario
+    </button>
 
     <!-- Selection bar -->
     <div class="selection-bar" id="selection-bar">
@@ -288,7 +392,7 @@ HTML_TEMPLATE = """
                             ${checked} onclick="event.stopPropagation(); handleRowSelect(event, ${i})">
                     </td>
                     <td class="py-3 px-4 text-white/30 text-xs whitespace-nowrap align-top">${time}</td>
-                    <td class="py-3 px-4 text-white/80 text-sm align-top">${textCell}</td>
+                    <td class="py-3 px-4 text-white/80 text-sm align-top text-cell">${textCell}</td>
                     <td class="py-3 px-4 text-white/20 text-xs text-right align-top">${dur}</td>
                     <td class="py-3 px-4 text-center align-top whitespace-nowrap">
                         <button onclick="event.stopPropagation(); copyText(${i}, this)"
@@ -414,6 +518,9 @@ HTML_TEMPLATE = """
         function handleRowClick(e, index) {
             if (e.target.closest('button, textarea, .edit-area')) return;
             if (e.target.classList.contains('row-check')) return;
+            // Don't toggle expand if user made a text selection
+            const sel = window.getSelection();
+            if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) return;
             if (e.ctrlKey || e.shiftKey || e.metaKey) {
                 e.preventDefault();
                 handleRowSelect(e, index);
@@ -572,6 +679,11 @@ HTML_TEMPLATE = """
                 if (m.name === settings.device_name) opt.selected = true;
                 micSelect.appendChild(opt);
             });
+            // Backend local
+            document.getElementById('cfg-backend').value = settings.transcription_backend || 'groq';
+            document.getElementById('cfg-local-model').value = settings.local_whisper_model || 'small';
+            updateLocalModelSection();
+            refreshLocalModelStatus();
         }
 
         async function saveSettings() {
@@ -583,6 +695,8 @@ HTML_TEMPLATE = """
                 beep_volume: document.getElementById('cfg-beep-volume').value,
                 save_history: document.getElementById('cfg-save-history').checked ? 'true' : 'false',
                 retention_days: document.getElementById('cfg-retention-days').value,
+                transcription_backend: document.getElementById('cfg-backend').value,
+                local_whisper_model: document.getElementById('cfg-local-model').value,
             };
             await fetch('/api/settings', {
                 method: 'POST',
@@ -592,6 +706,332 @@ HTML_TEMPLATE = """
             const saved = document.getElementById('cfg-saved');
             saved.style.opacity = '1';
             setTimeout(() => { saved.style.opacity = '0'; }, 2000);
+        }
+
+        // --- Backend local ---
+        function onBackendChange() {
+            updateLocalModelSection();
+        }
+
+        function updateLocalModelSection() {
+            const backend = document.getElementById('cfg-backend').value;
+            const section = document.getElementById('local-model-section');
+            if (backend === 'local') {
+                section.classList.remove('hidden');
+                refreshLocalModelStatus();
+            } else {
+                section.classList.add('hidden');
+            }
+        }
+
+        let _statusPollInterval = null;
+
+        async function refreshLocalModelStatus() {
+            try {
+                const status = await fetch('/api/local-model/status').then(r => r.json());
+                const statusText = document.getElementById('local-model-status-text');
+                const btnDownload = document.getElementById('btn-download-model');
+                const progressWrap = document.getElementById('local-download-progress-wrap');
+                const progressBar = document.getElementById('local-download-bar');
+                const progressPct = document.getElementById('local-download-pct');
+
+                if (status.downloading) {
+                    statusText.textContent = 'Descargando modelo ' + status.model + '...';
+                    btnDownload.disabled = true;
+                    progressWrap.classList.remove('hidden');
+                    if (status.progress !== null) {
+                        const pct = Math.round(status.progress * 100);
+                        progressBar.style.width = pct + '%';
+                        progressPct.textContent = pct + '%';
+                    }
+                    if (!_statusPollInterval) {
+                        _statusPollInterval = setInterval(refreshLocalModelStatus, 1500);
+                    }
+                } else {
+                    if (_statusPollInterval) { clearInterval(_statusPollInterval); _statusPollInterval = null; }
+                    progressWrap.classList.add('hidden');
+                    btnDownload.disabled = false;
+                    if (status.error) {
+                        statusText.textContent = 'Error: ' + status.error;
+                    } else if (status.downloaded) {
+                        statusText.textContent = 'Modelo ' + status.model + ' descargado ✓';
+                        btnDownload.textContent = 'Re-descargar';
+                    } else {
+                        statusText.textContent = 'Modelo ' + status.model + ' no descargado';
+                        btnDownload.textContent = 'Descargar modelo';
+                    }
+                }
+            } catch(e) {
+                console.error('Error al consultar estado del modelo:', e);
+            }
+        }
+
+        // --- Dictionary panel ---
+        let _dictEntries = [];
+        let _dictBudget = {included: 0, total: 0, included_ids: []};
+
+        async function toggleDictionary() {
+            const panel = document.getElementById('dictionary-panel');
+            if (panel.classList.contains('hidden')) {
+                panel.classList.remove('hidden');
+                await loadDictionary();
+            } else {
+                panel.classList.add('hidden');
+            }
+        }
+
+        async function loadDictionary() {
+            const res = await fetch('/api/dictionary');
+            const data = await res.json();
+            _dictEntries = data.entries || [];
+            _dictBudget = data.budget || {included: 0, total: 0, included_ids: []};
+            renderDictBudget();
+            renderDictList(_dictEntries);
+        }
+
+        function renderDictBudget() {
+            const lbl = document.getElementById('dict-budget-label');
+            const fill = document.getElementById('dict-budget-fill');
+            if (!lbl || !fill) return;
+            const {included, total, used_chars, max_chars} = _dictBudget;
+            const pct = max_chars > 0 ? Math.round((used_chars || 0) / max_chars * 100) : 0;
+            if (included < total) {
+                lbl.textContent = `Vocabulario en prompt: ${included} de ${total} términos (espacio lleno)`;
+            } else {
+                lbl.textContent = `Vocabulario en prompt: ${included} término${included === 1 ? '' : 's'} — ${pct}% del espacio usado`;
+            }
+            fill.style.width = pct + '%';
+        }
+
+        function filterDictList() {
+            const q = (document.getElementById('dict-search').value || '').toLowerCase();
+            if (!q) { renderDictList(_dictEntries); return; }
+            renderDictList(_dictEntries.filter(e =>
+                (e.replace_from || '').toLowerCase().includes(q) ||
+                (e.replace_to || '').toLowerCase().includes(q)
+            ));
+        }
+
+        function renderDictList(entries) {
+            const container = document.getElementById('dict-list');
+            if (!entries.length) {
+                container.innerHTML = '<div class="text-xs text-white/20">No hay entradas aún. Añade palabras o pares de corrección.</div>';
+                return;
+            }
+            const includedSet = new Set(_dictBudget.included_ids || []);
+            container.innerHTML = entries.map(e => {
+                const label = e.replace_from
+                    ? `<span class="text-white/50">${escapeHtml(e.replace_from)}</span> <span class="text-white/25 mx-1">→</span> <span class="text-white/80">${escapeHtml(e.replace_to)}</span>`
+                    : `<span class="text-white/80">${escapeHtml(e.replace_to)}</span>`;
+                const checked = e.enabled ? 'checked' : '';
+                const pinned = e.pinned ? 'pinned' : '';
+                const pinTitle = e.pinned ? 'Desfijado del prompt' : 'Fijar en el prompt (prioridad)';
+                const pinIcon = e.pinned ? '★' : '☆';
+                const inBudget = includedSet.has(e.id);
+                const dimmed = !inBudget ? 'dict-entry-dimmed' : '';
+                const outOfPromptTitle = !inBudget ? ' title="Fuera del prompt por límite; el reemplazo sigue activo"' : '';
+                const hitBadge = (e.hit_count > 0)
+                    ? `<span class="text-white/20 text-xs ml-1" title="Correcciones aplicadas">×${e.hit_count}</span>`
+                    : '';
+                return `
+                <div class="flex items-center gap-3 py-1.5 border-b border-white/[0.04] ${dimmed}" data-dict-id="${e.id}"${outOfPromptTitle}>
+                    <button class="dict-pin-btn ${pinned}" title="${pinTitle}" onclick="pinDictEntry(${e.id}, ${e.pinned ? 0 : 1})">${pinIcon}</button>
+                    <label class="toggle-switch flex-shrink-0">
+                        <input type="checkbox" ${checked} onchange="toggleDictEntry(${e.id}, this.checked)">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span class="text-sm flex-1">${label}${hitBadge}</span>
+                    <button onclick="deleteDictEntry(${e.id})"
+                        class="text-white/20 hover:text-red-400 text-xs px-1.5 py-1 rounded hover:bg-red-500/10">&#10005;</button>
+                </div>`;
+            }).join('');
+        }
+
+        function _showDictError(msg) {
+            // Reutiliza el patrón de notificación del dashboard (cfg-saved) o alert como fallback
+            const saved = document.getElementById('cfg-saved');
+            if (saved) {
+                saved.textContent = '✗ ' + msg;
+                saved.style.color = '#f87171';
+                saved.style.opacity = '1';
+                setTimeout(() => {
+                    saved.style.opacity = '0';
+                    saved.style.color = '';
+                    saved.textContent = 'Guardado ✓';
+                }, 4000);
+            } else {
+                alert(msg);
+            }
+        }
+
+        async function addDictEntry(e) {
+            e.preventDefault();
+            const replaceTo = document.getElementById('dict-replace-to').value.trim();
+            const replaceFrom = document.getElementById('dict-replace-from').value.trim();
+            if (!replaceTo) return;
+            try {
+                const res = await fetch('/api/dictionary', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({replace_to: replaceTo, replace_from: replaceFrom || undefined}),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    _showDictError(err.error || ('Error ' + res.status));
+                    return;
+                }
+            } catch(ex) {
+                _showDictError('Error de red: ' + ex);
+                return;
+            }
+            document.getElementById('dict-replace-to').value = '';
+            document.getElementById('dict-replace-from').value = '';
+            await loadDictionary();
+        }
+
+        async function deleteDictEntry(id) {
+            if (!confirm('¿Eliminar esta entrada del diccionario?')) return;
+            try {
+                const res = await fetch('/api/dictionary/' + id, {method: 'DELETE'});
+                if (!res.ok && res.status !== 204) {
+                    const err = await res.json().catch(() => ({}));
+                    _showDictError(err.error || ('Error ' + res.status));
+                    return;
+                }
+            } catch(ex) {
+                _showDictError('Error de red: ' + ex);
+                return;
+            }
+            await loadDictionary();
+        }
+
+        async function toggleDictEntry(id, enabled) {
+            await fetch('/api/dictionary/' + id, {
+                method: 'PATCH',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({enabled: enabled}),
+            });
+            await loadDictionary();
+        }
+
+        async function pinDictEntry(id, pinned) {
+            await fetch('/api/dictionary/' + id, {
+                method: 'PATCH',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({pinned: !!pinned}),
+            });
+            await loadDictionary();
+        }
+
+        async function importDictCSV(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const fd = new FormData();
+            fd.append('file', file);
+            const resultEl = document.getElementById('dict-import-result');
+            resultEl.classList.remove('hidden');
+            resultEl.textContent = 'Importando…';
+            resultEl.style.color = 'rgba(255,255,255,0.4)';
+            try {
+                const res = await fetch('/api/dictionary/import', {method: 'POST', body: fd});
+                const data = await res.json();
+                if (res.ok) {
+                    resultEl.textContent = `Importadas: ${data.imported}, omitidas: ${data.skipped}`;
+                    resultEl.style.color = '#4ade80';
+                } else {
+                    resultEl.textContent = data.error || 'Error al importar';
+                    resultEl.style.color = '#f87171';
+                }
+            } catch(ex) {
+                resultEl.textContent = 'Error de red: ' + ex;
+                resultEl.style.color = '#f87171';
+            }
+            input.value = '';
+            setTimeout(() => resultEl.classList.add('hidden'), 5000);
+            await loadDictionary();
+        }
+
+        // --- Añadir al diccionario desde historial (selección de texto) ---
+        let _dictFromHistoryTimer = null;
+
+        document.addEventListener('mouseup', (e) => {
+            const tbody = document.getElementById('tbody');
+            if (!tbody) return;
+            const sel = window.getSelection();
+            if (!sel || sel.isCollapsed) {
+                hideDictFromHistoryBtn();
+                return;
+            }
+            const selectedText = sel.toString().trim();
+            if (!selectedText || selectedText.length > 100) {
+                hideDictFromHistoryBtn();
+                return;
+            }
+            // Solo si la selección está dentro de la tabla de transcripciones
+            if (!tbody.contains(sel.anchorNode) && !tbody.contains(sel.focusNode)) {
+                hideDictFromHistoryBtn();
+                return;
+            }
+            const btn = document.getElementById('dict-from-history-btn');
+            btn._selectedText = selectedText;
+            btn.style.left = (e.pageX + 8) + 'px';
+            btn.style.top = (e.pageY - 36) + 'px';
+            btn.style.display = 'block';
+        });
+
+        document.addEventListener('selectionchange', () => {
+            const sel = window.getSelection();
+            if (!sel || sel.isCollapsed) {
+                // Pequeño delay para no ocultar antes del click
+                if (_dictFromHistoryTimer) clearTimeout(_dictFromHistoryTimer);
+                _dictFromHistoryTimer = setTimeout(hideDictFromHistoryBtn, 300);
+            }
+        });
+
+        function hideDictFromHistoryBtn() {
+            const btn = document.getElementById('dict-from-history-btn');
+            if (btn) btn.style.display = 'none';
+        }
+
+        function addSelectedTextToDict() {
+            const btn = document.getElementById('dict-from-history-btn');
+            const text = (btn && btn._selectedText) || '';
+            hideDictFromHistoryBtn();
+            window.getSelection().removeAllRanges();
+            // Abrir panel diccionario si está cerrado
+            const panel = document.getElementById('dictionary-panel');
+            if (panel.classList.contains('hidden')) {
+                panel.classList.remove('hidden');
+                loadDictionary();
+            }
+            // Scroll al panel
+            panel.scrollIntoView({behavior: 'smooth', block: 'start'});
+            // Prefill "Cuando escuche..."
+            const fromInput = document.getElementById('dict-replace-from');
+            const toInput = document.getElementById('dict-replace-to');
+            if (fromInput) { fromInput.value = text; }
+            // Foco en "Palabra"
+            setTimeout(() => { if (toInput) toInput.focus(); }, 200);
+        }
+
+        async function downloadModel() {
+            const model = document.getElementById('cfg-local-model').value;
+            const btn = document.getElementById('btn-download-model');
+            btn.disabled = true;
+            try {
+                await fetch('/api/local-model/download', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({model: model}),
+                });
+                // Iniciar polling
+                if (_statusPollInterval) clearInterval(_statusPollInterval);
+                _statusPollInterval = setInterval(refreshLocalModelStatus, 1500);
+                refreshLocalModelStatus();
+            } catch(e) {
+                btn.disabled = false;
+                alert('Error al iniciar descarga: ' + e);
+            }
         }
     </script>
 </body>
@@ -714,7 +1154,7 @@ def _set_env_key(key: str, value: str):
 
 @app.route("/api/settings")
 def get_settings():
-    """Devuelve la configuración actual (idioma, micrófono, sonidos)."""
+    """Devuelve la configuración actual (idioma, micrófono, sonidos, backend)."""
     return jsonify({
         "language": os.getenv("WHISPER_LANGUAGE", "es"),
         "translate_target": os.getenv("TRANSLATE_TARGET_LANG", "en"),
@@ -723,6 +1163,8 @@ def get_settings():
         "beep_volume": int(os.getenv("BEEP_VOLUME_STEPS", "2")),
         "save_history": os.getenv("SAVE_HISTORY", "true").lower() == "true",
         "retention_days": int(os.getenv("HISTORY_RETENTION_DAYS", "0") or 0),
+        "transcription_backend": os.getenv("TRANSCRIPTION_BACKEND", "groq"),
+        "local_whisper_model": os.getenv("LOCAL_WHISPER_MODEL", "small"),
     })
 
 
@@ -740,10 +1182,17 @@ def update_settings():
         "beep_volume": "BEEP_VOLUME_STEPS",
         "save_history": "SAVE_HISTORY",
         "retention_days": "HISTORY_RETENTION_DAYS",
+        "transcription_backend": "TRANSCRIPTION_BACKEND",
+        "local_whisper_model": "LOCAL_WHISPER_MODEL",
     }
     for field, env_key in allowed.items():
         if field in data:
             _set_env_key(env_key, str(data[field]).strip())
+
+    # Si se activó el backend local y el modelo está descargado, disparar warmup
+    if data.get("transcription_backend") == "local":
+        _trigger_local_warmup_if_ready()
+
     return jsonify({"ok": True})
 
 
@@ -757,6 +1206,276 @@ def get_microphones():
         if dev["max_input_channels"] > 0 and dev["max_output_channels"] == 0
     ]
     return jsonify(mics)
+
+
+def _trigger_local_warmup_if_ready() -> None:
+    """Lanza warmup del backend local en un thread de fondo si el modelo está descargado.
+
+    Usa el singleton de ``get_backend('local')`` para precalentar la misma
+    instancia que usa ``Transcriber``, de modo que el warmup sea efectivo.
+    """
+    def _do_warmup():
+        try:
+            from core.backends import get_backend  # noqa: PLC0415
+            b = get_backend("local")
+            if b.is_ready():
+                b.warmup()
+        except Exception as exc:
+            import logging as _log
+            _log.getLogger(__name__).warning("Warmup del backend local fallido: %s", exc)
+
+    threading.Thread(target=_do_warmup, daemon=True).start()
+
+
+def _run_model_download(model_name: str) -> None:
+    """Descarga el modelo faster-whisper en un thread de fondo.
+
+    Actualiza ``_download_state`` con progreso (basado en heurística de tiempo
+    si huggingface_hub no reporta progreso granular) y estado final.
+    """
+    import logging as _log
+    _logger = _log.getLogger(__name__)
+
+    with _download_lock:
+        _download_state["downloading"] = True
+        _download_state["model"] = model_name
+        _download_state["progress"] = 0.0
+        _download_state["error"] = None
+
+    try:
+        from core.backends.local_backend import _get_models_dir  # noqa: PLC0415
+        from faster_whisper import WhisperModel                   # noqa: PLC0415
+
+        models_dir = _get_models_dir()
+        os.makedirs(models_dir, exist_ok=True)
+
+        _logger.info("Iniciando descarga del modelo '%s' en '%s'", model_name, models_dir)
+
+        # faster-whisper descarga automáticamente si el modelo no está en download_root.
+        # No expone progreso granular, así que usamos una heurística de tiempo.
+        # El progreso se simula de 0→0.9 durante la descarga.
+        _progress_stop = threading.Event()
+
+        def _fake_progress():
+            start = __import__("time").time()
+            # Tamaños aproximados: small~466MB, medium~1.5GB.  Asumimos ~5 MB/s.
+            sizes = {"small": 466, "medium": 1500}
+            mb = sizes.get(model_name, 500)
+            total_est = mb / 5.0  # segundos estimados
+            while not _progress_stop.is_set():
+                elapsed = __import__("time").time() - start
+                prog = min(0.9, elapsed / max(total_est, 1))
+                with _download_lock:
+                    _download_state["progress"] = prog
+                __import__("time").sleep(1)
+
+        prog_thread = threading.Thread(target=_fake_progress, daemon=True)
+        prog_thread.start()
+
+        try:
+            # Cargar el modelo fuerza la descarga si no existe
+            WhisperModel(
+                model_name,
+                device="cpu",
+                compute_type="int8",
+                download_root=models_dir,
+            )
+        finally:
+            _progress_stop.set()
+
+        with _download_lock:
+            _download_state["progress"] = 1.0
+            _download_state["downloading"] = False
+            _download_state["error"] = None
+        _logger.info("Descarga del modelo '%s' completada", model_name)
+
+    except Exception as exc:
+        _logger.error("Error durante descarga del modelo '%s': %s", model_name, exc)
+        with _download_lock:
+            _download_state["downloading"] = False
+            _download_state["progress"] = None
+            _download_state["error"] = str(exc)
+
+
+@app.route("/api/local-model/status")
+def local_model_status():
+    """Devuelve el estado del modelo local: descargado, descargando, progreso, error.
+
+    Si ``_download_state`` corresponde a un modelo distinto del configurado
+    actualmente (``LOCAL_WHISPER_MODEL``), no se exponen progress ni error de
+    esa descarga para evitar mostrar información obsoleta.
+    """
+    model_name = os.getenv("LOCAL_WHISPER_MODEL", "small")
+    try:
+        from core.backends.local_backend import _is_model_downloaded  # noqa: PLC0415
+        downloaded = _is_model_downloaded(model_name)
+    except Exception:
+        downloaded = False
+
+    with _download_lock:
+        state = dict(_download_state)
+
+    # Si el estado de descarga pertenece a otro modelo, ignorarlo.
+    state_for_current = state.get("model") == model_name or state.get("model") is None
+    if not state_for_current:
+        state = {"downloading": False, "model": model_name, "progress": None, "error": None}
+
+    return jsonify({
+        "model": model_name,
+        "downloaded": downloaded,
+        "downloading": state["downloading"] if state_for_current else False,
+        "progress": state["progress"] if state_for_current else None,
+        "error": state["error"] if state_for_current else None,
+    })
+
+
+@app.route("/api/local-model/download", methods=["POST"])
+def local_model_download():
+    """Inicia la descarga del modelo local en un thread de fondo."""
+    data = request.get_json() or {}
+    model_name = data.get("model", os.getenv("LOCAL_WHISPER_MODEL", "small")).strip().lower()
+    if model_name not in ("small", "medium"):
+        return jsonify({"error": "Modelo no soportado; usa 'small' o 'medium'"}), 400
+
+    with _download_lock:
+        if _download_state["downloading"]:
+            return jsonify({"ok": True, "message": "Descarga ya en curso"})
+
+    # Actualizar la env si cambió el modelo seleccionado
+    _set_env_key("LOCAL_WHISPER_MODEL", model_name)
+
+    thread = threading.Thread(target=_run_model_download, args=(model_name,), daemon=True)
+    thread.start()
+    return jsonify({"ok": True, "model": model_name})
+
+
+@app.route("/api/dictionary")
+def get_dictionary():
+    """Retorna todas las entradas del diccionario personal, incluyendo budget de vocabulario."""
+    entries = _db.list_dictionary()
+    budget = _dictionary.vocab_budget_info()
+    return jsonify({"entries": entries, "budget": budget})
+
+
+@app.route("/api/dictionary/export")
+def export_dictionary():
+    """Exporta el diccionario como CSV (replace_from,replace_to,pinned)."""
+    import io
+    import csv as _csv
+    entries = _db.list_dictionary()
+    output = io.StringIO()
+    writer = _csv.writer(output)
+    writer.writerow(["replace_from", "replace_to", "pinned"])
+    for e in entries:
+        writer.writerow([e.get("replace_from") or "", e.get("replace_to", ""), e.get("pinned", 0)])
+    csv_bytes = output.getvalue().encode("utf-8-sig")  # BOM para Excel
+    return app.response_class(
+        csv_bytes,
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=vflow-diccionario.csv"},
+    )
+
+
+@app.route("/api/dictionary/import", methods=["POST"])
+def import_dictionary():
+    """Importa entradas desde CSV (multipart file o body texto). Límite 1000 filas."""
+    import io
+    import csv as _csv
+
+    # Aceptar multipart (campo 'file') o body CSV crudo
+    if request.files and "file" in request.files:
+        f = request.files["file"]
+        content = f.read().decode("utf-8-sig", errors="replace")
+    else:
+        content = request.get_data(as_text=True)
+
+    if not content.strip():
+        return jsonify({"error": "empty body"}), 400
+
+    # Detectar separador (Excel en español exporta con ';')
+    header_line = content.lstrip().splitlines()[0]
+    delimiter = ";" if header_line.count(";") > header_line.count(",") else ","
+    reader = _csv.DictReader(io.StringIO(content), delimiter=delimiter)
+    if reader.fieldnames is None or "replace_to" not in reader.fieldnames:
+        return jsonify({"error": "CSV sin columna 'replace_to' (cabecera esperada: replace_from,replace_to,pinned)"}), 400
+    imported = 0
+    skipped = 0
+    row_count = 0
+    for row in reader:
+        if row_count >= 1000:
+            skipped += 1
+            continue
+        row_count += 1
+        replace_to = (row.get("replace_to") or "").strip()
+        replace_from = (row.get("replace_from") or "").strip() or None
+        pinned_val = (row.get("pinned") or "0").strip()
+        pinned = pinned_val in ("1", "true", "yes")
+        # Validar
+        if not replace_to or len(replace_to) > 100:
+            skipped += 1
+            continue
+        if replace_from is not None:
+            if len(replace_from) > 100 or replace_from.lower() == replace_to.lower():
+                skipped += 1
+                continue
+        try:
+            eid = _db.add_dictionary_entry(replace_to=replace_to, replace_from=replace_from)
+            if pinned:
+                _db.set_dictionary_pinned(eid, True)
+            imported += 1
+        except Exception:
+            skipped += 1
+    _dictionary.invalidate()
+    return jsonify({"imported": imported, "skipped": skipped})
+
+
+@app.route("/api/dictionary", methods=["POST"])
+def add_dictionary_entry():
+    """Añade o actualiza una entrada del diccionario (upsert por replace_from)."""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "replace_to is required"}), 400
+    replace_to = data.get("replace_to", "").strip()
+    if not replace_to:
+        return jsonify({"error": "replace_to is required"}), 400
+    if len(replace_to) > 100:
+        return jsonify({"error": "replace_to must be 100 characters or fewer"}), 400
+    replace_from = data.get("replace_from", "").strip() or None
+    if replace_from is not None:
+        if len(replace_from) > 100:
+            return jsonify({"error": "replace_from must be 100 characters or fewer"}), 400
+        if replace_from.lower() == replace_to.lower():
+            return jsonify({"error": "replace_from and replace_to must differ"}), 400
+    entry_id = _db.add_dictionary_entry(replace_to=replace_to, replace_from=replace_from)
+    _dictionary.invalidate()
+    return jsonify({"id": entry_id}), 201
+
+
+@app.route("/api/dictionary/<int:eid>", methods=["DELETE"])
+def delete_dictionary_entry(eid):
+    """Elimina una entrada del diccionario por ID."""
+    deleted = _db.delete_dictionary_entry(eid)
+    if deleted == 0:
+        return jsonify({"error": "not found"}), 404
+    _dictionary.invalidate()
+    return "", 204
+
+
+@app.route("/api/dictionary/<int:eid>", methods=["PATCH"])
+def patch_dictionary_entry(eid):
+    """Activa/desactiva o fija/desfija una entrada del diccionario."""
+    data = request.get_json()
+    if data is None or ("enabled" not in data and "pinned" not in data):
+        return jsonify({"error": "enabled or pinned field required"}), 400
+    updated = 0
+    if "enabled" in data:
+        updated = _db.set_dictionary_enabled(eid, bool(data["enabled"]))
+    if "pinned" in data:
+        updated = _db.set_dictionary_pinned(eid, bool(data["pinned"]))
+    if updated == 0:
+        return jsonify({"error": "not found"}), 404
+    _dictionary.invalidate()
+    return jsonify({"ok": True})
 
 
 def _find_free_port(start: int = 5678, attempts: int = 50) -> int:

@@ -4,6 +4,20 @@
 
 Vflow is a Windows voice-to-text desktop tool that replaces Wispr Flow ($15/month). It captures audio via global hotkeys, transcribes using Groq Whisper API (~$0.02/hour), and auto-pastes text wherever the cursor is. It includes a floating pill UI overlay, real-time audio visualization, SQLite history, and a web dashboard.
 
+## Diccionario personal
+
+El diccionario personal permite (a) añadir vocabulario propio para que Whisper lo reconozca correctamente (se inyecta al final del prompt de contexto, hasta ~480 caracteres) y (b) corregir transcripciones en tiempo real mediante pares "escucho X → escribo Y" con regex whole-word case-aware aplicado tras la transcripción. Se gestiona desde la tabla `dictionary` en la misma SQLite (independiente de `SAVE_HISTORY`), con UI en el panel "Diccionario" del dashboard y API REST en `/api/dictionary`. La lógica reside en `core/dictionary.py` (caché en memoria con swap atómico + invalidación perezosa cada 5 min); `core/transcriber.py` la invoca en el orden: backend → filtro de alucinaciones → `apply_replacements`.
+
+### Diccionario v1.1 — Funcionalidades nuevas
+
+- **Pin (★)**: cada entrada puede fijarse como prioritaria. Las entradas pinned aparecen primero en el orden de inclusión del vocabulario del prompt (pinned > hit_count > fecha). Toggle desde el botón ★ en cada fila del panel.
+- **Presupuesto de vocabulario**: el panel muestra el % del espacio de prompt usado (y "X de Y términos (espacio lleno)" cuando ya no caben todos) con barra de progreso. Las entradas fuera del presupuesto (~480 chars) aparecen con opacidad reducida con tooltip explicativo; el reemplazo sigue activo aunque no quepan en el prompt.
+- **hit_count**: cada vez que un par de reemplazo corrige texto, su contador se incrementa en background (thread daemon, fire-and-forget). Se muestra discretamente como "×N" en la fila. Afecta el orden de vocab en la próxima recompilación.
+- **Export/Import CSV**: botones en la cabecera del panel. Export → `GET /api/dictionary/export` (CSV con replace_from, replace_to, pinned). Import → `POST /api/dictionary/import` (multipart o body raw; límite 1000 filas; filas inválidas son skipped).
+- **Añadir desde historial**: seleccionar texto en cualquier transcripción de la tabla activa un botón flotante "📖 Añadir al diccionario" que abre el panel Diccionario con el texto seleccionado prellenado en "Cuando escuche…" y el foco en el campo "Palabra".
+- **Columnas DB nuevas**: `pinned INTEGER DEFAULT 0`, `source TEXT DEFAULT 'manual'`, `hit_count INTEGER DEFAULT 0`. Migración automática idempotente via `ALTER TABLE ... ADD COLUMN` (captura "duplicate column").
+- **API**: `GET /api/dictionary` devuelve `{entries: [...], budget: {included, total, included_ids}}`; `PATCH /api/dictionary/<id>` acepta `{pinned}` además de `{enabled}`; nuevos endpoints `/api/dictionary/export` y `/api/dictionary/import`.
+
 ## Quick Start (Dev Mode)
 
 ```bash
@@ -56,7 +70,12 @@ vflow/
 │   └── audio_visualizer.py # Real-time audio bars
 ├── core/
 │   ├── recorder.py         # sounddevice audio capture
-│   ├── transcriber.py      # Groq Whisper API client (lazy init, 10s timeout)
+│   ├── transcriber.py      # Orquestador: delega al backend activo + filtro de alucinaciones
+│   ├── backends/
+│   │   ├── base.py         # ABC TranscriptionBackend (transcribe, translate, is_ready, warmup, release)
+│   │   ├── groq_backend.py # Backend Groq Whisper API (requiere internet + GROQ_API_KEY)
+│   │   ├── local_backend.py# Backend faster-whisper local (sin internet; solo traduce →en)
+│   │   └── __init__.py     # Factory get_backend(); lee TRANSCRIPTION_BACKEND env
 │   ├── hotkey.py           # Global hotkeys (4 modes: Ctrl+Alt, triple-tap Shift, Ctrl+Shift+Alt, AltGr+Space)
 │   └── clipboard.py        # Focus save/restore + Ctrl+V paste via Win32 API (GlobalAlloc/SetClipboardData/ctypes)
 ├── db/
@@ -181,6 +200,15 @@ Edit `config.py`:
 - `SOUNDS_ENABLED` (default: `true`) — Enable/disable audio feedback beeps
 - `BEEP_VOLUME_STEPS` (default: `2`) — Beep volume (1–10)
 - `RESTORE_CLIPBOARD` (default: `false`) — Restore clipboard content after paste
+- `TRANSCRIPTION_BACKEND` (default: `groq`) — Backend activo: `"groq"` (API Groq) o `"local"` (faster-whisper sin internet)
+- `LOCAL_WHISPER_MODEL` (default: `small`) — Modelo local: `"small"` (~466 MB, rápido) o `"medium"` (~1.5 GB, más preciso)
+- `LOCAL_MODEL_IDLE_MINUTES` (default: `10`) — Minutos de inactividad antes de liberar el modelo de RAM; `0` = nunca liberar
+
+### Backend Local (faster-whisper)
+- Los modelos se descargan desde Hugging Face en `%APPDATA%\Vflow\models\` (bundle) o `<proyecto>/models/` (dev).
+- **Limitación de traducción**: el backend local solo traduce a inglés (task="translate" nativa de Whisper). Para traducir a otros idiomas, usa el backend Groq.
+- **Sin fallback a internet**: si el modelo no está descargado y se intenta transcribir, la app muestra un mensaje accionable ("ábrelo desde el dashboard") en lugar de llamar a Groq.
+- **Descarga desde el dashboard**: panel Configuración → "Backend de transcripción" → "Local sin internet" → botón "Descargar modelo" con barra de progreso.
 
 ## Troubleshooting
 
@@ -201,3 +229,6 @@ Edit `config.py`:
 | Accidental recording with IDE shortcuts | Increase `ARMING_DELAY` in `config.py` (default 0.15s) to require longer hold before recording starts in Ctrl+Alt/Ctrl+Shift+Alt modes |
 | Microphone disconnected mid-recording | App detects silence within ~2s, stops recording, shows error state on pill, and displays tray notification. Audio watchdog prevents hanging. |
 | Pill appears on wrong monitor | Pill auto-detects current monitor based on cursor position. If dragged between monitors and one disconnects, pill repositions to nearest active monitor. Check monitor layout in Windows Display Settings. |
+| "Modelo local no descargado" en la notificación | El backend está en "local" pero el modelo no se ha descargado. Abre el dashboard → Configuración → activa "Local sin internet" → pulsa "Descargar modelo". |
+| El modelo local traduce a un idioma distinto del inglés | El backend local solo soporta traducción a inglés. Para otros idiomas de destino, cambia el backend a Groq en el dashboard. |
+| La primera transcripción con backend local es lenta | CTranslate2 hace lazy-alloc en la primera inferencia. El warmup automático (al activar el backend) mitiga esto; si no se lanzó, espera unos segundos en la primera transcripción. |
