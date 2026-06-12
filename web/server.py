@@ -170,6 +170,7 @@ HTML_TEMPLATE = """
                         <span class="text-white/30 text-xs ml-1">— mantener</span>
                     </div>
                     <p class="text-xs text-white/70 font-medium">Traducir (mantenido)</p>
+                    <p class="text-xs text-white/25 mt-0.5">(con backend local: solo →inglés)</p>
                     <p class="text-xs text-white/35 mt-0.5">Presiona Shift antes de Alt, mantén la combinación un instante para grabar; suelta para pegar la traducción al idioma destino.</p>
                 </div>
                 <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
@@ -180,6 +181,7 @@ HTML_TEMPLATE = """
                     </div>
                     <p class="text-xs text-white/70 font-medium">Traducir — manos libres (toggle)</p>
                     <p class="text-xs text-white/35 mt-0.5">Primera pulsación inicia la grabación; segunda pulsación la detiene y pega la traducción.</p>
+                    <p class="text-xs text-white/25 mt-0.5">(con backend local: solo →inglés)</p>
                 </div>
             </div>
             <p class="text-xs text-white/25 mt-4">El idioma de transcripción y el idioma de destino (traducción) se configuran en el panel de Configuración.</p>
@@ -211,7 +213,7 @@ HTML_TEMPLATE = """
                 </div>
                 <div>
                     <label class="text-xs text-white/40 block mb-1">Idioma de salida (traducción)</label>
-                    <select id="cfg-translate-target" class="cfg-select">
+                    <select id="cfg-translate-target" class="cfg-select" onchange="updateLocalTranslationNote()">
                         <option value="en">English</option>
                         <option value="es">Español</option>
                         <option value="fr">Français</option>
@@ -289,11 +291,15 @@ HTML_TEMPLATE = """
                     </div>
                     <span class="text-xs text-white/30 mt-1 block" id="local-download-pct">0%</span>
                 </div>
-                <p class="text-xs text-white/25 mt-2">El modo local solo traduce a inglés; para otros idiomas usa Groq.</p>
+                <!-- Aviso limitación de traducción (dinámico) -->
+                <div id="local-translation-note" class="mt-2 rounded-lg px-3 py-2 text-xs flex items-start gap-2 hidden">
+                    <span class="flex-shrink-0 mt-px">ℹ️</span>
+                    <span id="local-translation-note-text"></span>
+                </div>
                 <!-- Groq Fallback (solo visible cuando backend=local) -->
                 <div class="flex items-start gap-2 mt-3 pt-3 border-t border-white/[0.06]">
                     <label class="toggle-switch mt-0.5">
-                        <input type="checkbox" id="cfg-groq-fallback">
+                        <input type="checkbox" id="cfg-groq-fallback" onchange="updateLocalTranslationNote()">
                         <span class="toggle-slider"></span>
                     </label>
                     <div>
@@ -744,6 +750,7 @@ HTML_TEMPLATE = """
             document.getElementById('cfg-groq-fallback').checked = settings.groq_fallback === true;
             updateLocalModelSection();
             refreshLocalModelStatus();
+            updateLocalTranslationNote();
         }
 
         async function saveSettings() {
@@ -782,6 +789,35 @@ HTML_TEMPLATE = """
                 refreshLocalModelStatus();
             } else {
                 section.classList.add('hidden');
+            }
+            updateLocalTranslationNote();
+        }
+
+        // Idiomas legibles para el aviso
+        const _langNames = {en:'inglés',es:'español',fr:'francés',de:'alemán',it:'italiano',pt:'portugués',nl:'neerlandés',ru:'ruso',zh:'chino',ja:'japonés',ko:'coreano',ar:'árabe'};
+        function _langLabel(code) { return _langNames[code] || code; }
+
+        function updateLocalTranslationNote() {
+            const note = document.getElementById('local-translation-note');
+            const noteText = document.getElementById('local-translation-note-text');
+            if (!note) return;
+            const backend = document.getElementById('cfg-backend').value;
+            if (backend !== 'local') { note.classList.add('hidden'); return; }
+            const target = (document.getElementById('cfg-translate-target').value || 'en').toLowerCase();
+            const fallback = document.getElementById('cfg-groq-fallback').checked;
+            note.classList.remove('hidden');
+            if (target === 'en') {
+                // Informativo discreto: azul tenue
+                note.className = 'mt-2 rounded-lg px-3 py-2 text-xs flex items-start gap-2 bg-blue-900/20 border border-blue-500/20 text-blue-300/70';
+                noteText.textContent = 'El modo local solo traduce a inglés. Para traducir a otros idiomas, activa “Permitir Groq como respaldo” o cambia al backend Groq.';
+            } else if (fallback) {
+                // Amber suave — se usará Groq
+                note.className = 'mt-2 rounded-lg px-3 py-2 text-xs flex items-start gap-2 bg-amber-900/30 border border-amber-500/30 text-amber-300/90';
+                noteText.textContent = 'Traducción a ' + _langLabel(target) + ': se usará Groq cuando el local falle (el audio saldrá a internet).';
+            } else {
+                // Amber más visible — advertencia real
+                note.className = 'mt-2 rounded-lg px-3 py-2 text-xs flex items-start gap-2 bg-amber-900/40 border border-amber-500/50 text-amber-200';
+                noteText.textContent = 'Atención: la traducción a ' + _langLabel(target) + ' devolverá el texto sin traducir con el backend local. Activa el respaldo Groq o usa el backend Groq.';
             }
         }
 
