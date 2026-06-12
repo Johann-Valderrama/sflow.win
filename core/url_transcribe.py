@@ -64,12 +64,17 @@ def detect_platform(url: str) -> Optional[str]:
 # Cookies para Instagram (experimental)
 # ---------------------------------------------------------------------------
 
-def _cookie_file_path() -> Optional[str]:
-    """Ruta de un cookies.txt provisto por el usuario en APP_DATA_DIR, si existe.
+def _encrypted_cookie_path() -> str:
+    """Ruta del archivo de cookies de Instagram cifrado con DPAPI."""
+    try:
+        from config import APP_DATA_DIR  # noqa: PLC0415
+    except Exception:
+        APP_DATA_DIR = os.getcwd()
+    return os.path.join(APP_DATA_DIR, "instagram_cookies.dat")
 
-    Es la vía más robusta para Instagram: no depende de que el navegador esté
-    cerrado ni del cifrado de la base de cookies de Chrome.
-    """
+
+def _plain_cookie_path() -> Optional[str]:
+    """cookies.txt en texto plano que el usuario haya colocado manualmente (opcional)."""
     try:
         from config import APP_DATA_DIR  # noqa: PLC0415
     except Exception:
@@ -81,25 +86,42 @@ def _cookie_file_path() -> Optional[str]:
     return None
 
 
-def _instagram_cookie_strategies() -> list[dict]:
-    """Estrategias de cookies para Instagram, en orden de preferencia.
+def _resolve_cookiefile(tmpdir: str) -> Optional[str]:
+    """Devuelve una ruta a un cookies.txt Netscape utilizable por yt-dlp.
 
-    1. Archivo cookies.txt del usuario (sin bloqueos ni cifrado).
-    2. Cookies extraídas de cada navegador instalado; la extracción falla si el
-       navegador tiene la base bloqueada (abierto) o cifrada, por eso se prueban
-       varios hasta que uno funcione.
+    Prioriza el archivo cifrado con DPAPI (`instagram_cookies.dat`): lo descifra a
+    un temporal DENTRO de *tmpdir* (que el caller borra al terminar la descarga),
+    de modo que el texto plano nunca queda en reposo en disco. Si no existe, usa un
+    cookies.txt plano que el usuario haya colocado a propósito. None si no hay nada.
     """
-    strategies: list[dict] = []
-    cf = _cookie_file_path()
-    if cf:
-        strategies.append({"cookiefile": cf})
-    # Opera primero: es el navegador que yt-dlp puede leer en este equipo (Chrome
-    # bloquea su base abierta; Edge/Brave usan cifrado ABE que no se descifra). El
-    # resto queda como fallback. El loop solo "gana" cuando la descarga tiene éxito,
-    # así que un navegador sin la sesión de Instagram simplemente cae al siguiente.
-    for browser in ("opera", "chrome", "edge", "brave", "firefox", "vivaldi"):
-        strategies.append({"cookiesfrombrowser": (browser,)})
-    return strategies
+    enc = _encrypted_cookie_path()
+    if os.path.isfile(enc):
+        try:
+            from core.secrets import decrypt  # noqa: PLC0415
+            with open(enc, "r", encoding="ascii") as f:
+                blob = f.read()
+            text = decrypt(blob)
+            if text:
+                out = os.path.join(tmpdir, "_ig_cookies.txt")
+                with open(out, "w", encoding="utf-8") as f:
+                    f.write(text)
+                return out
+            logger.warning("instagram_cookies.dat no se pudo descifrar (otro usuario/máquina o corrupto)")
+        except Exception as exc:
+            logger.warning("Error descifrando instagram_cookies.dat: %s", exc)
+    return _plain_cookie_path()
+
+
+def _instagram_cookie_strategies() -> list[dict]:
+    """Estrategias de cookies de navegador para Instagram (Opera primero).
+
+    Opera es el navegador que yt-dlp puede leer en este equipo (Chrome bloquea su
+    base abierta; Edge/Brave usan cifrado ABE). El resto queda como fallback. El
+    loop solo "gana" cuando la descarga tiene éxito, así que un navegador sin la
+    sesión de Instagram simplemente cae al siguiente.
+    """
+    return [{"cookiesfrombrowser": (b,)}
+            for b in ("opera", "chrome", "edge", "brave", "firefox", "vivaldi")]
 
 
 class _SilentLogger:
@@ -144,21 +166,19 @@ def _clean_crypt32_argtypes():
 
 
 def sync_instagram_cookies(browser: Optional[str] = None) -> dict:
-    """Extrae las cookies de Instagram de un navegador y las guarda en cookies.txt.
+    """Extrae las cookies de Instagram de un navegador y las guarda CIFRADAS (DPAPI).
 
     Vuelca solo las cookies de dominios de Instagram (no todo el navegador, por
-    privacidad) a un archivo Netscape que la descarga usa directamente. La
-    extracción se hace bajo `_clean_crypt32_argtypes()` para evitar el choque de
-    ctypes con core.secrets. Devuelve {ok, browser, count, path, error}.
+    privacidad), las serializa a Netscape y las cifra con DPAPI (mismo mecanismo
+    que la API key en core.secrets) en `instagram_cookies.dat` — nunca queda texto
+    plano en reposo. La extracción se hace bajo `_clean_crypt32_argtypes()` para
+    evitar el choque de ctypes con core.secrets; el cifrado, fuera de él.
+    Devuelve {ok, browser, count, path, error}.
     """
     from yt_dlp.cookies import extract_cookies_from_browser, YoutubeDLCookieJar  # noqa: PLC0415
-    try:
-        from config import APP_DATA_DIR  # noqa: PLC0415
-    except Exception:
-        APP_DATA_DIR = os.getcwd()
 
     candidates = [browser] if browser else ["opera", "chrome", "edge", "brave", "vivaldi", "firefox"]
-    out_path = os.path.join(APP_DATA_DIR, "instagram_cookies.txt")
+    out_path = _encrypted_cookie_path()
     last_err: Optional[str] = None
 
     for b in candidates:
@@ -178,10 +198,26 @@ def sync_instagram_cookies(browser: Optional[str] = None) -> dict:
         for c in ig:
             out.set_cookie(c)
         try:
-            out.save(out_path, ignore_discard=True, ignore_expires=True)
+            # Serializar a Netscape en un temporal efímero, leerlo y cifrar con
+            # DPAPI; el texto plano nunca toca disco en reposo.
+            with tempfile.TemporaryDirectory() as _td:
+                _plain = os.path.join(_td, "c.txt")
+                out.save(_plain, ignore_discard=True, ignore_expires=True)
+                with open(_plain, "r", encoding="utf-8") as f:
+                    netscape_text = f.read()
+            from core.secrets import encrypt  # noqa: PLC0415
+            with open(out_path, "w", encoding="ascii") as f:
+                f.write(encrypt(netscape_text))
+            # Limpiar un cookies.txt plano antiguo si existía (ya no se usa)
+            _stale = _plain_cookie_path()
+            if _stale and os.path.basename(_stale) == "instagram_cookies.txt":
+                try:
+                    os.remove(_stale)
+                except OSError:
+                    pass
         except Exception as exc:
             return {"ok": False, "browser": b, "count": 0, "path": out_path,
-                    "error": f"No se pudo guardar el archivo de cookies: {exc}"}
+                    "error": f"No se pudo cifrar/guardar el archivo de cookies: {exc}"}
         has_session = any(c.name == "sessionid" for c in ig)
         if not has_session:
             return {"ok": False, "browser": b, "count": len(ig), "path": out_path,
@@ -457,17 +493,22 @@ def _try_audio(
     if on_progress:
         on_progress("descargando audio")
 
-    # Estrategias de cookies: solo Instagram las necesita. Se prueba un archivo
-    # cookies.txt provisto por el usuario (lo más robusto) y luego cada navegador
-    # instalado, porque la extracción falla si el navegador tiene la base de
-    # cookies bloqueada (Chrome abierto) o cifrada.
-    if platform == "instagram" and allow_instagram:
-        cookie_strategies = _instagram_cookie_strategies()
-    else:
-        cookie_strategies = [{}]
-
     with tempfile.TemporaryDirectory() as tmpdir:
         outtmpl = os.path.join(tmpdir, "%(id)s.%(ext)s")
+
+        # Estrategias de cookies: solo Instagram las necesita. Se prueba primero el
+        # archivo cifrado (descifrado a un temporal dentro de tmpdir) y luego cada
+        # navegador instalado como fallback (la extracción en vivo falla si la base
+        # está bloqueada o cifrada, por eso se prueban varios).
+        if platform == "instagram" and allow_instagram:
+            cookie_strategies = []
+            cf = _resolve_cookiefile(tmpdir)
+            if cf:
+                cookie_strategies.append({"cookiefile": cf})
+            cookie_strategies += _instagram_cookie_strategies()
+        else:
+            cookie_strategies = [{}]
+
         info = None
         last_err: Optional[Exception] = None
         cookie_problem = False
@@ -498,17 +539,13 @@ def _try_audio(
 
         if info is None:
             if cookie_problem or platform == "instagram":
-                try:
-                    from config import APP_DATA_DIR  # noqa: PLC0415
-                    cookies_hint = os.path.join(APP_DATA_DIR, "instagram_cookies.txt")
-                except Exception:
-                    cookies_hint = "instagram_cookies.txt"
                 return {
                     "ok": False,
                     "error": (
-                        "Instagram necesita tu sesión y no se pudieron leer las cookies del navegador "
-                        "(suele pasar con Chrome abierto o cifrado). Opciones: cierra el navegador por "
-                        f"completo e intenta de nuevo, o exporta tus cookies a un archivo y guárdalo como: {cookies_hint}"
+                        "Instagram necesita tu sesión y no se pudieron leer las cookies del navegador. "
+                        "Inicia sesión en instagram.com en Opera (el más compatible en este equipo) y "
+                        "vuelve a intentar, o sincroniza las cookies desde el dashboard para guardarlas "
+                        "cifradas."
                     ),
                     "error_kind": "needs_auth",
                     "title": None,

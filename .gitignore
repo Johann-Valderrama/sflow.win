@@ -19,7 +19,9 @@ logo-*-clean.png
 *.ico
 *.spec.bak
 models/
-# Cookies de Instagram (contienen sesion privada — NUNCA commitear)
+# Cookies de Instagram (sesion privada — NUNCA commitear; el .dat va cifrado con DPAPI)
 instagram_cookies.txt
+instagram_cookies.dat
 cookies.txt
 *_cookies.txt
+*_cookies.dat
