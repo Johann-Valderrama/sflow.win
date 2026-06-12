@@ -164,6 +164,9 @@ If the microphone is disconnected during recording (e.g., Bluetooth headphones u
 ### 9. Port Selection (web/server.py)
 Default port is 5678. Auto-scans for free port if occupied.
 
+### 10. Dashboard Panels (web/server.py)
+The header contains three icon-button panels: **Configuración** (⚙), **Diccionario** (📖), and **Atajos de teclado** (⌨, `id="shortcuts-panel"`). The shortcuts panel is static HTML — no API endpoint required — and renders all four hotkey modes as `<kbd>`-styled cards.
+
 ## Security & Privacy
 
 ### 1. API Key Encryption (DPAPI)

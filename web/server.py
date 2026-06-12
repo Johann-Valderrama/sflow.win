@@ -134,7 +134,55 @@ HTML_TEMPLATE = """
                 <button onclick="loadData()" class="text-white/40 hover:text-white/70 text-sm">Actualizar</button>
                 <button onclick="toggleSettings()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Configuración">&#9881;</button>
                 <button onclick="toggleDictionary()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Diccionario">&#128218;</button>
+                <button onclick="toggleShortcuts()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Atajos de teclado">&#9000;</button>
             </div>
+        </div>
+
+        <!-- Shortcuts panel -->
+        <div id="shortcuts-panel" class="glass rounded-xl p-5 mb-6 hidden">
+            <div class="text-sm font-medium text-white/60 mb-4">Atajos de teclado</div>
+            <div class="grid gap-3" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr))">
+                <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                    <div class="flex items-center gap-2 mb-1.5">
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">Ctrl</kbd>
+                        <span class="text-white/30 text-xs">+</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">Alt</kbd>
+                        <span class="text-white/30 text-xs ml-1">— mantener</span>
+                    </div>
+                    <p class="text-xs text-white/70 font-medium">Transcribir (mantenido)</p>
+                    <p class="text-xs text-white/35 mt-0.5">Mantén la combinación un instante para que empiece a grabar; suelta para pegar el texto transcrito.</p>
+                </div>
+                <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                    <div class="flex items-center gap-2 mb-1.5">
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">Shift</kbd>
+                        <span class="text-white/30 text-xs">×3 rápido</span>
+                    </div>
+                    <p class="text-xs text-white/70 font-medium">Transcribir — manos libres</p>
+                    <p class="text-xs text-white/35 mt-0.5">Pulsa Shift tres veces en ~400&nbsp;ms para iniciar. Pulsa Shift una vez más para parar y pegar.</p>
+                </div>
+                <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                    <div class="flex items-center gap-2 mb-1.5">
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">Ctrl</kbd>
+                        <span class="text-white/30 text-xs">+</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">Shift</kbd>
+                        <span class="text-white/30 text-xs">+</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">Alt</kbd>
+                        <span class="text-white/30 text-xs ml-1">— mantener</span>
+                    </div>
+                    <p class="text-xs text-white/70 font-medium">Traducir (mantenido)</p>
+                    <p class="text-xs text-white/35 mt-0.5">Presiona Shift antes de Alt, mantén la combinación un instante para grabar; suelta para pegar la traducción al idioma destino.</p>
+                </div>
+                <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                    <div class="flex items-center gap-2 mb-1.5">
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">AltGr</kbd>
+                        <span class="text-white/30 text-xs">+</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">Space</kbd>
+                    </div>
+                    <p class="text-xs text-white/70 font-medium">Traducir — manos libres (toggle)</p>
+                    <p class="text-xs text-white/35 mt-0.5">Primera pulsación inicia la grabación; segunda pulsación la detiene y pega la traducción.</p>
+                </div>
+            </div>
+            <p class="text-xs text-white/25 mt-4">El idioma de transcripción y el idioma de destino (traducción) se configuran en el panel de Configuración.</p>
         </div>
 
         <!-- Settings panel -->
@@ -791,6 +839,11 @@ HTML_TEMPLATE = """
             } else {
                 panel.classList.add('hidden');
             }
+        }
+
+        function toggleShortcuts() {
+            const panel = document.getElementById('shortcuts-panel');
+            panel.classList.toggle('hidden');
         }
 
         async function loadDictionary() {
