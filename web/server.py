@@ -313,14 +313,19 @@ HTML_TEMPLATE = """
                 placeholder-white/30 focus:outline-none focus:border-white/20 w-full resize-y mb-2"></textarea>
 
             <!-- Opciones -->
-            <div class="flex items-center gap-4 mb-3 flex-wrap">
+            <div class="flex items-center gap-4 mb-2 flex-wrap">
                 <label class="flex items-center gap-2 text-xs text-white/40 cursor-pointer select-none">
                     <input type="checkbox" id="uq-instagram" class="accent-purple-500">
-                    Instagram (experimental, requiere cookies del navegador)
+                    Instagram (experimental, requiere sesión en el navegador)
                 </label>
-                <p class="text-xs text-white/20 flex-1">La cola usa el backend de transcripción actual. Para que sea gratis, usa el backend local (Configuración).</p>
+                <button onclick="syncInstagramCookies()" id="uq-ig-sync"
+                    class="text-xs px-2 py-1 rounded bg-purple-600/20 text-purple-300 hover:bg-purple-600/40"
+                    title="Guarda tus cookies de Instagram cifradas (DPAPI) para usarlas aunque cierres el navegador">
+                    Sincronizar cookies de Instagram</button>
             </div>
+            <p class="text-xs text-white/20 mb-3">La cola usa el backend de transcripción actual. Para que sea gratis, usa el backend local (Configuración). Las cookies de Instagram se guardan cifradas con DPAPI; inicia sesión en Instagram (Opera recomendado) antes de sincronizar.</p>
 
+            <div id="uq-ig-feedback" class="text-xs mb-2 hidden"></div>
             <div id="uq-feedback" class="text-xs mb-3 hidden"></div>
 
             <!-- Lista de progreso -->
@@ -1425,6 +1430,32 @@ HTML_TEMPLATE = """
             }
         }
 
+        async function syncInstagramCookies() {
+            const btn = document.getElementById('uq-ig-sync');
+            const fb = document.getElementById('uq-ig-feedback');
+            btn.disabled = true; const old = btn.textContent; btn.textContent = 'Sincronizando…';
+            fb.classList.add('hidden');
+            try {
+                const res = await fetch('/api/instagram-cookies/sync', {method: 'POST'});
+                const data = await res.json();
+                fb.classList.remove('hidden');
+                if (data.ok) {
+                    fb.style.color = '#4ade80';
+                    fb.textContent = '✓ Cookies de Instagram guardadas cifradas (' + data.count + ' desde ' + data.browser + ').';
+                } else {
+                    fb.style.color = '#f87171';
+                    fb.textContent = data.error || 'No se pudieron sincronizar las cookies.';
+                }
+            } catch(ex) {
+                fb.classList.remove('hidden');
+                fb.style.color = '#f87171';
+                fb.textContent = 'Error de red: ' + ex;
+            } finally {
+                btn.disabled = false; btn.textContent = old;
+                setTimeout(() => fb.classList.add('hidden'), 8000);
+            }
+        }
+
         async function clearQueueFinished() {
             await fetch('/api/url-queue/clear', {method: 'POST'});
             await loadUrlQueue();
@@ -1992,6 +2023,20 @@ def url_queue_cancel_pending():
     """Elimina filas 'pending' sin tocar la que está procesando."""
     deleted = _db.url_queue_cancel_pending()
     return jsonify({"deleted": deleted})
+
+
+@app.route("/api/instagram-cookies/sync", methods=["POST"])
+def instagram_cookies_sync():
+    """Extrae las cookies de Instagram del navegador y las guarda cifradas (DPAPI).
+
+    Fallback duradero: una vez guardadas, la transcripción de Instagram funciona
+    aunque el navegador esté cerrado. Responde {ok, browser, count, error}.
+    """
+    from core.url_transcribe import sync_instagram_cookies  # noqa: PLC0415
+    r = sync_instagram_cookies()
+    status = 200 if r.get("ok") else 400
+    return jsonify({"ok": r.get("ok", False), "browser": r.get("browser"),
+                    "count": r.get("count", 0), "error": r.get("error")}), status
 
 
 @app.route("/api/youtube-transcript", methods=["POST"])
