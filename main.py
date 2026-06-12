@@ -1,6 +1,23 @@
 #!/usr/bin/env python3
 """Vflow - Voice-to-text desktop tool powered by Groq Whisper."""
 
+# IMPORTANTE — Fix de conflicto OpenMP entre ctranslate2 y PyQt6 (Windows).
+#
+# ctranslate2 (usado por faster-whisper) incluye su propio libiomp5md.dll
+# (runtime Intel OpenMP).  Cuando PyQt6 carga primero sus DLLs de Qt y el
+# runtime MSVC inicializa TLS/mutexes globales, un segundo intento de
+# inicializar el runtime OpenMP de Intel desde ctranslate2 provoca un Access
+# Violation (exit code 0xC0000005) que mata el proceso silenciosamente.
+#
+# Solución: importar ctranslate2 ANTES de cualquier import de PyQt6 para que
+# sea ctranslate2 quien registre primero su runtime OpenMP.  Esta importación
+# es un no-op en equipos donde faster-whisper no está instalado (se ignora
+# silenciosamente), por lo que no afecta la ruta Groq.
+try:
+    import ctranslate2  # noqa: F401 — pre-carga libiomp5md.dll antes de Qt
+except ImportError:
+    pass  # faster-whisper no instalado; modo Groq no se ve afectado
+
 import ctypes
 import logging
 import logging.handlers
@@ -551,6 +568,13 @@ class VflowApp(QObject):
             else:
                 self.transcription_error.emit("No speech detected", gen)
         except Exception as e:
+            # Mensaje especial accionable si el modelo local no está descargado
+            if "no descargado" in str(e).lower() or "modelo local" in str(e).lower():
+                self.transcription_error.emit(
+                    "Modelo local no descargado — descárgalo desde el dashboard (Configuración → Modelo local)",
+                    gen,
+                )
+                return
             # Guardar audio fallido para diagnóstico
             try:
                 failed_path = os.path.join(APP_DATA_DIR, "last_failed_recording.wav")

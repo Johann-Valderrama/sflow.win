@@ -18,3 +18,4 @@ logo-*-clean.png
 *.exe
 *.ico
 *.spec.bak
+models/

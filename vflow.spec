@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for Vflow — Windows voice-to-text app."""
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_all
 
 block_cipher = None
 
@@ -11,17 +11,34 @@ sounddevice_datas = collect_data_files('_sounddevice_data')
 # --- Collect pynput backends ---
 pynput_hidden = collect_submodules('pynput')
 
+# --- faster-whisper / ctranslate2 (backend local opcional) ---
+# collect_all recoge binarios, datos y submódulos de ctranslate2, que usa
+# extensiones C (.pyd) y DLLs de MKL/OpenMP que PyInstaller no detecta solo.
+ct2_datas, ct2_binaries, ct2_hidden = collect_all('ctranslate2')
+fw_datas, fw_binaries, fw_hidden = collect_all('faster_whisper')
+# huggingface_hub, tokenizers, av y onnxruntime también son necesarios en runtime.
+# av usa collect_all (no collect_submodules) porque trae DLLs de FFmpeg.
+# onnxruntime lo requiere faster-whisper para el VAD (vad_filter=True).
+hf_hidden = collect_submodules('huggingface_hub')
+tok_hidden = collect_submodules('tokenizers')
+av_datas, av_binaries, av_hidden = collect_all('av')
+ort_datas, ort_binaries, ort_hidden = collect_all('onnxruntime')
+
 # --- Data files ---
 datas = [
     ('logo_small.png', '.'),
     ('logo.png', '.'),
 ]
 datas += sounddevice_datas
+datas += ct2_datas
+datas += fw_datas
+datas += av_datas
+datas += ort_datas
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=ct2_binaries + fw_binaries + av_binaries + ort_binaries,
     datas=datas,
     hiddenimports=[
         # pynput
@@ -54,6 +71,22 @@ a = Analysis(
         'numpy',
         # dotenv
         'dotenv',
+        # faster-whisper y dependencias (backend local opcional)
+        *ct2_hidden,
+        *fw_hidden,
+        *hf_hidden,
+        *tok_hidden,
+        *av_hidden,
+        *ort_hidden,
+        'ctranslate2',
+        'faster_whisper',
+        'huggingface_hub',
+        'tokenizers',
+        'av',
+        'onnxruntime',
+        'tqdm',
+        'filelock',
+        'fsspec',
     ],
     hookspath=[],
     hooksconfig={},

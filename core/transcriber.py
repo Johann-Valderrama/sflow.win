@@ -1,9 +1,27 @@
+"""Transcriptor de audio con filtrado de alucinaciones.
+
+Mantiene la API pública que usa main.py (``transcribe`` y ``translate``) sin
+cambios; internamente delega en el backend configurado vía la variable de
+entorno ``TRANSCRIPTION_BACKEND`` (por defecto ``"groq"``).
+
+El filtrado de alucinaciones es agnóstico al backend y se aplica siempre aquí,
+en la capa de orquestación, sin que el backend tenga que conocerlo.
+"""
 import io
+import logging
 import os
 import threading
-from groq import Groq
-from config import GROQ_MODEL
 
+from core.backends import get_backend
+from core.backends.base import TranscriptionBackend
+from core import dictionary
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Filtrado de alucinaciones de Whisper
+# ---------------------------------------------------------------------------
 
 # Fragmentos INCONFUNDIBLES que jamás aparecen en dictado real: se buscan por
 # contención (aunque vayan dentro de otro texto) porque nadie los dicta nunca.
@@ -101,110 +119,93 @@ def _is_hallucination(text: str) -> bool:
     return any(marker in lowered for marker in _HALLUCINATION_MARKERS)
 
 
+# ---------------------------------------------------------------------------
+# Transcriber
+# ---------------------------------------------------------------------------
+
 class Transcriber:
-    """Cliente de transcripción que envía audio a la API Groq Whisper."""
+    """Orquestador de transcripción: gestiona el backend activo y filtra
+    alucinaciones.
+
+    Conserva la API pública original para que main.py no requiera cambios:
+    - ``transcribe(wav_buffer, prompt=None) -> str``
+    - ``translate(wav_buffer, target_lang="en") -> str``
+
+    El backend se selecciona por la env var ``TRANSCRIPTION_BACKEND`` (por
+    defecto ``"groq"``).  Se re-lee en cada llamada para permitir toggle desde
+    el dashboard sin reiniciar la app; si cambia, el backend anterior se libera
+    y se instancia uno nuevo (operación protegida por lock).
+    """
 
     def __init__(self):
-        """Inicializa el transcriptor con cliente Groq diferido (lazy init)."""
-        self._client = None
+        """Inicializa el transcriptor sin instanciar el backend todavía
+        (lazy init para que la clave del FirstRunDialog esté disponible)."""
+        self._backend: TranscriptionBackend | None = None
+        self._backend_name: str | None = None
         self._lock = threading.Lock()
 
-    def _get_client(self) -> Groq:
-        """Lazy init: creates client on first use so API key from first-run dialog works."""
-        if self._client is None:
+    # ------------------------------------------------------------------
+    # Gestión del backend
+    # ------------------------------------------------------------------
+
+    def _get_backend(self) -> TranscriptionBackend:
+        """Devuelve el backend activo, recreándolo si ``TRANSCRIPTION_BACKEND``
+        cambió desde la última llamada."""
+        current_name = os.getenv("TRANSCRIPTION_BACKEND", "groq").strip().lower()
+        if self._backend is None or self._backend_name != current_name:
             with self._lock:
-                if self._client is None:
-                    key = os.getenv("GROQ_API_KEY", "")
-                    if not key:
-                        raise ValueError("GROQ_API_KEY not configured")
-                    self._client = Groq(api_key=key, timeout=10.0)
-        return self._client
+                # Re-leer tras adquirir el lock (doble comprobación)
+                current_name = os.getenv("TRANSCRIPTION_BACKEND", "groq").strip().lower()
+                if self._backend is None or self._backend_name != current_name:
+                    if self._backend is not None:
+                        try:
+                            self._backend.release()
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("Error al liberar backend %r: %s", self._backend_name, e)
+                    logger.info("Instanciando backend de transcripción: %r", current_name)
+                    self._backend = get_backend(current_name)
+                    self._backend_name = current_name
+        return self._backend
+
+    # ------------------------------------------------------------------
+    # API pública (sin cambios respecto a la versión anterior)
+    # ------------------------------------------------------------------
 
     def transcribe(self, wav_buffer: io.BytesIO, prompt: str = None) -> str:
-        """Send WAV audio to Groq Whisper and return transcribed text.
+        """Envía audio WAV al backend activo y devuelve el texto transcrito.
 
         Args:
-            wav_buffer: WAV audio data.
-            prompt: Optional context from previous chunk to improve continuity.
+            wav_buffer: Datos de audio en formato WAV.
+            prompt: Contexto opcional del chunk anterior para mejorar continuidad.
+
+        Returns:
+            Texto transcrito.  Cadena vacía si no hay audio útil o el resultado
+            es una alucinación conocida de Whisper.
         """
-        wav_buffer.seek(0)
-        data = wav_buffer.read()
-        if len(data) < 100:
-            return ""
         lang = os.getenv("WHISPER_LANGUAGE", "es")
-        # whisper-large-v3-turbo has degraded language detection; use full model for auto-detect
-        model = "whisper-large-v3" if (not lang or lang == "auto") else GROQ_MODEL
-        kwargs = dict(
-            file=("recording.wav", data),
-            model=model,
-            response_format="text",
-            temperature=0.0,
-        )
-        if lang and lang != "auto":
-            kwargs["language"] = lang
-        if prompt:
-            kwargs["prompt"] = prompt
-        transcription = self._get_client().audio.transcriptions.create(**kwargs)
-        text = transcription.strip() if isinstance(transcription, str) else str(transcription).strip()
+        effective_prompt = dictionary.compose_prompt(prompt, include_vocab=True)
+        text = self._get_backend().transcribe(wav_buffer, language=lang, prompt=effective_prompt)
         if _is_hallucination(text):
             return ""
-        return text
+        return dictionary.apply_replacements(text)
 
     def translate(self, wav_buffer: io.BytesIO, target_lang: str = "en") -> str:
-        """Translate speech to target_lang.
+        """Traduce el audio al idioma destino usando el backend activo.
 
-        - target_lang == "en": uses Whisper /audio/translations endpoint (fastest, best quality).
-        - target_lang != "en": transcribes with Whisper first, then translates via Groq LLM
-          (llama-3.1-8b-instant), which supports any language pair.
+        Args:
+            wav_buffer: Datos de audio en formato WAV.
+            target_lang: Código ISO del idioma destino.
+
+        Returns:
+            Texto traducido.  Cadena vacía si no hay audio útil o el resultado
+            es una alucinación.
         """
-        wav_buffer.seek(0)
-        data = wav_buffer.read()
-        if len(data) < 100:
+        backend_name = os.getenv("TRANSCRIPTION_BACKEND", "groq").strip().lower()
+        # El backend local solo traduce a inglés con task=translate nativa;
+        # no inyectar vocab en ese caso.
+        include_vocab = (backend_name == "groq")
+        effective_prompt = dictionary.compose_prompt(None, include_vocab=include_vocab)
+        text = self._get_backend().translate(wav_buffer, target_lang=target_lang, prompt=effective_prompt)
+        if _is_hallucination(text):
             return ""
-
-        if target_lang == "en":
-            # Whisper native translation → English (best accuracy)
-            translation = self._get_client().audio.translations.create(
-                file=("recording.wav", data),
-                model="whisper-large-v3",
-                response_format="text",
-                temperature=0.0,
-            )
-            text = translation.strip() if isinstance(translation, str) else str(translation).strip()
-            if _is_hallucination(text):
-                return ""
-            return text
-
-        # For non-English targets: transcribe first, then LLM-translate
-        wav_buffer.seek(0)
-        transcript = self.transcribe(wav_buffer)
-        if not transcript:
-            return ""
-        return self._llm_translate(transcript, target_lang)
-
-    # Language code → full name for LLM prompt
-    _LANG_NAMES = {
-        "es": "Spanish", "en": "English", "fr": "French", "de": "German",
-        "it": "Italian", "pt": "Portuguese", "ja": "Japanese", "zh": "Chinese",
-        "ko": "Korean", "ru": "Russian", "ar": "Arabic", "nl": "Dutch",
-    }
-
-    def _llm_translate(self, text: str, target_lang: str) -> str:
-        """Translate text to target_lang using Groq LLM (llama-3.1-8b-instant)."""
-        target_name = self._LANG_NAMES.get(target_lang, target_lang)
-        response = self._get_client().chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        f"Translate the following text to {target_name}. "
-                        "Output only the translation, nothing else. "
-                        "Preserve punctuation and formatting."
-                    ),
-                },
-                {"role": "user", "content": text},
-            ],
-            temperature=0.1,
-        )
-        return response.choices[0].message.content.strip()
+        return dictionary.apply_replacements(text)

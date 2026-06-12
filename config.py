@@ -50,6 +50,26 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = "whisper-large-v3-turbo"
 WHISPER_LANGUAGE = "es"  # Explicit language for accurate accents (é, ó, ñ, etc.)
 
+# Backend de transcripción activo.  Valores posibles: "groq" (default) o "local".
+# "groq"  → Groq Whisper API (requiere GROQ_API_KEY, necesita internet).
+# "local" → faster-whisper corriendo en CPU (sin internet, requiere modelo descargado).
+# Se puede cambiar desde el dashboard sin reiniciar la app.
+TRANSCRIPTION_BACKEND = os.getenv("TRANSCRIPTION_BACKEND", "groq")
+
+# Backend local (faster-whisper)
+# LOCAL_WHISPER_MODEL: tamaño del modelo a usar.  Opciones: "small" (~466 MB, rápido)
+#   o "medium" (~1.5 GB, más preciso).  El modelo se descarga desde Hugging Face la
+#   primera vez y queda en LOCAL_MODELS_DIR para uso offline posterior.
+LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "small")
+
+# LOCAL_MODEL_IDLE_MINUTES: minutos de inactividad antes de liberar el modelo de la RAM.
+#   0 = nunca liberar (útil si el equipo tiene RAM suficiente y se usa frecuentemente).
+LOCAL_MODEL_IDLE_MINUTES = int(os.getenv("LOCAL_MODEL_IDLE_MINUTES", "10") or "10")
+
+# Directorio donde se almacenan los modelos descargados.
+# En modo bundle → %APPDATA%\Vflow\models; en dev → <proyecto>/models/
+LOCAL_MODELS_DIR = os.path.join(_DATA_DIR, "models")
+
 # Audio
 SAMPLE_RATE = 16000
 CHANNELS = 1
