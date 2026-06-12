@@ -22,6 +22,7 @@ class TranscriptionDB:
             language TEXT,
             duration_seconds REAL,
             model TEXT DEFAULT 'whisper-large-v3-turbo',
+            source TEXT DEFAULT 'mic',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
         """CREATE INDEX IF NOT EXISTS idx_transcriptions_created_at
@@ -45,6 +46,8 @@ class TranscriptionDB:
         "ALTER TABLE dictionary ADD COLUMN pinned INTEGER DEFAULT 0",
         "ALTER TABLE dictionary ADD COLUMN source TEXT DEFAULT 'manual'",
         "ALTER TABLE dictionary ADD COLUMN hit_count INTEGER DEFAULT 0",
+        # v1.2: columna source en transcripciones para registrar fuente de audio
+        "ALTER TABLE transcriptions ADD COLUMN source TEXT DEFAULT 'mic'",
     ]
 
     def _init_db(self):
@@ -80,12 +83,12 @@ class TranscriptionDB:
             with sqlite3.connect(self.db_path) as conn:
                 for ddl in self._DDL:
                     conn.execute(ddl)
-    def insert(self, text: str, language: str = None, duration_seconds: float = None, model: str = "whisper-large-v3-turbo") -> int:
+    def insert(self, text: str, language: str = None, duration_seconds: float = None, model: str = "whisper-large-v3-turbo", source: str = "mic") -> int:
         """Inserta una transcripción y retorna su ID."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
-                "INSERT INTO transcriptions (text, language, duration_seconds, model) VALUES (?, ?, ?, ?)",
-                (text, language, duration_seconds, model),
+                "INSERT INTO transcriptions (text, language, duration_seconds, model, source) VALUES (?, ?, ?, ?, ?)",
+                (text, language, duration_seconds, model, source),
             )
             return cursor.lastrowid
 

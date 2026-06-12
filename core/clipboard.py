@@ -118,6 +118,19 @@ def _get_clipboard_text() -> "str | None":
         return None
 
 
+def copy_text(text: str) -> bool:
+    """Copia texto al portapapeles sin simular Ctrl+V (modo audio del sistema).
+
+    Returns True si el texto quedó en el portapapeles, False si falló.
+    """
+    try:
+        _set_clipboard_text(text)
+        return True
+    except Exception as e:
+        logger.error("copy_text: fallo al copiar al portapapeles: %s", e)
+        return False
+
+
 def paste_text(text: str) -> str:
     """Copy text to clipboard and paste into the previously active window.
 

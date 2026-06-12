@@ -42,11 +42,11 @@ from ui.pill_widget import PillWidget
 from core.recorder import AudioRecorder
 from core.transcriber import Transcriber
 from core.hotkey import HotkeyListener
-from core.clipboard import paste_text, save_frontmost_app
+from core.clipboard import paste_text, copy_text, save_frontmost_app
 from core.secrets import encrypt
 from db.database import TranscriptionDB
 from web.server import start_web_server
-from config import LOGO_PATH, APP_DATA_DIR, GROQ_API_KEY, CHUNK_SECONDS, MAX_RECORDING_SECONDS, APP_VERSION
+from config import LOGO_PATH, APP_DATA_DIR, GROQ_API_KEY, CHUNK_SECONDS, MAX_RECORDING_SECONDS, APP_VERSION, AUDIO_SOURCE
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +267,19 @@ def _repair_launch_at_login():
 
 
 # ---------------------------------------------------------------------------
+# Fuente de audio — toggle desde la bandeja
+# ---------------------------------------------------------------------------
+
+def _set_audio_source_env(source: str):
+    """Guarda AUDIO_SOURCE en .env y en el entorno del proceso en ejecución."""
+    from dotenv import set_key as _set_key
+    env_path = os.path.join(APP_DATA_DIR, ".env")
+    os.makedirs(APP_DATA_DIR, exist_ok=True)
+    _set_key(env_path, "AUDIO_SOURCE", source)
+    os.environ["AUDIO_SOURCE"] = source
+
+
+# ---------------------------------------------------------------------------
 # Bandeja del sistema
 # ---------------------------------------------------------------------------
 def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
@@ -298,6 +311,31 @@ def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
     menu.addAction(login_action)
     menu.addSeparator()
 
+    # Fuente de audio (checkable, estilo radio)
+    current_source = os.getenv("AUDIO_SOURCE", "mic")
+    src_mic = QAction("Fuente: Micrófono", menu)
+    src_mic.setCheckable(True)
+    src_mic.setChecked(current_source == "mic")
+    src_sys = QAction("Fuente: Audio del sistema", menu)
+    src_sys.setCheckable(True)
+    src_sys.setChecked(current_source == "system")
+
+    def _on_src_mic(checked):
+        if checked:
+            _set_audio_source_env("mic")
+            src_sys.setChecked(False)
+
+    def _on_src_sys(checked):
+        if checked:
+            _set_audio_source_env("system")
+            src_mic.setChecked(False)
+
+    src_mic.toggled.connect(_on_src_mic)
+    src_sys.toggled.connect(_on_src_sys)
+    menu.addAction(src_mic)
+    menu.addAction(src_sys)
+    menu.addSeparator()
+
     quit_action = QAction("Salir", menu)
     quit_action.triggered.connect(app.quit)
     menu.addAction(quit_action)
@@ -321,7 +359,7 @@ class VflowApp(QObject):
     def __init__(self):
         """Inicializa componentes (recorder, transcriber, DB, hotkey, pill) y conecta señales."""
         super().__init__()
-        self.recorder = AudioRecorder()
+        self.recorder = AudioRecorder(source=os.getenv("AUDIO_SOURCE", "mic"))
         self.transcriber = Transcriber()
         self.db = TranscriptionDB()
 
@@ -409,10 +447,11 @@ class VflowApp(QObject):
                 self._chunk_seq = 0
             self._chunk_timer.start(CHUNK_SECONDS * 1000)
             self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
-            # Arrancar watchdog de micrófono
+            # Arrancar watchdog de micrófono (desactivado en modo system: loopback puede silenciar)
             self._last_samples_seen = 0
             self._mic_stall_count = 0
-            self._mic_watchdog_timer.start()
+            if self.recorder.watchdog_enabled:
+                self._mic_watchdog_timer.start()
             self.pill.set_state(PillWidget.STATE_RECORDING)
         except Exception as e:
             logger.error("_on_hotkey_pressed: fallo inesperado: %s", e, exc_info=True)
@@ -448,10 +487,11 @@ class VflowApp(QObject):
                 self._chunk_seq = 0
             # Sin chunk_timer en modo traducción — se envía audio completo al endpoint de traducción
             self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
-            # Arrancar watchdog de micrófono
+            # Arrancar watchdog de micrófono (desactivado en modo system)
             self._last_samples_seen = 0
             self._mic_stall_count = 0
-            self._mic_watchdog_timer.start()
+            if self.recorder.watchdog_enabled:
+                self._mic_watchdog_timer.start()
             self.pill.set_state(PillWidget.STATE_RECORDING)
         except Exception as e:
             logger.error("_on_translate_pressed: fallo inesperado: %s", e, exc_info=True)
@@ -595,13 +635,21 @@ class VflowApp(QObject):
         _play_sound(660)  # beep bajo = transcripción lista
         # Insertar en DB solo si el historial está habilitado (SAVE_HISTORY=true por defecto)
         if os.getenv("SAVE_HISTORY", "true").lower() == "true":
-            self.db.insert(text=text, duration_seconds=duration)
+            self.db.insert(text=text, duration_seconds=duration, source=self.recorder.source)
         # La pill permanece en STATE_PROCESSING hasta que paste_finished confirme el resultado
         threading.Thread(target=self._paste_worker, args=(text,), daemon=True).start()
 
     def _paste_worker(self, text: str):
-        """Ejecuta paste_text en un hilo background (es bloqueante ~0.5-2s)."""
-        status = paste_text(text)
+        """Ejecuta paste_text en un hilo background (es bloqueante ~0.5-2s).
+
+        En modo "system" (audio del sistema) no se simula Ctrl+V: el usuario suele
+        estar mirando el video, no escribiendo. El texto queda en el portapapeles
+        y en el historial, con notificación.
+        """
+        if self.recorder.source == "system":
+            status = "copied_system" if copy_text(text) else "failed"
+        else:
+            status = paste_text(text)
         self.paste_finished.emit(status)
 
     @pyqtSlot(str)
@@ -609,6 +657,15 @@ class VflowApp(QObject):
         """Actualiza la pill y muestra notificación según el resultado del pegado."""
         if status == "pasted":
             self.pill.set_state(PillWidget.STATE_DONE)
+        elif status == "copied_system":
+            self.pill.set_state(PillWidget.STATE_DONE)
+            if self.tray:
+                self.tray.showMessage(
+                    "Vflow",
+                    "Transcripción lista: copiada al portapapeles y guardada en el historial.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    4000,
+                )
         elif status == "clipboard_only":
             self.pill.set_state(PillWidget.STATE_DONE)
             if self.tray:

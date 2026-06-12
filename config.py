@@ -73,6 +73,13 @@ LOCAL_MODEL_IDLE_MINUTES = int(os.getenv("LOCAL_MODEL_IDLE_MINUTES", "10") or "1
 #   el audio nunca salga a internet sin consentimiento explícito del usuario.
 GROQ_FALLBACK = os.getenv("GROQ_FALLBACK", "false").lower() == "true"
 
+# AUDIO_SOURCE: fuente de captura de audio.  Valores posibles: "mic" (default) o "system".
+# "mic"    → micrófono del dispositivo (comportamiento original, sounddevice).
+# "system" → audio del sistema vía WASAPI loopback (pyaudiowpatch); captura lo que
+#            suena por los altavoces sin necesidad de micrófono.
+# Cambiable desde el menú de bandeja o el panel Configuración del dashboard.
+AUDIO_SOURCE = os.getenv("AUDIO_SOURCE", "mic")
+
 # VAD_ENABLED: aplica Silero VAD al audio ANTES de enviarlo a la API Groq para
 #   recortar silencios (reduce costo, latencia y alucinaciones).  El backend local
 #   ya tiene su propio VAD interno, por lo que este ajuste solo afecta a Groq.

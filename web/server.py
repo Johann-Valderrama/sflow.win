@@ -262,6 +262,13 @@ HTML_TEMPLATE = """
                     </select>
                 </div>
                 <div>
+                    <label class="text-xs text-white/40 block mb-1">Fuente de audio</label>
+                    <select id="cfg-audio-source" class="cfg-select">
+                        <option value="mic">Micrófono</option>
+                        <option value="system">Audio del sistema (loopback)</option>
+                    </select>
+                </div>
+                <div>
                     <label class="text-xs text-white/40 block mb-1">Backend de transcripción</label>
                     <select id="cfg-backend" class="cfg-select" onchange="onBackendChange()">
                         <option value="groq">Groq API (nube)</option>
@@ -744,6 +751,8 @@ HTML_TEMPLATE = """
                 if (m.name === settings.device_name) opt.selected = true;
                 micSelect.appendChild(opt);
             });
+            // Fuente de audio
+            document.getElementById('cfg-audio-source').value = settings.audio_source || 'mic';
             // Backend local
             document.getElementById('cfg-backend').value = settings.transcription_backend || 'groq';
             document.getElementById('cfg-local-model').value = settings.local_whisper_model || 'small';
@@ -762,6 +771,7 @@ HTML_TEMPLATE = """
                 beep_volume: document.getElementById('cfg-beep-volume').value,
                 save_history: document.getElementById('cfg-save-history').checked ? 'true' : 'false',
                 retention_days: document.getElementById('cfg-retention-days').value,
+                audio_source: document.getElementById('cfg-audio-source').value,
                 transcription_backend: document.getElementById('cfg-backend').value,
                 local_whisper_model: document.getElementById('cfg-local-model').value,
                 groq_fallback: document.getElementById('cfg-groq-fallback').checked ? 'true' : 'false',
@@ -1268,6 +1278,7 @@ def get_settings():
         "transcription_backend": os.getenv("TRANSCRIPTION_BACKEND", "groq"),
         "local_whisper_model": os.getenv("LOCAL_WHISPER_MODEL", "small"),
         "groq_fallback": os.getenv("GROQ_FALLBACK", "false").lower() == "true",
+        "audio_source": os.getenv("AUDIO_SOURCE", "mic"),
     })
 
 
@@ -1288,6 +1299,7 @@ def update_settings():
         "transcription_backend": "TRANSCRIPTION_BACKEND",
         "local_whisper_model": "LOCAL_WHISPER_MODEL",
         "groq_fallback": "GROQ_FALLBACK",
+        "audio_source": "AUDIO_SOURCE",
     }
     for field, env_key in allowed.items():
         if field in data:
