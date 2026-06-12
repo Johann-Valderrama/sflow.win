@@ -93,7 +93,7 @@ vflow/
 │   │   ├── groq_backend.py # Backend Groq Whisper API (requiere internet + GROQ_API_KEY)
 │   │   ├── local_backend.py# Backend faster-whisper local (sin internet; solo traduce →en)
 │   │   └── __init__.py     # Factory get_backend(); lee TRANSCRIPTION_BACKEND env
-│   ├── hotkey.py           # Global hotkeys (4 modes: Ctrl+Alt, triple-tap Shift, Ctrl+Shift+Alt, AltGr+Space)
+│   ├── hotkey.py           # Global hotkeys (4 modes: Ctrl+Alt, triple-tap Shift, Ctrl+Shift+Alt, AltGr+T)
 │   ├── vad.py              # Silero VAD wrapper: recorta silencios antes de enviar a Groq (VAD_ENABLED)
 │   └── clipboard.py        # Focus save/restore + Ctrl+V paste via Win32 API (GlobalAlloc/SetClipboardData/ctypes)
 ├── db/
@@ -192,7 +192,7 @@ Edit `core/hotkey.py`:
 - **Mode 1 (Ctrl+Alt hold)**: Press and hold Ctrl+Alt to transcribe; release to stop. Transcribed text auto-pastes.
 - **Mode 2 (Triple-tap Shift)**: Press Shift three times within 400ms to start hands-free transcription; press Shift once to stop.
 - **Mode 3 (Ctrl+Shift+Alt hold)**: Press and hold Ctrl+Shift+Alt (Shift before Alt) to translate from any language to target language.
-- **Mode 4 (AltGr+Space toggle)**: Press AltGr+Space once to start translation hands-free; press again to stop.
+- **Mode 4 (AltGr+T toggle)**: Press AltGr+T once to start translation hands-free; press again to stop.
 - To customize intervals, edit `DOUBLE_TAP_INTERVAL` in `config.py`.
 - **Arming Delay** — Edit `ARMING_DELAY` in `config.py` (default: 0.15s). Modes 1 and 3 (hold keys) require the hotkey combination to be pressed for this duration *without other keys* before recording starts. This prevents accidental triggers when using IDE shortcuts like Ctrl+Alt+L. Set to 0 for immediate activation (at the cost of possible misfires).
 

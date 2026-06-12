@@ -14,9 +14,18 @@ class HotkeyListener(QObject):
     2. Triple-tap Shift:         toggle manos-libres → transcribir (tap Shift de nuevo para detener).
     3. Mantener Ctrl+Shift+Alt:  hold → traducir al idioma destino
        (Shift debe estar presionado ANTES de Alt). También usa ARMING_DELAY.
-    4. AltGr + Space toggle:     manos-libres → traducir (una pulsación inicia, otra detiene).
+    4. AltGr + T toggle:         manos-libres → traducir (una pulsación inicia, otra detiene).
+       Anteriormente era AltGr+Space; cambiado a AltGr+T para evitar conflicto con el
+       atajo global de Claude (Ctrl+Alt+Space, que en Windows ≡ AltGr+Space).
 
     NOTA: AltGr se rastrea separado del Alt regular para que AltGr solo NO active Ctrl+Alt (modo 1).
+    NOTA: En Windows, AltGr genera internamente Ctrl+Alt. pynput expone AltGr como
+    keyboard.Key.alt_gr en on_press; la detección de 'T' se hace por vk (0x54) para ser
+    robusta frente a layouts donde AltGr+T produce un carácter alternativo. Si el layout
+    no genera alt_gr como evento especial sino como Ctrl+Alt, el vk de T sigue siendo 0x54.
+    Escribir 't' normal (sin AltGr) NO disparará el modo 4 porque _alt_gr_held será False.
+    Ctrl+Alt+T (sin AltGr físico) puede comportarse igual que AltGr+T si pynput no distingue
+    entre ambos en el layout del usuario — este es el mismo comportamiento que tenía AltGr+Space.
     """
 
     pressed = pyqtSignal()
@@ -32,7 +41,7 @@ class HotkeyListener(QObject):
         self._shift_held = False
         self._recording = False
         self._hands_free = False
-        self._alt_gr_space_mode = False  # True cuando está en modo toggle AltGr+Space
+        self._alt_gr_t_mode = False  # True cuando está en modo toggle AltGr+T
 
         self._listener: keyboard.Listener | None = None
 
@@ -67,7 +76,7 @@ class HotkeyListener(QObject):
         self._cancel_arm()
         self._recording = False
         self._hands_free = False
-        self._alt_gr_space_mode = False
+        self._alt_gr_t_mode = False
         self._shift_tap_count = 0
         self._last_shift_press = 0.0
 
@@ -106,12 +115,18 @@ class HotkeyListener(QObject):
         Las teclas no modificadoras durante un timer de armado activo indican que
         el usuario está ejecutando un atajo de otra app — hay que cancelar el armado.
         """
+        # Incluye 't'/'T' (vk=0x54) como tecla "permitida" durante el armado para que
+        # AltGr+T no aborte el timer de modos 1/3. En la práctica el timer de armado
+        # solo está activo cuando Ctrl+Alt están presionados, lo que coincide con AltGr;
+        # el modo 4 se procesa antes de llegar aquí, así que esto es solo un guard extra.
+        _T_VK = 0x54
+        if hasattr(key, 'vk') and key.vk == _T_VK:
+            return True
         return key in (
             keyboard.Key.ctrl_l, keyboard.Key.ctrl_r,
             keyboard.Key.alt,    keyboard.Key.alt_l,    keyboard.Key.alt_r,
             keyboard.Key.alt_gr,
             keyboard.Key.shift,  keyboard.Key.shift_l,  keyboard.Key.shift_r,
-            keyboard.Key.space,
         )
 
     # ------------------------------------------------------------------
@@ -124,18 +139,22 @@ class HotkeyListener(QObject):
         is_alt    = key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r)
         is_alt_gr = key == keyboard.Key.alt_gr
         is_shift  = key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r)
-        is_space  = key == keyboard.Key.space
+        # Detectar 'T' por vk (0x54) para robustez ante layouts donde AltGr+T
+        # genera un carácter alternativo. El char puede ser 't', 'T' u otro glifo;
+        # el vk siempre es 0x54 en teclados PC estándar bajo Windows.
+        _T_VK = 0x54
+        is_t = hasattr(key, 'vk') and key.vk == _T_VK
 
-        # --- Modo 4: toggle AltGr + Space (traducir, manos-libres) ---
-        if is_space and self._alt_gr_held:
-            if self._alt_gr_space_mode and self._recording:
+        # --- Modo 4: toggle AltGr + T (traducir, manos-libres) ---
+        if is_t and self._alt_gr_held:
+            if self._alt_gr_t_mode and self._recording:
                 # Segunda pulsación → detener grabación
-                self._alt_gr_space_mode = False
+                self._alt_gr_t_mode = False
                 self._recording = False
                 self.released.emit()
             elif not self._recording:
                 # Primera pulsación → iniciar traducción (sin hold)
-                self._alt_gr_space_mode = True
+                self._alt_gr_t_mode = True
                 self._recording = True
                 self.translate_pressed.emit()
             return
@@ -219,9 +238,9 @@ class HotkeyListener(QObject):
         if (is_ctrl or is_alt) and self._arm_timer is not None:
             self._cancel_arm()
 
-        # Modo 4 (toggle AltGr+Space): la detención la maneja la segunda pulsación en _on_press.
-        # Soltar AltGr NO detiene la grabación — el usuario debe pulsar AltGr+Space de nuevo.
-        if self._alt_gr_space_mode:
+        # Modo 4 (toggle AltGr+T): la detención la maneja la segunda pulsación en _on_press.
+        # Soltar AltGr NO detiene la grabación — el usuario debe pulsar AltGr+T de nuevo.
+        if self._alt_gr_t_mode:
             return
 
         # Modos 1 y 3 (hold): detener cuando se suelta Ctrl o Alt

@@ -176,7 +176,7 @@ HTML_TEMPLATE = """
                     <div class="flex items-center gap-2 mb-1.5">
                         <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">AltGr</kbd>
                         <span class="text-white/30 text-xs">+</span>
-                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">Space</kbd>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">T</kbd>
                     </div>
                     <p class="text-xs text-white/70 font-medium">Traducir — manos libres (toggle)</p>
                     <p class="text-xs text-white/35 mt-0.5">Primera pulsación inicia la grabación; segunda pulsación la detiene y pega la traducción.</p>
