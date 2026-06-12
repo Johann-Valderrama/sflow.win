@@ -1390,7 +1390,7 @@ HTML_TEMPLATE = """
             const allowInstagram = document.getElementById('uq-instagram').checked;
             const feedback = document.getElementById('uq-feedback');
 
-            const combined = [singleUrl, bulkText].filter(Boolean).join('\n');
+            const combined = [singleUrl, bulkText].filter(Boolean).join('\\n');
             if (!combined.trim()) return;
 
             try {
