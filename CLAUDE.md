@@ -51,6 +51,23 @@ The built app is in `dist\Vflow\Vflow.exe`. On first launch, if no API key exist
 - Optional: Vflow.ico (256x256 icon file for the .exe)
 - **Reproducible builds**: requirements.txt has pinned versions for consistent .exe output across machines
 
+### Seguridad de dependencias
+
+- **`requirements.in`** — fuente de verdad con las dependencias top-level (sin versiones fijas). Edita este archivo al añadir o quitar una dependencia.
+- **`requirements.lock`** — lock file generado con pip-tools, incluye hashes SHA-256 para todas las dependencias (directas y transitivas). Commiteado en el repo.
+- **Instalar desde el lock** (máxima seguridad, para CI o entornos limpios):
+  ```bash
+  pip install --require-hashes -r requirements.lock
+  ```
+- **Regenerar el lock** al añadir una dependencia:
+  ```bash
+  pip install pip-tools          # una sola vez
+  pip-compile --generate-hashes --allow-unsafe --output-file requirements.lock requirements.in
+  ```
+  Actualiza también `requirements.txt` con la versión pinneada final si vas a distribuir dev-setup sin lock.
+- **Política de versiones**: no añadir paquetes con menos de 30 días en PyPI (riesgo de typosquatting / supply-chain). Verifica la fecha de publicación en https://pypi.org/project/<paquete>/#history antes de añadir una dependencia nueva.
+- **Auditoría**: `build.bat` ejecuta `pip-audit` como paso previo (solo warning, no aborta). Para auditoría manual: `pip-audit -r requirements.lock`.
+
 ## Permissions Required
 
 - **Administrator** (optional): May be needed for global hotkeys in some apps
@@ -77,6 +94,7 @@ vflow/
 │   │   ├── local_backend.py# Backend faster-whisper local (sin internet; solo traduce →en)
 │   │   └── __init__.py     # Factory get_backend(); lee TRANSCRIPTION_BACKEND env
 │   ├── hotkey.py           # Global hotkeys (4 modes: Ctrl+Alt, triple-tap Shift, Ctrl+Shift+Alt, AltGr+Space)
+│   ├── vad.py              # Silero VAD wrapper: recorta silencios antes de enviar a Groq (VAD_ENABLED)
 │   └── clipboard.py        # Focus save/restore + Ctrl+V paste via Win32 API (GlobalAlloc/SetClipboardData/ctypes)
 ├── db/
 │   └── database.py         # SQLite CRUD
@@ -203,6 +221,8 @@ Edit `config.py`:
 - `TRANSCRIPTION_BACKEND` (default: `groq`) — Backend activo: `"groq"` (API Groq) o `"local"` (faster-whisper sin internet)
 - `LOCAL_WHISPER_MODEL` (default: `small`) — Modelo local: `"small"` (~466 MB, rápido) o `"medium"` (~1.5 GB, más preciso)
 - `LOCAL_MODEL_IDLE_MINUTES` (default: `10`) — Minutos de inactividad antes de liberar el modelo de RAM; `0` = nunca liberar
+- `GROQ_FALLBACK` (default: `false`) — Si `true`, cuando el backend local falla la app reintenta con Groq (requiere `GROQ_API_KEY`). Apagado por defecto; activar desde dashboard Settings (checkbox visible solo cuando backend=local).
+- `VAD_ENABLED` (default: `true`) — Aplica Silero VAD al audio antes de enviarlo a Groq para recortar silencios (reduce costo y alucinaciones). El backend local usa su propio VAD interno; esta opción solo afecta a Groq. Apagar si hay problemas (fail-open: el audio se envía sin modificar).
 
 ### Backend Local (faster-whisper)
 - Los modelos se descargan desde Hugging Face en `%APPDATA%\Vflow\models\` (bundle) o `<proyecto>/models/` (dev).
@@ -232,3 +252,5 @@ Edit `config.py`:
 | "Modelo local no descargado" en la notificación | El backend está en "local" pero el modelo no se ha descargado. Abre el dashboard → Configuración → activa "Local sin internet" → pulsa "Descargar modelo". |
 | El modelo local traduce a un idioma distinto del inglés | El backend local solo soporta traducción a inglés. Para otros idiomas de destino, cambia el backend a Groq en el dashboard. |
 | La primera transcripción con backend local es lenta | CTranslate2 hace lazy-alloc en la primera inferencia. El warmup automático (al activar el backend) mitiga esto; si no se lanzó, espera unos segundos en la primera transcripción. |
+| Backend local falla y no quiero perder el dictado | Activa `GROQ_FALLBACK=true` (dashboard → Configuración → checkbox "Permitir Groq como respaldo"). Requiere `GROQ_API_KEY`. Advertencia: el audio saldrá a internet cuando el local falle. |
+| VAD recorta palabras al inicio o final | Aumenta `speech_pad_ms` en `core/vad.py` (default 400 ms) o desactiva con `VAD_ENABLED=false` en `.env`. |

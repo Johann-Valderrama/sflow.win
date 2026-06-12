@@ -66,6 +66,19 @@ LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "small")
 #   0 = nunca liberar (útil si el equipo tiene RAM suficiente y se usa frecuentemente).
 LOCAL_MODEL_IDLE_MINUTES = int(os.getenv("LOCAL_MODEL_IDLE_MINUTES", "10") or "10")
 
+# GROQ_FALLBACK: si "true", cuando el backend local falla (modelo no descargado,
+#   error de inferencia, etc.) la app reintenta automáticamente con Groq Whisper API,
+#   siempre que GROQ_API_KEY esté configurada.  Solo aplica cuando
+#   TRANSCRIPTION_BACKEND=local.  Por defecto "false" (apagado) para garantizar que
+#   el audio nunca salga a internet sin consentimiento explícito del usuario.
+GROQ_FALLBACK = os.getenv("GROQ_FALLBACK", "false").lower() == "true"
+
+# VAD_ENABLED: aplica Silero VAD al audio ANTES de enviarlo a la API Groq para
+#   recortar silencios (reduce costo, latencia y alucinaciones).  El backend local
+#   ya tiene su propio VAD interno, por lo que este ajuste solo afecta a Groq.
+#   Apagar en caso de problemas (el audio se envía sin modificar — fail-open).
+VAD_ENABLED = os.getenv("VAD_ENABLED", "true").lower() == "true"
+
 # Directorio donde se almacenan los modelos descargados.
 # En modo bundle → %APPDATA%\Vflow\models; en dev → <proyecto>/models/
 LOCAL_MODELS_DIR = os.path.join(_DATA_DIR, "models")

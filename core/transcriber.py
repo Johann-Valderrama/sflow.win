@@ -174,6 +174,11 @@ class Transcriber:
     def transcribe(self, wav_buffer: io.BytesIO, prompt: str = None) -> str:
         """Envía audio WAV al backend activo y devuelve el texto transcrito.
 
+        Si el backend activo es "local" y falla, y ``GROQ_FALLBACK=true`` está
+        activado y hay ``GROQ_API_KEY`` configurada, reintenta con el backend
+        Groq y emite WARNING.  Si el fallback también falla, propaga la
+        excepción original del backend local.
+
         Args:
             wav_buffer: Datos de audio en formato WAV.
             prompt: Contexto opcional del chunk anterior para mejorar continuidad.
@@ -184,13 +189,35 @@ class Transcriber:
         """
         lang = os.getenv("WHISPER_LANGUAGE", "es")
         effective_prompt = dictionary.compose_prompt(prompt, include_vocab=True)
-        text = self._get_backend().transcribe(wav_buffer, language=lang, prompt=effective_prompt)
+        backend_name = os.getenv("TRANSCRIPTION_BACKEND", "groq").strip().lower()
+
+        try:
+            text = self._get_backend().transcribe(wav_buffer, language=lang, prompt=effective_prompt)
+        except Exception as local_exc:
+            if self._should_use_groq_fallback(backend_name):
+                logger.warning(
+                    "Backend local falló; usando Groq como respaldo (GROQ_FALLBACK=true). Error: %s",
+                    local_exc,
+                )
+                wav_buffer.seek(0)
+                try:
+                    groq_backend = get_backend("groq")
+                    text = groq_backend.transcribe(wav_buffer, language=lang, prompt=effective_prompt)
+                except Exception:
+                    raise local_exc from None  # propagar excepción original
+            else:
+                raise
+
         if _is_hallucination(text):
             return ""
         return dictionary.apply_replacements(text)
 
     def translate(self, wav_buffer: io.BytesIO, target_lang: str = "en") -> str:
         """Traduce el audio al idioma destino usando el backend activo.
+
+        Si el backend activo es "local" y falla, y ``GROQ_FALLBACK=true`` está
+        activado, reintenta con el backend Groq (mismo comportamiento que
+        ``transcribe``).
 
         Args:
             wav_buffer: Datos de audio en formato WAV.
@@ -205,7 +232,44 @@ class Transcriber:
         # no inyectar vocab en ese caso.
         include_vocab = (backend_name == "groq")
         effective_prompt = dictionary.compose_prompt(None, include_vocab=include_vocab)
-        text = self._get_backend().translate(wav_buffer, target_lang=target_lang, prompt=effective_prompt)
+
+        try:
+            text = self._get_backend().translate(wav_buffer, target_lang=target_lang, prompt=effective_prompt)
+        except Exception as local_exc:
+            if self._should_use_groq_fallback(backend_name):
+                logger.warning(
+                    "Backend local falló; usando Groq como respaldo (GROQ_FALLBACK=true). Error: %s",
+                    local_exc,
+                )
+                wav_buffer.seek(0)
+                try:
+                    groq_backend = get_backend("groq")
+                    groq_prompt = dictionary.compose_prompt(None, include_vocab=True)
+                    text = groq_backend.translate(wav_buffer, target_lang=target_lang, prompt=groq_prompt)
+                except Exception:
+                    raise local_exc from None
+            else:
+                raise
+
         if _is_hallucination(text):
             return ""
         return dictionary.apply_replacements(text)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _should_use_groq_fallback(backend_name: str) -> bool:
+        """Devuelve True si se debe intentar el fallback a Groq.
+
+        Condiciones:
+        1. El backend activo es "local".
+        2. ``GROQ_FALLBACK=true`` en el entorno.
+        3. Hay una ``GROQ_API_KEY`` configurada (no vacía).
+        """
+        if backend_name != "local":
+            return False
+        if os.getenv("GROQ_FALLBACK", "false").lower().strip() != "true":
+            return False
+        return bool(os.getenv("GROQ_API_KEY", "").strip())

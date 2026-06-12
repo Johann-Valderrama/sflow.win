@@ -3,6 +3,11 @@
 Encapsula toda la lógica de comunicación con Groq: lazy init del cliente,
 transcripción con Whisper large-v3-turbo, traducción nativa a inglés y
 traducción a otros idiomas vía LLM (llama-3.1-8b-instant).
+
+Feature VAD: antes de enviar audio a la API se aplica Silero VAD para recortar
+silencios (reduce costo/latencia y alucinaciones).  Controlado por la env var
+``VAD_ENABLED`` (default "true").  Si el VAD no detecta voz devuelve "" sin
+llamar a la API.  Si el VAD falla, el audio se envía sin modificar (fail-open).
 """
 import io
 import os
@@ -45,6 +50,8 @@ class GroqBackend(TranscriptionBackend):
     ) -> str:
         """Envía audio WAV a Groq Whisper y devuelve el texto transcrito.
 
+        Aplica VAD internamente antes de llamar a la API (recorta silencios).
+
         Args:
             wav_buffer: Datos WAV.  El método hace ``seek(0)`` internamente.
             language:   Código ISO del idioma fuente; ``"auto"`` para
@@ -53,30 +60,14 @@ class GroqBackend(TranscriptionBackend):
 
         Returns:
             Texto transcrito con ``strip()``.  Cadena vacía si los datos son
-            insuficientes (<100 bytes).
+            insuficientes (<100 bytes) o si el VAD no detecta voz.
         """
-        wav_buffer.seek(0)
-        data = wav_buffer.read()
-        if len(data) < 100:
+        from core.vad import apply_vad  # noqa: PLC0415
+        vad_result = apply_vad(wav_buffer)
+        if vad_result is None:
+            # Sin voz detectada; no llamar a la API
             return ""
-
-        # whisper-large-v3-turbo tiene detección de idioma degradada;
-        # usar el modelo completo para auto-detect.
-        model = "whisper-large-v3" if (not language or language == "auto") else GROQ_MODEL
-        kwargs = dict(
-            file=("recording.wav", data),
-            model=model,
-            response_format="text",
-            temperature=0.0,
-        )
-        if language and language != "auto":
-            kwargs["language"] = language
-        if prompt:
-            kwargs["prompt"] = prompt
-
-        transcription = self._get_client().audio.transcriptions.create(**kwargs)
-        text = transcription.strip() if isinstance(transcription, str) else str(transcription).strip()
-        return text
+        return self._transcribe_raw(vad_result, language=language, prompt=prompt)
 
     def translate(self, wav_buffer: io.BytesIO, target_lang: str = "en", prompt: str | None = None) -> str:
         """Traduce el audio al idioma destino.
@@ -86,6 +77,8 @@ class GroqBackend(TranscriptionBackend):
         - Otros idiomas: transcribe primero con Whisper, luego traduce con el
           LLM llama-3.1-8b-instant (cualquier par de idiomas).
 
+        Aplica VAD una sola vez al buffer de entrada.
+
         Args:
             wav_buffer: Datos WAV.
             target_lang: Código ISO del idioma destino.
@@ -93,6 +86,12 @@ class GroqBackend(TranscriptionBackend):
         Returns:
             Texto traducido.  Cadena vacía si los datos son insuficientes.
         """
+        from core.vad import apply_vad  # noqa: PLC0415
+        vad_result = apply_vad(wav_buffer)
+        if vad_result is None:
+            return ""
+        wav_buffer = vad_result
+
         wav_buffer.seek(0)
         data = wav_buffer.read()
         if len(data) < 100:
@@ -112,13 +111,11 @@ class GroqBackend(TranscriptionBackend):
             text = translation.strip() if isinstance(translation, str) else str(translation).strip()
             return text
 
-        # Para idiomas distintos de inglés: transcribir primero, luego LLM
+        # Para idiomas distintos de inglés: transcribir primero (VAD ya aplicado),
+        # luego traducir con LLM.  Llamamos _transcribe_raw para no re-aplicar VAD.
         wav_buffer.seek(0)
-        # Usamos WHISPER_LANGUAGE del entorno para la transcripción intermedia;
-        # el caller (Transcriber) ya gestiona el idioma, pero aquí necesitamos
-        # un valor concreto para la llamada interna.
         lang = os.getenv("WHISPER_LANGUAGE", "es")
-        transcript = self.transcribe(wav_buffer, language=lang)
+        transcript = self._transcribe_raw(wav_buffer, language=lang)
         if not transcript:
             return ""
         return self._llm_translate(transcript, target_lang)
@@ -126,6 +123,37 @@ class GroqBackend(TranscriptionBackend):
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _transcribe_raw(
+        self,
+        wav_buffer: io.BytesIO,
+        language: str,
+        prompt: str | None = None,
+    ) -> str:
+        """Transcribe sin aplicar VAD (para uso interno cuando VAD ya se aplicó).
+
+        Hace seek(0) sobre ``wav_buffer`` y envía los datos a la API Groq.
+        """
+        wav_buffer.seek(0)
+        data = wav_buffer.read()
+        if len(data) < 100:
+            return ""
+
+        model = "whisper-large-v3" if (not language or language == "auto") else GROQ_MODEL
+        kwargs = dict(
+            file=("recording.wav", data),
+            model=model,
+            response_format="text",
+            temperature=0.0,
+        )
+        if language and language != "auto":
+            kwargs["language"] = language
+        if prompt:
+            kwargs["prompt"] = prompt
+
+        transcription = self._get_client().audio.transcriptions.create(**kwargs)
+        text = transcription.strip() if isinstance(transcription, str) else str(transcription).strip()
+        return text
 
     def _get_client(self) -> Groq:
         """Lazy init: crea el cliente en el primer uso para que la clave

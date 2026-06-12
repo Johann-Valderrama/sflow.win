@@ -242,6 +242,17 @@ HTML_TEMPLATE = """
                     <span class="text-xs text-white/30 mt-1 block" id="local-download-pct">0%</span>
                 </div>
                 <p class="text-xs text-white/25 mt-2">El modo local solo traduce a inglés; para otros idiomas usa Groq.</p>
+                <!-- Groq Fallback (solo visible cuando backend=local) -->
+                <div class="flex items-start gap-2 mt-3 pt-3 border-t border-white/[0.06]">
+                    <label class="toggle-switch mt-0.5">
+                        <input type="checkbox" id="cfg-groq-fallback">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <div>
+                        <span class="text-xs text-white/50">Permitir Groq como respaldo si el modo local falla</span>
+                        <p class="text-xs text-white/25 mt-0.5">Si se activa, el audio se enviará a Groq cuando el modo local falle.</p>
+                    </div>
+                </div>
             </div>
             <div class="flex justify-end items-center mt-4 gap-3">
                 <span id="cfg-saved" class="text-xs text-green-400" style="opacity:0;transition:opacity 0.3s">Guardado ✓</span>
@@ -682,6 +693,7 @@ HTML_TEMPLATE = """
             // Backend local
             document.getElementById('cfg-backend').value = settings.transcription_backend || 'groq';
             document.getElementById('cfg-local-model').value = settings.local_whisper_model || 'small';
+            document.getElementById('cfg-groq-fallback').checked = settings.groq_fallback === true;
             updateLocalModelSection();
             refreshLocalModelStatus();
         }
@@ -697,6 +709,7 @@ HTML_TEMPLATE = """
                 retention_days: document.getElementById('cfg-retention-days').value,
                 transcription_backend: document.getElementById('cfg-backend').value,
                 local_whisper_model: document.getElementById('cfg-local-model').value,
+                groq_fallback: document.getElementById('cfg-groq-fallback').checked ? 'true' : 'false',
             };
             await fetch('/api/settings', {
                 method: 'POST',
@@ -1165,6 +1178,7 @@ def get_settings():
         "retention_days": int(os.getenv("HISTORY_RETENTION_DAYS", "0") or 0),
         "transcription_backend": os.getenv("TRANSCRIPTION_BACKEND", "groq"),
         "local_whisper_model": os.getenv("LOCAL_WHISPER_MODEL", "small"),
+        "groq_fallback": os.getenv("GROQ_FALLBACK", "false").lower() == "true",
     })
 
 
@@ -1184,6 +1198,7 @@ def update_settings():
         "retention_days": "HISTORY_RETENTION_DAYS",
         "transcription_backend": "TRANSCRIPTION_BACKEND",
         "local_whisper_model": "LOCAL_WHISPER_MODEL",
+        "groq_fallback": "GROQ_FALLBACK",
     }
     for field, env_key in allowed.items():
         if field in data:
