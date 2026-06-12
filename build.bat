@@ -11,6 +11,16 @@ if not defined VIRTUAL_ENV (
     exit /b 1
 )
 
+REM --- Step 0: Auditoría de seguridad (opcional, no aborta el build) ---
+echo [0/4] Auditoria de dependencias ^(pip-audit^)...
+echo   TIP: para instalar desde el lock con hashes: pip install --require-hashes -r requirements.lock
+pip-audit -r requirements.lock 2>nul
+if errorlevel 1 (
+    echo    AVISO: pip-audit no encontrado o detectó vulnerabilidades. Instala con: pip install pip-audit
+    echo    Continua el build de todas formas...
+)
+echo.
+
 REM --- Step 1: Check for icon ---
 echo [1/4] Icono...
 if not exist "Vflow.ico" (

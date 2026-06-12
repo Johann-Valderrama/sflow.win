@@ -1,0 +1,11 @@
+# Top-level dependencies for Vflow (Windows / Python 3.12+)
+# Este archivo es la fuente de verdad para pip-tools.
+# Para regenerar el lock: pip-compile --generate-hashes --output-file requirements.lock requirements.in
+PyQt6
+sounddevice
+numpy
+pynput
+groq
+python-dotenv
+flask
+faster-whisper
