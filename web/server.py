@@ -1144,6 +1144,7 @@ HTML_TEMPLATE = """
         let _mtSegSig = null;
         let _mtInsSig = null;
         let _mtStatusSig = null;
+        let _mtSeenInsightIds = new Set();  // ids ya mostrados → solo los nuevos animan (fade)
 
         function toggleMeeting() {
             const panel = document.getElementById('meeting-panel');
@@ -1188,21 +1189,27 @@ HTML_TEMPLATE = """
                 el.innerHTML = '<div class="text-xs text-white/20">Temas, pendientes y propuestas aparecerán aquí a medida que avance la reunión.</div>';
                 return;
             }
+            // fade solo para ids no vistos antes (los ya mostrados no re-animan)
+            const fadeCls = (id) => {
+                if (id == null) return '';
+                if (_mtSeenInsightIds.has(id)) return '';
+                _mtSeenInsightIds.add(id); return ' mt-fade';
+            };
             let html = '';
             if (temas.length) {
                 html += '<div><div class="text-[11px] uppercase tracking-wide text-white/30 mb-1">Temas</div>'
-                    + temas.map(t => '<div class="text-xs text-white/75 mb-0.5">• ' + escapeHtml(String(t)) + '</div>').join('') + '</div>';
+                    + temas.map(t => '<div class="text-xs text-white/75 mb-0.5' + fadeCls(t.id) + '">• ' + escapeHtml(String(t.text != null ? t.text : t)) + '</div>').join('') + '</div>';
             }
             if (pend.length) {
                 html += '<div><div class="text-[11px] uppercase tracking-wide text-amber-300/50 mb-1">Pendientes</div>'
                     + pend.map(p => {
                         const r = p.responsable ? ' <span class="text-white/35">(' + escapeHtml(String(p.responsable)) + ')</span>' : '';
-                        return '<div class="text-xs text-white/75 mb-0.5">☐ ' + escapeHtml(String(p.texto || '')) + r + '</div>';
+                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">☐ ' + escapeHtml(String(p.texto || '')) + r + '</div>';
                     }).join('') + '</div>';
             }
             if (prop.length) {
                 html += '<div><div class="text-[11px] uppercase tracking-wide text-sky-300/50 mb-1">Propuestas</div>'
-                    + prop.map(p => '<div class="text-xs text-white/75 mb-0.5">💡 ' + escapeHtml(String(p.texto || '')) + '</div>').join('') + '</div>';
+                    + prop.map(p => '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">💡 ' + escapeHtml(String(p.texto || '')) + '</div>').join('') + '</div>';
             }
             el.innerHTML = html;
         }
@@ -1294,6 +1301,7 @@ HTML_TEMPLATE = """
             fb.classList.add('hidden');
             document.getElementById('mt-minutes').classList.add('hidden');  // limpiar acta previa
             _mtSegSig = _mtInsSig = _mtStatusSig = null;  // forzar render limpio de la nueva reunión
+            _mtSeenInsightIds = new Set();
             document.getElementById('mt-transcript').dataset.count = '0';
             try {
                 const res = await fetch('/api/meeting/start', {method:'POST'});

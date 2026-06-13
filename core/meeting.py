@@ -91,8 +91,12 @@ class MeetingSession:
         self._last_error: str | None = None
         self._db: TranscriptionDB | None = None  # lazy: se crea al persistir la 1ª reunión
 
-        # Insight Stream (rolling state): temas / pendientes / propuestas en vivo
-        self._insights: dict = _insights.empty_state()
+        # Insight Stream con IDs estables: el LLM extrae (contrato simple), el código
+        # asigna IDs, deduplica por similitud y NUNCA retira ítems (anti-flicker /
+        # anti-retracción). Cada ítem es un dict con "id". temas: {id,text};
+        # pendientes: {id,texto,responsable}; propuestas: {id,texto,confianza}.
+        self._insights: dict = {"temas": [], "pendientes": [], "propuestas": []}
+        self._next_insight_id = 1
         self._insight_buffer: list = []     # texto nuevo no enviado aún al LLM
         self._insight_running = False       # evita llamadas LLM concurrentes
         self._last_insight_at = 0.0         # monotónico de la última actualización
@@ -165,7 +169,8 @@ class MeetingSession:
             self._sys_frames = []
             self._segments = []
             self._last_error = None
-            self._insights = _insights.empty_state()
+            self._insights = {"temas": [], "pendientes": [], "propuestas": []}
+            self._next_insight_id = 1
             self._insight_buffer = []
             self._insight_running = False
             self._last_insight_at = time.monotonic()
@@ -373,53 +378,132 @@ class MeetingSession:
             delta = "\n".join(self._insight_buffer)
             self._insight_buffer = []
             self._insight_running = True
-            state = dict(self._insights)
+            state = self._store_to_plain()  # el LLM recibe/devuelve texto plano
 
         threading.Thread(target=self._run_insight_update, args=(state, delta), daemon=True).start()
 
-    def _run_insight_update(self, state: dict, delta: str):
-        """Llama al LLM (bloqueante) y publica el nuevo estado. Siempre libera el flag."""
+    def _run_insight_update(self, plain_prev: dict, delta: str):
+        """Llama al LLM (texto plano) y fusiona el resultado en el store con IDs.
+
+        El LLM extrae; el código mantiene la estabilidad: IDs estables por similitud,
+        ítems pegajosos (no se retiran), redacción se actualiza in-situ. Siempre libera el flag.
+        """
         try:
-            new_state = _insights.update_state(state, delta)
+            llm_state = _insights.update_state(plain_prev, delta)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Reunión: error en Insight Stream: %s", exc)
-            new_state = state
+            llm_state = plain_prev
         now = time.monotonic()
         with self._lock:
-            # --- Métricas de fluidez ---
             if self._last_insight_at:
                 self._insight_intervals.append(now - self._last_insight_at)
-            old_items = self._items_set(self._insights)
-            new_items = self._items_set(new_state)
-            if old_items:
-                gone = old_items - new_items  # desaparecieron o cambiaron de texto
-                self._churn_samples.append(len(gone) / len(old_items))
-                self._retractions += len(gone)
+            prev_total = sum(len(self._insights[k]) for k in ("temas", "pendientes", "propuestas"))
+            _added, changed = self._merge_plain_into_store(llm_state)
+            if prev_total:
+                self._churn_samples.append(changed / prev_total)
             self._updates_count += 1
 
-            # Detección de cambio de tema EN CÓDIGO (robusta, sin depender de que el
-            # LLM emita un campo extra): si aparecieron temas nuevos respecto a la
-            # actualización previa, marcamos un cambio de tema pendiente. Lo usa la
-            # consolidación por evento (paso D) para refrescar en momentos naturales.
-            n_temas = len(new_state.get("temas", []))
+            n_temas = len(self._insights["temas"])
             if n_temas > self._prev_topic_count:
-                self._topic_changed_pending = True
+                self._topic_changed_pending = True  # tema nuevo → señal para consolidación (paso D)
             self._prev_topic_count = n_temas
-            self._insights = new_state
             self._insight_running = False
             self._last_insight_at = now
 
-    @staticmethod
-    def _items_set(state: dict) -> set:
-        """Conjunto de textos normalizados (temas + pendientes + propuestas) para medir churn."""
-        items = set()
-        for t in state.get("temas", []):
-            items.add(("tema", str(t).strip().lower()))
-        for p in state.get("pendientes", []):
-            items.add(("pend", str(p.get("texto", "")).strip().lower()))
-        for p in state.get("propuestas", []):
-            items.add(("prop", str(p.get("texto", "")).strip().lower()))
-        return items
+    def _store_to_plain(self) -> dict:
+        """Convierte el store con IDs a texto plano (lo que el LLM recibe y devuelve)."""
+        with self._lock:
+            return {
+                "temas": [t["text"] for t in self._insights["temas"]],
+                "pendientes": [{"texto": p["texto"], "responsable": p.get("responsable")}
+                               for p in self._insights["pendientes"]],
+                "propuestas": [{"texto": p["texto"], "confianza": p.get("confianza", "media")}
+                               for p in self._insights["propuestas"]],
+            }
+
+    def _new_insight_id(self) -> int:
+        i = self._next_insight_id
+        self._next_insight_id += 1
+        return i
+
+    _MATCH_THRESHOLD = 0.65   # similitud de caracteres para considerar mismo ítem
+    _TOKEN_CONTAIN = 0.7      # solapamiento de tokens (robusto ante reformulaciones)
+    _STOPWORDS = frozenset({
+        "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "al",
+        "y", "o", "en", "a", "que", "se", "su", "sus", "lo", "le", "es", "por", "para",
+    })
+
+    @classmethod
+    def _tokens(cls, s: str) -> set:
+        return {w for w in s.strip().lower().split() if w not in cls._STOPWORDS and len(w) >= 2}
+
+    @classmethod
+    def _same_item(cls, a: str, b: str) -> bool:
+        """¿a y b son el mismo ítem? Combina similitud de caracteres y solapamiento de tokens.
+
+        El solapamiento de tokens captura reformulaciones que SequenceMatcher pierde
+        (p. ej. "plazo Q1" vs "el plazo del hito Q1"), sin sobre-fusionar ítems distintos.
+        """
+        import difflib
+        a, b = a.strip().lower(), b.strip().lower()
+        if not a or not b:
+            return False
+        if difflib.SequenceMatcher(None, a, b).ratio() >= cls._MATCH_THRESHOLD:
+            return True
+        ta, tb = cls._tokens(a), cls._tokens(b)
+        if not ta or not tb:
+            return False
+        inter = len(ta & tb)
+        return inter / min(len(ta), len(tb)) >= cls._TOKEN_CONTAIN
+
+    def _merge_plain_into_store(self, plain: dict):
+        """Fusiona el estado plano del LLM en el store con IDs. Devuelve (añadidos, cambiados).
+
+        - Match por similitud → mismo ID (estable), actualiza redacción in-situ.
+        - Sin match → ítem nuevo con ID nuevo.
+        - Los ítems previos que el LLM no devolvió se CONSERVAN (pegajosos): nunca se retiran.
+        """
+        added = changed = 0
+
+        def merge_list(store_list, incoming, text_key):
+            nonlocal added, changed
+            for item in incoming:
+                text = (item if text_key is None else str(item.get(text_key, ""))).strip()
+                if not text:
+                    continue
+                field = "text" if text_key is None else "texto"
+                match = None
+                for e in store_list:
+                    if self._same_item(e[field], text):
+                        match = e
+                        break
+                if match is None:
+                    new_item = {"id": self._new_insight_id()}
+                    if text_key is None:
+                        new_item["text"] = text
+                    else:
+                        new_item["texto"] = text
+                        if "responsable" in item:
+                            new_item["responsable"] = item.get("responsable")
+                        if "confianza" in item:
+                            new_item["confianza"] = item.get("confianza", "media")
+                    store_list.append(new_item)
+                    added += 1
+                else:
+                    cur = match["text" if text_key is None else "texto"]
+                    if cur != text:
+                        match["text" if text_key is None else "texto"] = text
+                        changed += 1
+                    if text_key is not None:
+                        if item.get("responsable"):
+                            match["responsable"] = item.get("responsable")
+                        if item.get("confianza"):
+                            match["confianza"] = item.get("confianza")
+
+        merge_list(self._insights["temas"], plain.get("temas", []), None)
+        merge_list(self._insights["pendientes"], plain.get("pendientes", []), "texto")
+        merge_list(self._insights["propuestas"], plain.get("propuestas", []), "texto")
+        return added, changed
 
     def _fluidity_metrics(self) -> dict:
         """Resumen de métricas de fluidez de la sesión (churn, jitter, retracciones)."""
