@@ -149,6 +149,12 @@ INSIGHTS_ENDPOINT_KEY = os.getenv("INSIGHTS_ENDPOINT_KEY", "lm-studio")
 # los nombres difieren: así conmutar nube↔local desde el dashboard no rompe nada.
 # Recomendados (probados): qwen/qwen2.5-vl-7b (calidad) o llama-3.2-3b-instruct (rápido).
 INSIGHTS_ENDPOINT_MODEL = os.getenv("INSIGHTS_ENDPOINT_MODEL", "qwen/qwen2.5-vl-7b")
+# Consolidación por evento (paso D): una pasada que revisa el análisis con el transcript
+# completo (corrige deriva temprana, fusiona duplicados, añade lo que el incremental perdió).
+# Se dispara por cambio de tema (con cooldown) o como máximo cada N segundos. UNA sola pasada
+# (más iteraciones añaden alucinaciones, según la evidencia). 0 = desactivar consolidación.
+INSIGHTS_CONSOLIDATE_SECONDS = int(os.getenv("INSIGHTS_CONSOLIDATE_SECONDS", "240"))
+INSIGHTS_CONSOLIDATE_COOLDOWN = int(os.getenv("INSIGHTS_CONSOLIDATE_COOLDOWN", "120"))
 # Suelo de max_tokens para el endpoint: los modelos de razonamiento (Qwen3, R1) gastan
 # muchos tokens "pensando" antes del JSON; sin holgura se truncan y devuelven vacío.
 # Los modelos sin razonamiento paran antes (finish=stop), así que subirlo no los penaliza.

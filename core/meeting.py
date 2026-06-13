@@ -35,6 +35,8 @@ from config import (
     MEETING_CHUNK_SECONDS,
     INSIGHTS_MIN_WORDS,
     INSIGHTS_INTERVAL_SECONDS,
+    INSIGHTS_CONSOLIDATE_SECONDS,
+    INSIGHTS_CONSOLIDATE_COOLDOWN,
 )
 from core.recorder import MicSource, LoopbackSource
 from core.transcriber import Transcriber
@@ -102,6 +104,7 @@ class MeetingSession:
         self._last_insight_at = 0.0         # monotónico de la última actualización
         self._prev_topic_count = 0          # nº de temas en la actualización previa
         self._topic_changed_pending = False # un tema nuevo emergió (señal para consolidación)
+        self._last_consolidate_at = 0.0     # monotónico de la última consolidación
         # Métricas de fluidez (instrumentación para medir, no opinar)
         self._insight_intervals: list = []  # segundos entre actualizaciones (jitter)
         self._churn_samples: list = []      # fracción de ítems que cambian por actualización
@@ -176,6 +179,7 @@ class MeetingSession:
             self._last_insight_at = time.monotonic()
             self._prev_topic_count = 0
             self._topic_changed_pending = False
+            self._last_consolidate_at = time.monotonic()
             self._insight_intervals = []
             self._churn_samples = []
             self._retractions = 0
@@ -352,7 +356,10 @@ class MeetingSession:
                 self._segments.append({"t": window_start, "speaker": label, "text": text})
                 self._insight_buffer.append(f"{label}: {text}")
 
-        # Tras incorporar la ventana, evaluar si toca actualizar el Insight Stream
+        # Tras incorporar la ventana: primero la consolidación (si toca, tiene prioridad),
+        # luego la actualización incremental. Ambas comparten el mutex _insight_running,
+        # así que nunca corren a la vez (sin carrera entre los dos escritores del estado).
+        self._maybe_consolidate()
         self._maybe_update_insights()
 
     # ------------------------------------------------------------------
@@ -381,6 +388,48 @@ class MeetingSession:
             state = self._store_to_plain()  # el LLM recibe/devuelve texto plano
 
         threading.Thread(target=self._run_insight_update, args=(state, delta), daemon=True).start()
+
+    def _maybe_consolidate(self):
+        """Dispara la consolidación por evento (cambio de tema con cooldown) o por tiempo máximo.
+
+        Comparte el mutex _insight_running con la actualización incremental: si una está
+        en curso, esta no arranca (y viceversa). Así un solo escritor toca el estado.
+        """
+        if not _insights.is_available() or INSIGHTS_CONSOLIDATE_SECONDS <= 0:
+            return
+        with self._lock:
+            if self._insight_running:
+                return
+            now = time.monotonic()
+            since = now - self._last_consolidate_at
+            due_time = since >= INSIGHTS_CONSOLIDATE_SECONDS
+            due_topic = self._topic_changed_pending and since >= INSIGHTS_CONSOLIDATE_COOLDOWN
+            if not (due_time or due_topic):
+                return
+            if not (self._insights["temas"] or self._insights["pendientes"]):
+                return  # nada que consolidar todavía
+            self._insight_running = True
+            self._last_consolidate_at = now
+            self._topic_changed_pending = False
+
+        threading.Thread(target=self._run_consolidation, daemon=True).start()
+
+    def _run_consolidation(self):
+        """Pasada de consolidación (bloqueante, en hilo). Aplica el resultado de forma
+        aditiva/refinada al store (preserva IDs, no retira ítems). Siempre libera el flag."""
+        plain = self._store_to_plain()
+        transcript = self.transcript_text()
+        try:
+            consolidated = _insights.consolidate(transcript, plain)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Reunión: error en consolidación: %s", exc)
+            consolidated = plain
+        with self._lock:
+            self._merge_plain_into_store(consolidated)
+            self._prev_topic_count = len(self._insights["temas"])
+            self._insight_running = False
+            self._last_insight_at = time.monotonic()
+        logger.info("Reunión: consolidación aplicada con transcript completo.")
 
     def _run_insight_update(self, plain_prev: dict, delta: str):
         """Llama al LLM (texto plano) y fusiona el resultado en el store con IDs.

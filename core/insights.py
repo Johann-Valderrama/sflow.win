@@ -230,6 +230,59 @@ def update_state(state: dict, delta_text: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Consolidación por evento (pasada con contexto completo)
+# ---------------------------------------------------------------------------
+
+_CONSOLIDATE_SYSTEM = (
+    "Eres un analista de reuniones. Recibes la TRANSCRIPCIÓN COMPLETA de la reunión hasta "
+    "ahora y un BORRADOR del análisis acumulado (construido de forma incremental, puede tener "
+    "temas mal nombrados, duplicados o cosas que faltan). Devuelve el análisis CONSOLIDADO como "
+    "objeto JSON con exactamente estas claves:\n"
+    '  "temas": lista de strings\n'
+    '  "pendientes": lista de objetos {"texto": string, "responsable": string|null}\n'
+    '  "propuestas": lista de objetos {"texto": string, "confianza": "alta"|"media"}\n\n'
+    "REGLAS:\n"
+    "- Corrige y mejora con la visión completa: fusiona duplicados, renombra temas confusos, "
+    "añade lo importante que el borrador haya omitido.\n"
+    "- Básate solo en la transcripción; no inventes. Conserva responsables ya identificados.\n"
+    "- Es preferible omitir a inventar. Responde SOLO con el objeto JSON. Todo en español."
+)
+
+
+def consolidate(transcript: str, current: dict) -> dict:
+    """Pasada de consolidación: revisa el análisis con el transcript completo.
+
+    UNA sola llamada (no iterativa). Fail-safe: si el LLM no está disponible o falla,
+    devuelve el estado actual sin cambios.
+    """
+    if not transcript.strip() or not is_available():
+        return current
+    try:
+        content = _chat(
+            messages=[
+                {"role": "system", "content": _CONSOLIDATE_SYSTEM},
+                {"role": "user", "content": f"TRANSCRIPCIÓN COMPLETA:\n{transcript}\n\nBORRADOR ACTUAL:\n{json.dumps(current, ensure_ascii=False)}"},
+            ],
+            json_mode=True,
+            temperature=0.1,
+            max_tokens=1500,
+        )
+        data = _extract_json(content)
+        if not isinstance(data, dict) or "temas" not in data:
+            return current
+        return {
+            "temas": data.get("temas", []) or [],
+            "pendientes": data.get("pendientes", []) or [],
+            "propuestas": data.get("propuestas", []) or [],
+        }
+    except InsightsUnavailable:
+        return current
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Consolidación: error (se conserva el estado actual): %s", exc)
+        return current
+
+
+# ---------------------------------------------------------------------------
 # Acta post-reunión (Meeting Wiki)
 # ---------------------------------------------------------------------------
 
