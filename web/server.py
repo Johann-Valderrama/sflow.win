@@ -384,7 +384,13 @@ HTML_TEMPLATE = """
                 </div>
                 <!-- Insight Stream (temas / pendientes / propuestas) -->
                 <div>
-                    <div class="text-xs text-white/40 mb-1.5">Análisis en vivo</div>
+                    <div class="flex items-center justify-between mb-1.5">
+                        <span class="text-xs text-white/40">Análisis en vivo</span>
+                        <div class="flex gap-1 text-[10px]">
+                            <button id="mt-view-foco" onclick="setMeetingView('foco')" class="px-2 py-0.5 rounded text-white/40 hover:text-white/70" title="Solo lo accionable (menos distracción en reunión)">Foco</button>
+                            <button id="mt-view-revision" onclick="setMeetingView('revision')" class="px-2 py-0.5 rounded bg-purple-600/40 text-purple-200" title="Panel completo: temas, pendientes y propuestas">Revisión</button>
+                        </div>
+                    </div>
                     <div id="mt-insights" class="space-y-3 max-h-96 overflow-y-auto rounded-lg bg-white/[0.02] border border-white/[0.06] p-3">
                         <div class="text-xs text-white/20">Temas, pendientes y propuestas aparecerán aquí a medida que avance la reunión.</div>
                     </div>
@@ -1145,6 +1151,16 @@ HTML_TEMPLATE = """
         let _mtInsSig = null;
         let _mtStatusSig = null;
         let _mtSeenInsightIds = new Set();  // ids ya mostrados → solo los nuevos animan (fade)
+        let _mtViewMode = 'revision';       // 'foco' (mínimo, en reunión) | 'revision' (todo)
+
+        function setMeetingView(mode) {
+            _mtViewMode = mode;
+            const f = document.getElementById('mt-view-foco'), r = document.getElementById('mt-view-revision');
+            f.className = 'px-2 py-0.5 rounded ' + (mode === 'foco' ? 'bg-purple-600/40 text-purple-200' : 'text-white/40 hover:text-white/70');
+            r.className = 'px-2 py-0.5 rounded ' + (mode === 'revision' ? 'bg-purple-600/40 text-purple-200' : 'text-white/40 hover:text-white/70');
+            _mtInsSig = null; _mtSeenInsightIds = new Set();  // forzar re-render en el nuevo modo
+            loadMeeting();
+        }
 
         function toggleMeeting() {
             const panel = document.getElementById('meeting-panel');
@@ -1178,8 +1194,9 @@ HTML_TEMPLATE = """
         function renderInsights(ins) {
             const el = document.getElementById('mt-insights');
             if (!el) return;
-            // Solo repintar si el análisis cambió de verdad (anti-parpadeo)
-            const insSig = JSON.stringify(ins || {});
+            // Solo repintar si el análisis cambió de verdad (anti-parpadeo); la firma
+            // incluye el modo para que cambiar Foco↔Revisión repinte.
+            const insSig = _mtViewMode + '|' + JSON.stringify(ins || {});
             if (insSig === _mtInsSig) return;
             _mtInsSig = insSig;
             const temas = ins.temas || [];
@@ -1195,6 +1212,22 @@ HTML_TEMPLATE = """
                 if (_mtSeenInsightIds.has(id)) return '';
                 _mtSeenInsightIds.add(id); return ' mt-fade';
             };
+            // Modo FOCO: mínima distracción — solo el resumen de conteos + pendientes (lo accionable)
+            if (_mtViewMode === 'foco') {
+                let fhtml = '<div class="text-xs text-white/50 mb-2">' + temas.length + ' temas · '
+                    + pend.length + ' pendientes · ' + prop.length + ' propuestas</div>';
+                if (pend.length) {
+                    fhtml += pend.map(p => {
+                        const r = p.responsable ? ' <span class="text-white/35">(' + escapeHtml(String(p.responsable)) + ')</span>' : '';
+                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">☐ ' + escapeHtml(String(p.texto || '')) + r + '</div>';
+                    }).join('');
+                } else {
+                    fhtml += '<div class="text-[11px] text-white/25">Sin pendientes detectados aún.</div>';
+                }
+                fhtml += '<div class="text-[10px] text-white/20 mt-2">Modo Foco: solo lo accionable. Cambia a Revisión para ver todo.</div>';
+                el.innerHTML = fhtml;
+                return;
+            }
             let html = '';
             if (temas.length) {
                 html += '<div><div class="text-[11px] uppercase tracking-wide text-white/30 mb-1">Temas</div>'
