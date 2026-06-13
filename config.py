@@ -134,7 +134,11 @@ INSIGHTS_ENABLED = os.getenv("INSIGHTS_ENABLED", "true")
 INSIGHTS_BACKEND = os.getenv("INSIGHTS_BACKEND", "groq")
 INSIGHTS_MODEL = os.getenv("INSIGHTS_MODEL", "llama-3.3-70b-versatile")
 INSIGHTS_MIN_WORDS = int(os.getenv("INSIGHTS_MIN_WORDS", "45"))
-INSIGHTS_INTERVAL_SECONDS = int(os.getenv("INSIGHTS_INTERVAL_SECONDS", "90"))
+# Techo de tiempo (fallback): aunque no se acumulen MIN_WORDS, refrescar al menos cada
+# este intervalo para que en tramos tranquilos el análisis no se sienta congelado.
+# Bajado de 90 a 60s para una cadencia más regular (evidencia: políticas adaptativas
+# y deltas pequeños/regulares se perciben más fluidos que saltos grandes y espaciados).
+INSIGHTS_INTERVAL_SECONDS = int(os.getenv("INSIGHTS_INTERVAL_SECONDS", "60"))
 # Backend 'endpoint' (servidor OpenAI-compatible: LM Studio en local, o servidor on-prem).
 # Camino B (probar modelos con LM Studio). El camino A (llama-cpp embebido) queda como
 # evolución futura cuando haya un modelo satisfactorio. Para LM Studio: INSIGHTS_BACKEND=endpoint,

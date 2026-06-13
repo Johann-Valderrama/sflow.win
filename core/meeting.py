@@ -96,6 +96,8 @@ class MeetingSession:
         self._insight_buffer: list = []     # texto nuevo no enviado aún al LLM
         self._insight_running = False       # evita llamadas LLM concurrentes
         self._last_insight_at = 0.0         # monotónico de la última actualización
+        self._prev_topic_count = 0          # nº de temas en la actualización previa
+        self._topic_changed_pending = False # un tema nuevo emergió (señal para consolidación)
 
     # ------------------------------------------------------------------
     # Estado
@@ -162,6 +164,8 @@ class MeetingSession:
             self._insight_buffer = []
             self._insight_running = False
             self._last_insight_at = time.monotonic()
+            self._prev_topic_count = 0
+            self._topic_changed_pending = False
             self._t0 = time.monotonic()
             self._started_at = time.strftime("%Y-%m-%d %H:%M:%S")
             self._mic = MicSource()
@@ -365,6 +369,14 @@ class MeetingSession:
             logger.warning("Reunión: error en Insight Stream: %s", exc)
             new_state = state
         with self._lock:
+            # Detección de cambio de tema EN CÓDIGO (robusta, sin depender de que el
+            # LLM emita un campo extra): si aparecieron temas nuevos respecto a la
+            # actualización previa, marcamos un cambio de tema pendiente. Lo usa la
+            # consolidación por evento (paso D) para refrescar en momentos naturales.
+            n_temas = len(new_state.get("temas", []))
+            if n_temas > self._prev_topic_count:
+                self._topic_changed_pending = True
+            self._prev_topic_count = n_temas
             self._insights = new_state
             self._insight_running = False
             self._last_insight_at = time.monotonic()
