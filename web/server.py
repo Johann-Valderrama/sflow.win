@@ -148,6 +148,9 @@ HTML_TEMPLATE = """
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
         body { font-family: 'Inter', system-ui, sans-serif; background: #0a0a0a; color: #e5e5e5; }
         .glass { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); }
+        /* Entrada suave de nuevos segmentos/insights del modo reunión (anti-parpadeo) */
+        .mt-fade { animation: mtFade 0.25s ease-out; }
+        @keyframes mtFade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
         .row-hover:hover { background: rgba(255,255,255,0.05); }
         .text-preview { max-height: 2.6em; overflow: hidden; transition: max-height 0.3s ease; }
         .text-preview.expanded { max-height: 500px; }
@@ -1136,6 +1139,11 @@ HTML_TEMPLATE = """
 
         // ---- Modo reunión (captura dual mic + sistema) ----
         let _mtPollInterval = null;
+        // Firmas del último render: evitan repintar el DOM si el contenido no cambió
+        // (esto mata el "parpadeo" de reemplazar todo el bloque cada 2s).
+        let _mtSegSig = null;
+        let _mtInsSig = null;
+        let _mtStatusSig = null;
 
         function toggleMeeting() {
             const panel = document.getElementById('meeting-panel');
@@ -1169,6 +1177,10 @@ HTML_TEMPLATE = """
         function renderInsights(ins) {
             const el = document.getElementById('mt-insights');
             if (!el) return;
+            // Solo repintar si el análisis cambió de verdad (anti-parpadeo)
+            const insSig = JSON.stringify(ins || {});
+            if (insSig === _mtInsSig) return;
+            _mtInsSig = insSig;
             const temas = ins.temas || [];
             const pend = ins.pendientes || [];
             const prop = (ins.propuestas || []).filter(p => (p.confianza || 'alta') === 'alta');
@@ -1224,39 +1236,65 @@ HTML_TEMPLATE = """
             const statusEl = document.getElementById('mt-status');
             const container = document.getElementById('mt-transcript');
 
-            if (status.active) {
-                startBtn.classList.add('hidden');
-                stopBtn.classList.remove('hidden');
-                let txt = 'Grabando ' + (status.elapsed_fmt || '00:00') + ' · ' + (status.segment_count || 0) + ' intervenciones';
-                if (status.sys_available === false) txt += ' · solo micrófono';
-                statusEl.textContent = txt;
-                statusEl.className = 'text-xs text-red-300';
-            } else {
-                startBtn.classList.remove('hidden');
-                stopBtn.classList.add('hidden');
-                statusEl.textContent = '';
+            // Estado/botones: solo tocar el DOM si cambió (anti-parpadeo)
+            const thinking = status.active && status.insight_running ? ' · analizando…' : '';
+            const statusSig = JSON.stringify([status.active, status.elapsed_fmt, status.segment_count, status.sys_available, !!status.insight_running]);
+            if (statusSig !== _mtStatusSig) {
+                _mtStatusSig = statusSig;
+                if (status.active) {
+                    startBtn.classList.add('hidden');
+                    stopBtn.classList.remove('hidden');
+                    let txt = 'Grabando ' + (status.elapsed_fmt || '00:00') + ' · ' + (status.segment_count || 0) + ' intervenciones';
+                    if (status.sys_available === false) txt += ' · solo micrófono';
+                    statusEl.textContent = txt + thinking;
+                    statusEl.className = 'text-xs text-red-300';
+                } else {
+                    startBtn.classList.remove('hidden');
+                    stopBtn.classList.add('hidden');
+                    statusEl.textContent = '';
+                }
             }
+
+            // Transcript: render incremental. Solo añade los segmentos nuevos al final
+            // (append) en vez de reconstruir todo el bloque → sin parpadeo ni saltos de scroll.
+            const segSig = segments.length + ':' + (segments.length ? segments[segments.length - 1].text.slice(0, 24) : '');
+            if (segSig === _mtSegSig) return;  // nada nuevo
+            const prevCount = (_mtSegSig && container.dataset.count) ? parseInt(container.dataset.count, 10) : 0;
+            _mtSegSig = segSig;
 
             if (!segments.length) {
                 container.innerHTML = status.active
                     ? '<div class="text-xs text-white/20">Escuchando… el texto aparecerá cada ~20s.</div>'
                     : '<div class="text-xs text-white/20">El transcript en vivo aparecerá aquí cuando inicies una reunión.</div>';
+                container.dataset.count = '0';
                 return;
             }
-            container.innerHTML = segments.map(s => {
+            const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 60;
+            if (prevCount === 0 || prevCount > segments.length) {
+                container.innerHTML = '';  // primer render o reset
+            }
+            const start = (prevCount > 0 && prevCount <= segments.length) ? prevCount : 0;
+            if (start === 0) container.innerHTML = '';
+            for (let i = start; i < segments.length; i++) {
+                const s = segments[i];
                 const color = (s.speaker === 'Yo') ? 'text-purple-300' : 'text-sky-300';
-                return '<div class="text-sm text-white/80 leading-snug">'
-                    + '<span class="text-[10px] font-mono text-white/30 mr-1">' + s.time + '</span>'
+                const div = document.createElement('div');
+                div.className = 'text-sm text-white/80 leading-snug mt-fade';
+                div.innerHTML = '<span class="text-[10px] font-mono text-white/30 mr-1">' + s.time + '</span>'
                     + '<span class="text-xs font-medium ' + color + ' mr-1">' + s.speaker + ':</span>'
-                    + escapeHtml(s.text) + '</div>';
-            }).join('');
-            container.scrollTop = container.scrollHeight;
+                    + escapeHtml(s.text);
+                container.appendChild(div);
+            }
+            container.dataset.count = String(segments.length);
+            if (nearBottom) container.scrollTop = container.scrollHeight;  // solo auto-scroll si ya estabas abajo
         }
 
         async function startMeeting() {
             const fb = document.getElementById('mt-feedback');
             fb.classList.add('hidden');
             document.getElementById('mt-minutes').classList.add('hidden');  // limpiar acta previa
+            _mtSegSig = _mtInsSig = _mtStatusSig = null;  // forzar render limpio de la nueva reunión
+            document.getElementById('mt-transcript').dataset.count = '0';
             try {
                 const res = await fetch('/api/meeting/start', {method:'POST'});
                 const data = await res.json();

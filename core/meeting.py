@@ -117,6 +117,7 @@ class MeetingSession:
                 "elapsed_fmt": _fmt_mmss(self._elapsed()) if self._active else "00:00",
                 "segment_count": len(self._segments),
                 "sys_available": self._sys_available,
+                "insight_running": self._insight_running,
                 "error": self._last_error,
             }
 
