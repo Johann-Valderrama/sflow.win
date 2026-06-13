@@ -98,6 +98,11 @@ class MeetingSession:
         self._last_insight_at = 0.0         # monotónico de la última actualización
         self._prev_topic_count = 0          # nº de temas en la actualización previa
         self._topic_changed_pending = False # un tema nuevo emergió (señal para consolidación)
+        # Métricas de fluidez (instrumentación para medir, no opinar)
+        self._insight_intervals: list = []  # segundos entre actualizaciones (jitter)
+        self._churn_samples: list = []      # fracción de ítems que cambian por actualización
+        self._retractions = 0               # ítems que aparecieron y desaparecieron sin resolverse
+        self._updates_count = 0
 
     # ------------------------------------------------------------------
     # Estado
@@ -166,6 +171,10 @@ class MeetingSession:
             self._last_insight_at = time.monotonic()
             self._prev_topic_count = 0
             self._topic_changed_pending = False
+            self._insight_intervals = []
+            self._churn_samples = []
+            self._retractions = 0
+            self._updates_count = 0
             self._t0 = time.monotonic()
             self._started_at = time.strftime("%Y-%m-%d %H:%M:%S")
             self._mic = MicSource()
@@ -254,7 +263,13 @@ class MeetingSession:
             except Exception as exc:  # noqa: BLE001
                 logger.error("No se pudo guardar la reunión en la DB: %s", exc)
 
+        metrics = self._fluidity_metrics()
         logger.info("Reunión detenida: %.0fs, %d segmentos (guardada=%s).", duration, len(segments), saved)
+        logger.info(
+            "Fluidez: %d updates, churn_avg=%.3f, retracciones=%d, intervalo=%.1fs (jitter=%.1fs)",
+            metrics["updates"], metrics["churn_avg"], metrics["retractions"],
+            metrics["interval_avg_s"], metrics["interval_jitter_s"],
+        )
         return {
             "ok": True,
             "duration_seconds": duration,
@@ -262,6 +277,7 @@ class MeetingSession:
             "segments": segments,
             "insights": insights,
             "minutes": minutes,
+            "metrics": metrics,
             "started_at": self._started_at,
             "meeting_id": meeting_id,
             "saved": saved,
@@ -368,7 +384,19 @@ class MeetingSession:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Reunión: error en Insight Stream: %s", exc)
             new_state = state
+        now = time.monotonic()
         with self._lock:
+            # --- Métricas de fluidez ---
+            if self._last_insight_at:
+                self._insight_intervals.append(now - self._last_insight_at)
+            old_items = self._items_set(self._insights)
+            new_items = self._items_set(new_state)
+            if old_items:
+                gone = old_items - new_items  # desaparecieron o cambiaron de texto
+                self._churn_samples.append(len(gone) / len(old_items))
+                self._retractions += len(gone)
+            self._updates_count += 1
+
             # Detección de cambio de tema EN CÓDIGO (robusta, sin depender de que el
             # LLM emita un campo extra): si aparecieron temas nuevos respecto a la
             # actualización previa, marcamos un cambio de tema pendiente. Lo usa la
@@ -379,7 +407,33 @@ class MeetingSession:
             self._prev_topic_count = n_temas
             self._insights = new_state
             self._insight_running = False
-            self._last_insight_at = time.monotonic()
+            self._last_insight_at = now
+
+    @staticmethod
+    def _items_set(state: dict) -> set:
+        """Conjunto de textos normalizados (temas + pendientes + propuestas) para medir churn."""
+        items = set()
+        for t in state.get("temas", []):
+            items.add(("tema", str(t).strip().lower()))
+        for p in state.get("pendientes", []):
+            items.add(("pend", str(p.get("texto", "")).strip().lower()))
+        for p in state.get("propuestas", []):
+            items.add(("prop", str(p.get("texto", "")).strip().lower()))
+        return items
+
+    def _fluidity_metrics(self) -> dict:
+        """Resumen de métricas de fluidez de la sesión (churn, jitter, retracciones)."""
+        import statistics
+        churn = round(sum(self._churn_samples) / len(self._churn_samples), 3) if self._churn_samples else 0.0
+        jitter = round(statistics.pstdev(self._insight_intervals), 1) if len(self._insight_intervals) > 1 else 0.0
+        avg_interval = round(sum(self._insight_intervals) / len(self._insight_intervals), 1) if self._insight_intervals else 0.0
+        return {
+            "updates": self._updates_count,
+            "churn_avg": churn,            # fracción media de ítems que cambian/desaparecen (↓ mejor)
+            "retractions": self._retractions,  # ítems retirados sin resolver (↓ mejor, ideal 0)
+            "interval_avg_s": avg_interval,
+            "interval_jitter_s": jitter,  # desviación del intervalo entre updates (↓ = más regular)
+        }
 
 
 # Singleton de proceso compartido entre el controlador Qt y el servidor Flask.
