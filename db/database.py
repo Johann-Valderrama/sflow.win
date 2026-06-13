@@ -48,6 +48,9 @@ class TranscriptionDB:
         "ALTER TABLE dictionary ADD COLUMN hit_count INTEGER DEFAULT 0",
         # v1.2: columna source en transcripciones para registrar fuente de audio
         "ALTER TABLE transcriptions ADD COLUMN source TEXT DEFAULT 'mic'",
+        # Modo reunión: insights (Insight Stream) y acta (minutes) por reunión
+        "ALTER TABLE meetings ADD COLUMN insights_json TEXT",
+        "ALTER TABLE meetings ADD COLUMN minutes_json TEXT",
     ]
 
     # DDL adicional para la cola de URLs (Fase 3, paso 2)
@@ -63,6 +66,19 @@ class TranscriptionDB:
         created_at TEXT DEFAULT (datetime('now'))
     )"""
 
+    # DDL para reuniones (modo reunión: captura dual mic+loopback)
+    _MEETINGS_DDL = """CREATE TABLE IF NOT EXISTS meetings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT,
+        transcript TEXT,
+        segments_json TEXT,
+        insights_json TEXT,
+        minutes_json TEXT,
+        duration_seconds REAL,
+        started_at TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+    )"""
+
     def _init_db(self):
         """Crea la tabla de transcripciones y el índice por fecha si no existen."""
         try:
@@ -71,6 +87,7 @@ class TranscriptionDB:
                 for ddl in self._DDL:
                     conn.execute(ddl)
                 conn.execute(self._URL_QUEUE_DDL)
+                conn.execute(self._MEETINGS_DDL)
                 conn.commit()
                 # Migraciones seguras: ignorar "duplicate column" si ya existen
                 for migration in self._MIGRATIONS:
@@ -98,6 +115,7 @@ class TranscriptionDB:
                 for ddl in self._DDL:
                     conn.execute(ddl)
                 conn.execute(self._URL_QUEUE_DDL)
+                conn.execute(self._MEETINGS_DDL)
     def insert(self, text: str, language: str = None, duration_seconds: float = None, model: str = "whisper-large-v3-turbo", source: str = "mic") -> int:
         """Inserta una transcripción y retorna su ID."""
         with sqlite3.connect(self.db_path) as conn:
@@ -346,6 +364,43 @@ class TranscriptionDB:
             if status in counts:
                 counts[status] = cnt
         return counts
+
+    # ------------------------------------------------------------------
+    # Reuniones (modo reunión)
+    # ------------------------------------------------------------------
+
+    def meeting_insert(self, title: str, transcript: str, segments_json: str,
+                       duration_seconds: float, started_at: str = None,
+                       insights_json: str = None, minutes_json: str = None) -> int:
+        """Inserta una reunión finalizada y devuelve su id."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "INSERT INTO meetings (title, transcript, segments_json, insights_json, "
+                "minutes_json, duration_seconds, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (title, transcript, segments_json, insights_json, minutes_json,
+                 duration_seconds, started_at),
+            )
+            return cursor.lastrowid
+
+    def meetings_recent(self, limit: int = 20) -> list:
+        """Devuelve las reuniones más recientes (sin el transcript completo, para listar)."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, title, duration_seconds, started_at, created_at "
+                "FROM meetings ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def meeting_get(self, meeting_id: int) -> dict | None:
+        """Devuelve una reunión completa (con transcript y segmentos) por id."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM meetings WHERE id = ?", (meeting_id,)
+            ).fetchone()
+            return dict(row) if row else None
 
     def prune_older_than(self, days: int) -> int:
         """Elimina transcripciones más antiguas que *days* días.

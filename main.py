@@ -42,6 +42,7 @@ from ui.pill_widget import PillWidget
 from core.recorder import AudioRecorder
 from core.transcriber import Transcriber
 from core.hotkey import HotkeyListener
+from core.meeting import MEETING
 from core.clipboard import paste_text, copy_text, save_frontmost_app
 from core.secrets import encrypt
 from db.database import TranscriptionDB
@@ -282,7 +283,7 @@ def _set_audio_source_env(source: str):
 # ---------------------------------------------------------------------------
 # Bandeja del sistema
 # ---------------------------------------------------------------------------
-def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
+def _setup_tray(app: QApplication, port: int, vflow: "VflowApp") -> QSystemTrayIcon:
     """Crea el icono de bandeja del sistema con menú de dashboard, auto-inicio y salir."""
     pixmap = QPixmap(LOGO_PATH)
     if pixmap.isNull():
@@ -336,6 +337,22 @@ def _setup_tray(app: QApplication, port: int) -> QSystemTrayIcon:
     menu.addAction(src_sys)
     menu.addSeparator()
 
+    # Modo reunión (captura dual mic + sistema). Es un MODO, no una fuente de
+    # dictado: comparte la misma vía que el hotkey AltGr+R (toggle iniciar/terminar).
+    meeting_action = QAction("Iniciar reunión (AltGr+R)", menu)
+
+    def _on_meeting_action():
+        vflow.hotkey.meeting_toggle.emit()
+
+    def _refresh_meeting_label():
+        meeting_action.setText("Terminar reunión" if MEETING.is_active() else "Iniciar reunión (AltGr+R)")
+
+    meeting_action.triggered.connect(_on_meeting_action)
+    # Actualizar el texto del item al abrir el menú (refleja el estado real)
+    menu.aboutToShow.connect(_refresh_meeting_label)
+    menu.addAction(meeting_action)
+    menu.addSeparator()
+
     quit_action = QAction("Salir", menu)
     quit_action.triggered.connect(app.quit)
     menu.addAction(quit_action)
@@ -355,6 +372,7 @@ class VflowApp(QObject):
     transcription_done = pyqtSignal(str, float, int)   # text, duration, generation
     transcription_error = pyqtSignal(str, int)          # error_msg, generation
     paste_finished = pyqtSignal(str)                    # "pasted" | "clipboard_only" | "failed"
+    meeting_stopped = pyqtSignal(object)                # dict resultado de MEETING.stop()
 
     def __init__(self):
         """Inicializa componentes (recorder, transcriber, DB, hotkey, pill) y conecta señales."""
@@ -404,6 +422,15 @@ class VflowApp(QObject):
         self._last_samples_seen = 0
         self._mic_stall_count = 0
 
+        # Sincronización de la pill con el estado de la reunión: la reunión puede
+        # iniciarse/terminarse desde el dashboard (hilo Flask, fuera de este controlador),
+        # así que sondeamos MEETING para reflejar el estado en la pill en todos los casos.
+        self._meeting_active_seen = False
+        self._meeting_stopping = False  # True mientras un stop por hotkey/tray está en curso
+        self._meeting_sync_timer = QTimer()
+        self._meeting_sync_timer.setInterval(1000)
+        self._meeting_sync_timer.timeout.connect(self._sync_meeting_pill)
+
         # Conectar visualizador a la cola de audio del recorder
         self.pill.visualizer.set_audio_queue(self.recorder.audio_queue)
 
@@ -411,6 +438,8 @@ class VflowApp(QObject):
         self.hotkey.pressed.connect(self._on_hotkey_pressed, Qt.ConnectionType.QueuedConnection)
         self.hotkey.released.connect(self._on_hotkey_released, Qt.ConnectionType.QueuedConnection)
         self.hotkey.translate_pressed.connect(self._on_translate_pressed, Qt.ConnectionType.QueuedConnection)
+        self.hotkey.meeting_toggle.connect(self._on_meeting_toggle, Qt.ConnectionType.QueuedConnection)
+        self.meeting_stopped.connect(self._on_meeting_stopped, Qt.ConnectionType.QueuedConnection)
         self.transcription_done.connect(self._on_transcription_done, Qt.ConnectionType.QueuedConnection)
         self.transcription_error.connect(self._on_transcription_error, Qt.ConnectionType.QueuedConnection)
         self.paste_finished.connect(self._on_paste_finished, Qt.ConnectionType.QueuedConnection)
@@ -420,6 +449,7 @@ class VflowApp(QObject):
         self.hotkey.start()
         self.pill.show()
         self.pill.set_state(PillWidget.STATE_IDLE)
+        self._meeting_sync_timer.start()
 
     @pyqtSlot()
     def _on_hotkey_pressed(self):
@@ -685,6 +715,112 @@ class VflowApp(QObject):
                     4000,
                 )
 
+    # ------------------------------------------------------------------
+    # Modo reunión (captura dual mic + loopback)
+    # ------------------------------------------------------------------
+
+    @pyqtSlot()
+    def _on_meeting_toggle(self):
+        """Inicia o termina una reunión (AltGr+R, tray o dashboard usan esta vía).
+
+        Iniciar es rápido; terminar bloquea (flush + transcripción final), así que
+        el stop corre en un hilo y notifica el resultado vía la señal meeting_stopped.
+        """
+        if MEETING.is_active():
+            # Terminar: puede tardar (flush final). Pill a "procesando".
+            self._meeting_stopping = True  # el poller no debe pisar este flujo
+            self.pill.set_state(PillWidget.STATE_PROCESSING)
+            threading.Thread(target=self._meeting_stop_worker, daemon=True).start()
+            return
+
+        # Iniciar
+        res = MEETING.start()
+        if res.get("ok"):
+            self._meeting_active_seen = True  # sincronizar con el poller
+            self.pill.set_state(PillWidget.STATE_RECORDING)
+            if self.tray:
+                extra = "" if res.get("sys_available", True) else " (solo micrófono: no se detectó audio del sistema)"
+                self.tray.showMessage(
+                    "Vflow — Reunión",
+                    f"Reunión iniciada.{extra} Abre el dashboard para ver el transcript en vivo.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    4000,
+                )
+        else:
+            self.pill.set_state(PillWidget.STATE_ERROR)
+            if self.tray:
+                self.tray.showMessage(
+                    "Vflow — Reunión",
+                    res.get("error", "No se pudo iniciar la reunión."),
+                    QSystemTrayIcon.MessageIcon.Critical,
+                    4000,
+                )
+
+    def _meeting_stop_worker(self):
+        """Detiene la reunión en background (bloquea) y emite el resultado al hilo Qt."""
+        try:
+            res = MEETING.stop()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Error al detener la reunión: %s", exc)
+            res = {"ok": False, "error": str(exc)}
+        self.meeting_stopped.emit(res)
+
+    @pyqtSlot(object)
+    def _on_meeting_stopped(self, res: dict):
+        """Persiste la reunión finalizada y notifica el resultado."""
+        self._meeting_stopping = False
+        self._meeting_active_seen = False  # sincronizar con el poller
+        if not res.get("ok"):
+            self.pill.set_state(PillWidget.STATE_ERROR)
+            if self.tray:
+                self.tray.showMessage(
+                    "Vflow — Reunión",
+                    res.get("error", "Error al terminar la reunión."),
+                    QSystemTrayIcon.MessageIcon.Critical,
+                    4000,
+                )
+            return
+
+        transcript = (res.get("transcript") or "").strip()
+        segments = res.get("segments") or []
+        duration = res.get("duration_seconds", 0)
+        saved = res.get("saved", False)  # la persistencia ocurre dentro de MEETING.stop()
+
+        self.pill.set_state(PillWidget.STATE_DONE)
+        if self.tray:
+            mins = int(duration // 60)
+            secs = int(duration % 60)
+            if not transcript:
+                msg = "Reunión terminada (sin transcripción: no se detectó voz)."
+            elif saved:
+                msg = f"Reunión guardada: {len(segments)} intervenciones, {mins:02d}:{secs:02d}."
+            else:
+                msg = f"Reunión terminada: {len(segments)} intervenciones (historial desactivado, no guardada)."
+            self.tray.showMessage("Vflow — Reunión", msg, QSystemTrayIcon.MessageIcon.Information, 5000)
+
+    @pyqtSlot()
+    def _sync_meeting_pill(self):
+        """Sincroniza la pill con el estado real de la reunión (poll cada 1s).
+
+        Necesario porque la reunión puede iniciarse/terminarse desde el dashboard
+        (hilo Flask), fuera de este controlador. Cubre el bug de la pill "atascada"
+        en modo grabación cuando inicias con AltGr+R y terminas desde el dashboard.
+        No toca la pill si hay un dictado en curso, ni pisa el flujo de stop por hotkey.
+        """
+        active = MEETING.is_active()
+        if active == self._meeting_active_seen:
+            return
+        self._meeting_active_seen = active
+        if self._recording_active:
+            return  # hay un dictado en curso: no interferir con su pill
+        if active:
+            # Reunión iniciada desde fuera (dashboard) → reflejar en la pill
+            self.pill.set_state(PillWidget.STATE_RECORDING)
+        elif not self._meeting_stopping:
+            # Reunión terminada desde fuera (dashboard). Si fue por hotkey/tray,
+            # _on_meeting_stopped ya gestiona la pill (_meeting_stopping=True).
+            self.pill.set_state(PillWidget.STATE_DONE)
+
     @pyqtSlot()
     def _check_mic_alive(self):
         """Detecta si el micrófono dejó de entregar audio durante la grabación.
@@ -810,7 +946,7 @@ def main():
     app.aboutToQuit.connect(vflow.hotkey.stop)
 
     # Icono de bandeja del sistema
-    tray = _setup_tray(app, port)  # noqa: F841 — debe mantenerse la referencia viva
+    tray = _setup_tray(app, port, vflow)  # noqa: F841 — debe mantenerse la referencia viva
     vflow.tray = tray  # exponer tray al controlador para mensajes de notificación
 
     logger.info("Vflow v%s activo. Dashboard en http://localhost:%s", APP_VERSION, port)

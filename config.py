@@ -119,6 +119,37 @@ BAR_GAIN = 8.0
 CHUNK_SECONDS = 60        # Transcribe every 60s during recording
 CHUNK_OVERLAP_SECONDS = 1 # Overlap between chunks to avoid cutting words
 
+# Modo reunión (captura dual mic + loopback)
+# Cada cuántos segundos se cierra una ventana por canal y se transcribe en vivo.
+# Más corto = transcript más "en vivo" pero más llamadas; ~20s es buen balance para actas.
+MEETING_CHUNK_SECONDS = int(os.getenv("MEETING_CHUNK_SECONDS", "20"))
+
+# Capa inteligente del modo reunión (Insight Stream + acta LLM)
+# INSIGHTS_ENABLED: activa/desactiva temas-pendientes-propuestas en vivo + acta final.
+# INSIGHTS_BACKEND: 'groq' (default; reutiliza GROQ_API_KEY). 'local'/'endpoint' = siguiente fase.
+# INSIGHTS_MODEL: modelo LLM (Groq). 70B por defecto: calidad alta, ~$0.04/reunión.
+# INSIGHTS_MIN_WORDS / INSIGHTS_INTERVAL_SECONDS: disparo del rolling state por delta acumulado
+#   (cuántas palabras nuevas) O por tiempo, lo que ocurra primero. Prefiere callar a inventar.
+INSIGHTS_ENABLED = os.getenv("INSIGHTS_ENABLED", "true")
+INSIGHTS_BACKEND = os.getenv("INSIGHTS_BACKEND", "groq")
+INSIGHTS_MODEL = os.getenv("INSIGHTS_MODEL", "llama-3.3-70b-versatile")
+INSIGHTS_MIN_WORDS = int(os.getenv("INSIGHTS_MIN_WORDS", "45"))
+INSIGHTS_INTERVAL_SECONDS = int(os.getenv("INSIGHTS_INTERVAL_SECONDS", "90"))
+# Backend 'endpoint' (servidor OpenAI-compatible: LM Studio en local, o servidor on-prem).
+# Camino B (probar modelos con LM Studio). El camino A (llama-cpp embebido) queda como
+# evolución futura cuando haya un modelo satisfactorio. Para LM Studio: INSIGHTS_BACKEND=endpoint,
+# INSIGHTS_ENDPOINT_URL=http://localhost:1234/v1, INSIGHTS_MODEL=<id del modelo, ej. qwen/qwen3.5-9b>.
+INSIGHTS_ENDPOINT_URL = os.getenv("INSIGHTS_ENDPOINT_URL", "http://localhost:1234/v1")
+INSIGHTS_ENDPOINT_KEY = os.getenv("INSIGHTS_ENDPOINT_KEY", "lm-studio")
+# Modelo para el backend 'endpoint' (LM Studio). Separado de INSIGHTS_MODEL (Groq) porque
+# los nombres difieren: así conmutar nube↔local desde el dashboard no rompe nada.
+# Recomendados (probados): qwen/qwen2.5-vl-7b (calidad) o llama-3.2-3b-instruct (rápido).
+INSIGHTS_ENDPOINT_MODEL = os.getenv("INSIGHTS_ENDPOINT_MODEL", "qwen/qwen2.5-vl-7b")
+# Suelo de max_tokens para el endpoint: los modelos de razonamiento (Qwen3, R1) gastan
+# muchos tokens "pensando" antes del JSON; sin holgura se truncan y devuelven vacío.
+# Los modelos sin razonamiento paran antes (finish=stop), así que subirlo no los penaliza.
+INSIGHTS_ENDPOINT_MAX_TOKENS = int(os.getenv("INSIGHTS_ENDPOINT_MAX_TOKENS", "2500"))
+
 # Recording safety net
 MAX_RECORDING_SECONDS = 600  # Auto-stop forgotten recordings (e.g. hands-free mode)
 

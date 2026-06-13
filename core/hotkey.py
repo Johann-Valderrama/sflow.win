@@ -31,6 +31,7 @@ class HotkeyListener(QObject):
     pressed = pyqtSignal()
     released = pyqtSignal()
     translate_pressed = pyqtSignal()
+    meeting_toggle = pyqtSignal()  # AltGr+R: iniciar/terminar modo reunión (toggle)
 
     def __init__(self):
         """Inicializa el estado de teclas, el timer de armado y la detección de triple-tap."""
@@ -144,6 +145,17 @@ class HotkeyListener(QObject):
         # el vk siempre es 0x54 en teclados PC estándar bajo Windows.
         _T_VK = 0x54
         is_t = hasattr(key, 'vk') and key.vk == _T_VK
+        # Detectar 'R' por vk (0x52) para el toggle de reunión (AltGr+R), robusto
+        # ante layouts igual que la detección de 'T'.
+        _R_VK = 0x52
+        is_r = hasattr(key, 'vk') and key.vk == _R_VK
+
+        # --- Modo Reunión: toggle AltGr + R (independiente del dictado) ---
+        # La reunión es una sesión propia (core.meeting.MEETING), no usa la máquina
+        # de estados de dictado: solo emite la señal y el slot decide iniciar/terminar.
+        if is_r and self._alt_gr_held:
+            self.meeting_toggle.emit()
+            return
 
         # --- Modo 4: toggle AltGr + T (traducir, manos-libres) ---
         if is_t and self._alt_gr_held:

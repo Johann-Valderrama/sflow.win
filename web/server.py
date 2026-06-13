@@ -10,6 +10,7 @@ from dotenv import set_key
 from db.database import TranscriptionDB
 from config import APP_DATA_DIR
 from core import dictionary as _dictionary
+from core.meeting import MEETING
 
 # ---------------------------------------------------------------------------
 # Estado de descarga del modelo local (compartido entre endpoints)
@@ -239,6 +240,7 @@ HTML_TEMPLATE = """
                 <button onclick="toggleDictionary()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Diccionario">&#128218;</button>
                 <button onclick="toggleShortcuts()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Atajos de teclado">&#9000;</button>
                 <button onclick="toggleUrlQueue()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Transcribir desde URL">&#9654;</button>
+                <button onclick="toggleMeeting()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Reunión en vivo (mic + sistema)">&#127908;</button>
             </div>
         </div>
 
@@ -286,6 +288,15 @@ HTML_TEMPLATE = """
                     <p class="text-xs text-white/70 font-medium">Traducir — manos libres (toggle)</p>
                     <p class="text-xs text-white/35 mt-0.5">Primera pulsación inicia la grabación; segunda pulsación la detiene y pega la traducción.</p>
                     <p class="text-xs text-white/25 mt-0.5">(con backend local: solo →inglés)</p>
+                </div>
+                <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                    <div class="flex items-center gap-2 mb-1.5">
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">AltGr</kbd>
+                        <span class="text-white/30 text-xs">+</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">R</kbd>
+                    </div>
+                    <p class="text-xs text-white/70 font-medium">Reunión — captura dual (toggle)</p>
+                    <p class="text-xs text-white/35 mt-0.5">Inicia/termina una reunión capturando tu micrófono («Yo») y el audio del sistema («Ellos») a la vez. El transcript en vivo aparece en el panel 🎙.</p>
                 </div>
             </div>
             <p class="text-xs text-white/25 mt-4">El idioma de transcripción y el idioma de destino (traducción) se configuran en el panel de Configuración.</p>
@@ -338,6 +349,49 @@ HTML_TEMPLATE = """
             </div>
             <div id="uq-list" class="space-y-1 max-h-64 overflow-y-auto">
                 <div class="text-xs text-white/20">Sin items en la cola.</div>
+            </div>
+        </div>
+
+        <!-- Meeting panel (reunión en vivo) -->
+        <div id="meeting-panel" class="glass rounded-xl p-5 mb-6 hidden">
+            <div class="text-sm font-medium text-white/60 mb-1">Reunión en vivo</div>
+            <p class="text-xs text-white/30 mb-3">Captura tu micrófono («Yo») y el audio del sistema («Ellos») a la vez y transcribe en vivo. Inicia/termina también con <kbd class="px-1.5 py-0.5 text-[10px] font-mono rounded border border-white/20 bg-white/[0.07]">AltGr</kbd>+<kbd class="px-1.5 py-0.5 text-[10px] font-mono rounded border border-white/20 bg-white/[0.07]">R</kbd> o desde la bandeja. Para mejor diarización usa auriculares.</p>
+
+            <div class="flex items-center gap-3 mb-3">
+                <button onclick="startMeeting()" id="mt-start"
+                    class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 whitespace-nowrap">
+                    &#9654; Iniciar reunión
+                </button>
+                <button onclick="stopMeeting()" id="mt-stop"
+                    class="text-xs px-3 py-1.5 rounded bg-red-600/30 text-red-300 hover:bg-red-600/50 whitespace-nowrap hidden">
+                    &#9632; Terminar reunión
+                </button>
+                <span id="mt-status" class="text-xs text-white/40"></span>
+            </div>
+
+            <div id="mt-feedback" class="text-xs mb-2 hidden"></div>
+
+            <div class="grid gap-3" style="grid-template-columns: 1.4fr 1fr;">
+                <!-- Transcript en vivo -->
+                <div>
+                    <div class="text-xs text-white/40 mb-1.5">Transcript en vivo</div>
+                    <div id="mt-transcript" class="space-y-1.5 max-h-96 overflow-y-auto rounded-lg bg-white/[0.02] border border-white/[0.06] p-3">
+                        <div class="text-xs text-white/20">El transcript en vivo aparecerá aquí cuando inicies una reunión.</div>
+                    </div>
+                </div>
+                <!-- Insight Stream (temas / pendientes / propuestas) -->
+                <div>
+                    <div class="text-xs text-white/40 mb-1.5">Análisis en vivo</div>
+                    <div id="mt-insights" class="space-y-3 max-h-96 overflow-y-auto rounded-lg bg-white/[0.02] border border-white/[0.06] p-3">
+                        <div class="text-xs text-white/20">Temas, pendientes y propuestas aparecerán aquí a medida que avance la reunión.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Acta post-reunión (se rellena al terminar) -->
+            <div id="mt-minutes" class="mt-3 rounded-lg bg-white/[0.02] border border-white/[0.06] p-3 hidden">
+                <div class="text-xs font-medium text-emerald-300/80 mb-2">Acta de la reunión</div>
+                <div id="mt-minutes-body" class="space-y-2 text-sm text-white/80"></div>
             </div>
         </div>
 
@@ -469,6 +523,22 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
             </div>
+
+            <!-- Backend de análisis de reuniones (insights + acta) -->
+            <div class="mt-4 pt-4 border-t border-white/[0.06]">
+                <label class="text-xs text-white/40 block mb-1">Análisis de reuniones (insights en vivo + acta)</label>
+                <select id="cfg-insights-backend" class="cfg-select" onchange="onInsightsBackendChange()">
+                    <option value="groq">Groq API (nube) — instantáneo, requiere internet</option>
+                    <option value="endpoint">Local (LM Studio) — privado, sin internet</option>
+                </select>
+                <div id="cfg-insights-endpoint-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
+                    <label class="text-xs text-white/40 block mb-1">Modelo local (id en LM Studio)</label>
+                    <input type="text" id="cfg-insights-model" placeholder="qwen/qwen2.5-vl-7b"
+                        class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 focus:outline-none focus:border-white/20 w-full">
+                    <p class="text-xs text-white/25 mt-1">Requiere LM Studio abierto con el servidor local activo (localhost:1234). Probados: <span class="text-white/40">qwen/qwen2.5-vl-7b</span> (calidad, ~40s) · <span class="text-white/40">llama-3.2-3b-instruct</span> (rápido, ~15s). Si LM Studio está cerrado, la reunión sigue transcribiendo pero sin análisis.</p>
+                </div>
+            </div>
+
             <div class="flex justify-end items-center mt-4 gap-3">
                 <span id="cfg-saved" class="text-xs text-green-400" style="opacity:0;transition:opacity 0.3s">Guardado ✓</span>
                 <button onclick="saveSettings()" class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50">Guardar</button>
@@ -916,6 +986,10 @@ HTML_TEMPLATE = """
             document.getElementById('cfg-backend').value = settings.transcription_backend || 'groq';
             document.getElementById('cfg-local-model').value = settings.local_whisper_model || 'small';
             document.getElementById('cfg-groq-fallback').checked = settings.groq_fallback === true;
+            // Backend de insights (análisis de reuniones)
+            document.getElementById('cfg-insights-backend').value = settings.insights_backend || 'groq';
+            document.getElementById('cfg-insights-model').value = settings.insights_endpoint_model || 'qwen/qwen2.5-vl-7b';
+            onInsightsBackendChange();
             updateLocalModelSection();
             refreshLocalModelStatus();
             updateLocalTranslationNote();
@@ -934,6 +1008,8 @@ HTML_TEMPLATE = """
                 transcription_backend: document.getElementById('cfg-backend').value,
                 local_whisper_model: document.getElementById('cfg-local-model').value,
                 groq_fallback: document.getElementById('cfg-groq-fallback').checked ? 'true' : 'false',
+                insights_backend: document.getElementById('cfg-insights-backend').value,
+                insights_endpoint_model: document.getElementById('cfg-insights-model').value.trim(),
             };
             await fetch('/api/settings', {
                 method: 'POST',
@@ -948,6 +1024,13 @@ HTML_TEMPLATE = """
         // --- Backend local ---
         function onBackendChange() {
             updateLocalModelSection();
+        }
+
+        // --- Backend de insights (análisis de reuniones) ---
+        function onInsightsBackendChange() {
+            const backend = document.getElementById('cfg-insights-backend').value;
+            const wrap = document.getElementById('cfg-insights-endpoint-wrap');
+            wrap.classList.toggle('hidden', backend !== 'endpoint');
         }
 
         function updateLocalModelSection() {
@@ -1049,6 +1132,180 @@ HTML_TEMPLATE = """
         function toggleShortcuts() {
             const panel = document.getElementById('shortcuts-panel');
             panel.classList.toggle('hidden');
+        }
+
+        // ---- Modo reunión (captura dual mic + sistema) ----
+        let _mtPollInterval = null;
+
+        function toggleMeeting() {
+            const panel = document.getElementById('meeting-panel');
+            const isHidden = panel.classList.contains('hidden');
+            panel.classList.toggle('hidden');
+            if (isHidden) {
+                loadMeeting().then(st => { if (st && st.active) _startMtPoll(); });
+            } else {
+                _stopMtPoll();
+            }
+        }
+
+        function _stopMtPoll() {
+            if (_mtPollInterval) { clearInterval(_mtPollInterval); _mtPollInterval = null; }
+        }
+        function _startMtPoll() {
+            if (_mtPollInterval) return;
+            _mtPollInterval = setInterval(loadMeeting, 2000);
+        }
+
+        async function loadMeeting() {
+            try {
+                const res = await fetch('/api/meeting');
+                const data = await res.json();
+                renderMeeting(data.status || {}, data.segments || []);
+                renderInsights(data.insights || {});
+                return data.status || {};
+            } catch(e) { return {}; }
+        }
+
+        function renderInsights(ins) {
+            const el = document.getElementById('mt-insights');
+            if (!el) return;
+            const temas = ins.temas || [];
+            const pend = ins.pendientes || [];
+            const prop = (ins.propuestas || []).filter(p => (p.confianza || 'alta') === 'alta');
+            if (!temas.length && !pend.length && !prop.length) {
+                el.innerHTML = '<div class="text-xs text-white/20">Temas, pendientes y propuestas aparecerán aquí a medida que avance la reunión.</div>';
+                return;
+            }
+            let html = '';
+            if (temas.length) {
+                html += '<div><div class="text-[11px] uppercase tracking-wide text-white/30 mb-1">Temas</div>'
+                    + temas.map(t => '<div class="text-xs text-white/75 mb-0.5">• ' + escapeHtml(String(t)) + '</div>').join('') + '</div>';
+            }
+            if (pend.length) {
+                html += '<div><div class="text-[11px] uppercase tracking-wide text-amber-300/50 mb-1">Pendientes</div>'
+                    + pend.map(p => {
+                        const r = p.responsable ? ' <span class="text-white/35">(' + escapeHtml(String(p.responsable)) + ')</span>' : '';
+                        return '<div class="text-xs text-white/75 mb-0.5">☐ ' + escapeHtml(String(p.texto || '')) + r + '</div>';
+                    }).join('') + '</div>';
+            }
+            if (prop.length) {
+                html += '<div><div class="text-[11px] uppercase tracking-wide text-sky-300/50 mb-1">Propuestas</div>'
+                    + prop.map(p => '<div class="text-xs text-white/75 mb-0.5">💡 ' + escapeHtml(String(p.texto || '')) + '</div>').join('') + '</div>';
+            }
+            el.innerHTML = html;
+        }
+
+        function renderMinutes(m) {
+            const wrap = document.getElementById('mt-minutes');
+            const body = document.getElementById('mt-minutes-body');
+            if (!wrap || !body) return;
+            m = m || {};
+            const dec = m.decisiones || [], tem = m.temas || [], pen = m.pendientes || [];
+            if (!m.resumen && !dec.length && !tem.length && !pen.length) {
+                wrap.classList.add('hidden');
+                return;
+            }
+            let html = '';
+            if (m.resumen) html += '<p class="text-white/80">' + escapeHtml(String(m.resumen)) + '</p>';
+            if (dec.length) html += '<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'
+                + dec.map(d => '<div class="text-xs text-white/75">• ' + escapeHtml(String(d)) + '</div>').join('') + '</div>';
+            if (pen.length) html += '<div><div class="text-xs text-white/40 mt-2 mb-1">Pendientes</div>'
+                + pen.map(p => { const r = p.responsable ? ' (' + escapeHtml(String(p.responsable)) + ')' : '';
+                    return '<div class="text-xs text-white/75">☐ ' + escapeHtml(String(p.texto || '')) + r + '</div>'; }).join('') + '</div>';
+            if (tem.length) html += '<div><div class="text-xs text-white/40 mt-2 mb-1">Temas tratados</div>'
+                + tem.map(t => '<div class="text-xs text-white/75">• ' + escapeHtml(String(t)) + '</div>').join('') + '</div>';
+            body.innerHTML = html;
+            wrap.classList.remove('hidden');
+        }
+
+        function renderMeeting(status, segments) {
+            const startBtn = document.getElementById('mt-start');
+            const stopBtn = document.getElementById('mt-stop');
+            const statusEl = document.getElementById('mt-status');
+            const container = document.getElementById('mt-transcript');
+
+            if (status.active) {
+                startBtn.classList.add('hidden');
+                stopBtn.classList.remove('hidden');
+                let txt = 'Grabando ' + (status.elapsed_fmt || '00:00') + ' · ' + (status.segment_count || 0) + ' intervenciones';
+                if (status.sys_available === false) txt += ' · solo micrófono';
+                statusEl.textContent = txt;
+                statusEl.className = 'text-xs text-red-300';
+            } else {
+                startBtn.classList.remove('hidden');
+                stopBtn.classList.add('hidden');
+                statusEl.textContent = '';
+            }
+
+            if (!segments.length) {
+                container.innerHTML = status.active
+                    ? '<div class="text-xs text-white/20">Escuchando… el texto aparecerá cada ~20s.</div>'
+                    : '<div class="text-xs text-white/20">El transcript en vivo aparecerá aquí cuando inicies una reunión.</div>';
+                return;
+            }
+            container.innerHTML = segments.map(s => {
+                const color = (s.speaker === 'Yo') ? 'text-purple-300' : 'text-sky-300';
+                return '<div class="text-sm text-white/80 leading-snug">'
+                    + '<span class="text-[10px] font-mono text-white/30 mr-1">' + s.time + '</span>'
+                    + '<span class="text-xs font-medium ' + color + ' mr-1">' + s.speaker + ':</span>'
+                    + escapeHtml(s.text) + '</div>';
+            }).join('');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        async function startMeeting() {
+            const fb = document.getElementById('mt-feedback');
+            fb.classList.add('hidden');
+            document.getElementById('mt-minutes').classList.add('hidden');  // limpiar acta previa
+            try {
+                const res = await fetch('/api/meeting/start', {method:'POST'});
+                const data = await res.json();
+                if (!data.ok) {
+                    fb.textContent = data.error || 'No se pudo iniciar la reunión.';
+                    fb.className = 'text-xs mb-2 text-red-300';
+                    fb.classList.remove('hidden');
+                    return;
+                }
+                if (data.sys_available === false) {
+                    fb.textContent = 'Aviso: no se detectó audio del sistema; grabando solo el micrófono.';
+                    fb.className = 'text-xs mb-2 text-amber-300';
+                    fb.classList.remove('hidden');
+                }
+                await loadMeeting();
+                _startMtPoll();
+            } catch(e) {
+                fb.textContent = 'Error de red al iniciar la reunión.';
+                fb.className = 'text-xs mb-2 text-red-300';
+                fb.classList.remove('hidden');
+            }
+        }
+
+        async function stopMeeting() {
+            const statusEl = document.getElementById('mt-status');
+            statusEl.textContent = 'Terminando, transcribiendo lo último y generando el acta…';
+            statusEl.className = 'text-xs text-white/40';
+            try {
+                const res = await fetch('/api/meeting/stop', {method:'POST'});
+                const data = await res.json();
+                _stopMtPoll();
+                await loadMeeting();
+                renderMinutes(data.minutes);
+                const fb = document.getElementById('mt-feedback');
+                const dur = data.duration_seconds || 0;
+                const mins = Math.floor(dur/60), secs = Math.floor(dur%60);
+                const cnt = (data.segments||[]).length;
+                if (!cnt) {
+                    fb.textContent = 'Reunión terminada (sin voz detectada).';
+                } else if (data.saved) {
+                    fb.textContent = 'Reunión guardada: ' + cnt + ' intervenciones, ' + mins + 'm ' + secs + 's.';
+                } else {
+                    fb.textContent = 'Reunión terminada: ' + cnt + ' intervenciones (historial desactivado).';
+                }
+                fb.className = 'text-xs mb-2 text-emerald-300';
+                fb.classList.remove('hidden');
+            } catch(e) {
+                _stopMtPoll();
+            }
         }
 
         async function loadDictionary() {
@@ -1625,6 +1882,8 @@ def get_settings():
         "local_whisper_model": os.getenv("LOCAL_WHISPER_MODEL", "small"),
         "groq_fallback": os.getenv("GROQ_FALLBACK", "false").lower() == "true",
         "audio_source": os.getenv("AUDIO_SOURCE", "mic"),
+        "insights_backend": os.getenv("INSIGHTS_BACKEND", "groq"),
+        "insights_endpoint_model": os.getenv("INSIGHTS_ENDPOINT_MODEL", "qwen/qwen2.5-vl-7b"),
     })
 
 
@@ -1645,6 +1904,8 @@ def update_settings():
         "transcription_backend": "TRANSCRIPTION_BACKEND",
         "local_whisper_model": "LOCAL_WHISPER_MODEL",
         "groq_fallback": "GROQ_FALLBACK",
+        "insights_backend": "INSIGHTS_BACKEND",
+        "insights_endpoint_model": "INSIGHTS_ENDPOINT_MODEL",
         "audio_source": "AUDIO_SOURCE",
     }
     for field, env_key in allowed.items():
@@ -2023,6 +2284,35 @@ def url_queue_cancel_pending():
     """Elimina filas 'pending' sin tocar la que está procesando."""
     deleted = _db.url_queue_cancel_pending()
     return jsonify({"deleted": deleted})
+
+
+# ---------------------------------------------------------------------------
+# Modo reunión (captura dual mic + loopback)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/meeting", methods=["GET"])
+def meeting_status():
+    """Devuelve el estado, el transcript en vivo y el Insight Stream (para polling)."""
+    return jsonify({
+        "status": MEETING.status(),
+        "segments": MEETING.transcript_segments(),
+        "insights": MEETING.get_insights(),
+    })
+
+
+@app.route("/api/meeting/start", methods=["POST"])
+def meeting_start():
+    """Inicia una reunión (captura dual mic + audio del sistema)."""
+    res = MEETING.start()
+    code = 200 if res.get("ok") else 500
+    return jsonify(res), code
+
+
+@app.route("/api/meeting/stop", methods=["POST"])
+def meeting_stop():
+    """Detiene la reunión, persiste el acta y devuelve el transcript final."""
+    res = MEETING.stop()
+    return jsonify(res)
 
 
 @app.route("/api/instagram-cookies/sync", methods=["POST"])

@@ -25,3 +25,8 @@ instagram_cookies.dat
 cookies.txt
 *_cookies.txt
 *_cookies.dat
+
+# Artefactos de prueba de captura dual
+mic_yo.wav
+loopback_ellos.wav
+*.wav
