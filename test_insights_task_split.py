@@ -136,7 +136,7 @@ print("\nCaso 2: Routing por task en _chat")
 openrouter_called = {"count": 0}
 
 
-def stub_openrouter(messages, *, task="live", json_mode=False, temperature=0.2, max_tokens=1024):
+def stub_openrouter(messages, *, task="live", json_mode=False, temperature=0.2, max_tokens=1024, reasoning=False):
     openrouter_called["count"] += 1
     return "[OR]"
 
@@ -202,7 +202,7 @@ _VALID_MINUTES_JSON = json.dumps({
 
 
 def stub_chat_capture_task(messages, *, task="live", json_mode=False,
-                           temperature=0.2, max_tokens=1024):
+                           temperature=0.2, max_tokens=1024, reasoning=False):
     captured_tasks.append(task)
     # Devuelve un JSON válido mínimo para las funciones que lo parsean
     if json_mode:

@@ -13,7 +13,7 @@ from core import dictionary as _dictionary
 from core.meeting import MEETING
 from core import meeting_export as _meeting_export
 from core import insights as _insights
-from core import potor as _potor
+from core import assistant as _assistant
 
 # ---------------------------------------------------------------------------
 # Estado de descarga del modelo local (compartido entre endpoints)
@@ -538,7 +538,7 @@ HTML_TEMPLATE = """
 
             <!-- Backend de análisis de reuniones (insights + acta) — POR TAREA -->
             <div class="mt-4 pt-4 border-t border-white/[0.06]">
-                <p class="text-xs text-white/30 mb-3">El análisis en vivo necesita velocidad (Groq recomendado); acta y Potor admiten modelos más potentes (OpenRouter, contexto 1 M).</p>
+                <p class="text-xs text-white/30 mb-3">El análisis en vivo necesita velocidad (Groq recomendado); acta y Asistente de reuniones admiten modelos más potentes (OpenRouter, contexto 1 M).</p>
                 <div class="flex flex-col gap-3">
                     <div>
                         <label class="text-xs text-white/40 block mb-1">Análisis en vivo</label>
@@ -549,7 +549,7 @@ HTML_TEMPLATE = """
                         </select>
                     </div>
                     <div>
-                        <label class="text-xs text-white/40 block mb-1">Acta + Potor</label>
+                        <label class="text-xs text-white/40 block mb-1">Acta + Asistente de reuniones</label>
                         <select id="cfg-insights-backend-batch" class="cfg-select" onchange="onInsightsBackendChange()">
                             <option value="groq">Groq API (nube) — instantáneo, requiere internet</option>
                             <option value="openrouter">OpenRouter (nube) — multi-modelo, requiere internet</option>
@@ -1929,6 +1929,13 @@ MEETING_PAGE = """<!DOCTYPE html>
   .mt-fade { animation:mtFade .25s ease-out; }
   @keyframes mtFade { from{opacity:0;transform:translateY(3px);} to{opacity:1;transform:none;} }
   .btn { font-size:.8rem; padding:.4rem .8rem; border-radius:.5rem; cursor:pointer; }
+  #asst-messages ul{list-style:disc;margin:.25rem 0;padding-left:1.2rem;}
+  #asst-messages ol{list-style:decimal;margin:.25rem 0;padding-left:1.4rem;}
+  #asst-messages li{margin:.1rem 0;}
+  #asst-messages code{background:rgba(255,255,255,.1);padding:0 .25rem;border-radius:3px;font-family:monospace;font-size:.92em;}
+  #asst-messages strong{font-weight:600;}
+  #asst-messages .md-h{font-weight:600;margin:.3rem 0 .15rem;}
+  #asst-messages .md-p{margin:.15rem 0;}
 </style></head>
 <body class="min-h-screen p-6">
 <div class="max-w-5xl mx-auto">
@@ -1975,28 +1982,65 @@ MEETING_PAGE = """<!DOCTYPE html>
   <div id="mt-history" class="space-y-1"></div>
   <div id="mt-viewer" class="glass rounded-xl p-4 mt-3 hidden"></div>
 
-  <!-- Potor — chat de memoria -->
+  <!-- Asistente de reuniones — chat de memoria -->
   <div class="glass rounded-xl p-4 mt-6">
     <div class="flex items-center justify-between mb-2">
-      <div class="text-sm font-medium text-violet-300/80">&#128172; Potor &mdash; pregúntale a tus reuniones</div>
+      <div class="text-sm font-medium text-violet-300/80">&#128172; Asistente de reuniones &mdash; pregúntale a tus reuniones</div>
       <div class="flex items-center gap-2">
-        <span id="potor-scope" class="text-[11px] text-white/40">Modo global</span>
-        <button id="potor-scope-reset" onclick="potorResetScope()" class="hidden text-[11px] text-white/30 hover:text-violet-300 px-1.5 py-0.5 rounded hover:bg-white/5">&#10005; global</button>
+        <span id="asst-scope" class="text-[11px] text-white/40">Modo global</span>
+        <button id="asst-scope-reset" onclick="asstResetScope()" class="hidden text-[11px] text-white/30 hover:text-violet-300 px-1.5 py-0.5 rounded hover:bg-white/5">&#10005; global</button>
       </div>
     </div>
-    <div id="potor-messages" class="space-y-2 overflow-y-auto mb-2" style="min-height:60px;max-height:280px;"></div>
-    <div id="potor-chips" class="flex flex-wrap gap-1.5 mb-2"></div>
+    <div id="asst-messages" class="space-y-2 overflow-y-auto mb-2" style="min-height:60px;max-height:280px;"></div>
+    <div id="asst-chips" class="flex flex-wrap gap-1.5 mb-2"></div>
     <div class="flex gap-2">
-      <input id="potor-input" type="text" placeholder="Pregunta sobre tus reuniones…"
+      <input id="asst-input" type="text" placeholder="Pregunta sobre tus reuniones…"
         style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.35rem .7rem;font-size:.8rem;outline:none;"
-        onkeydown="if(event.key==='Enter')potorSend()">
-      <button id="potor-send" onclick="potorSend()" class="btn bg-violet-600/30 text-violet-200 hover:bg-violet-600/50">Enviar</button>
+        onkeydown="if(event.key==='Enter')asstSend()">
+      <button id="asst-send" onclick="asstSend()" class="btn bg-violet-600/30 text-violet-200 hover:bg-violet-600/50">Enviar</button>
+    </div>
+    <div class="flex items-center gap-1.5 mt-1.5">
+      <input type="checkbox" id="asst-reason" style="accent-color:#7c3aed;cursor:pointer;">
+      <label for="asst-reason" class="text-[11px] text-white/35 cursor-pointer select-none"
+        title="Activa razonamiento para preguntas analíticas (más lento/caro)">&#129504; Pensar más</label>
     </div>
   </div>
 </div>
 <script>
 let _seen = new Set(), _segCount = 0, _actaShown = false, _poll = null;
 function esc(s){ const d=document.createElement('div'); d.textContent = (s==null?'':String(s)); return d.innerHTML; }
+function mdInline(x){
+  x=esc(x);
+  x=x.replace(/`([^`]+)`/g,'<code>$1</code>');
+  x=x.replace(/\\*\\*([^*]+?)\\*\\*/g,'<strong>$1</strong>');
+  x=x.replace(/__([^_]+?)__/g,'<strong>$1</strong>');
+  x=x.replace(/(^|[^*\\w])\\*([^*\\n]+?)\\*(?=[^*\\w]|$)/g,'$1<em>$2</em>');
+  return x;
+}
+function mdToHtml(t){
+  if(!t)return '';
+  const lines=t.split(/\\r?\\n/);
+  let html='',list=null;
+  const close=function(){ if(list){ html+='</'+list+'>'; list=null; } };
+  for(const raw of lines){
+    let m;
+    if(m=raw.match(/^\\s*[-*\\u2022]\\s+(.*)$/)){
+      if(list!=='ul'){ close(); html+='<ul>'; list='ul'; }
+      html+='<li>'+mdInline(m[1])+'</li>';
+    } else if(m=raw.match(/^\\s*\\d+[.)]\\s+(.*)$/)){
+      if(list!=='ol'){ close(); html+='<ol>'; list='ol'; }
+      html+='<li>'+mdInline(m[1])+'</li>';
+    } else if(m=raw.match(/^\\s*#{1,6}\\s+(.*)$/)){
+      close(); html+='<div class="md-h">'+mdInline(m[1])+'</div>';
+    } else if(raw.trim()===''){
+      close();
+    } else {
+      close(); html+='<div class="md-p">'+mdInline(raw)+'</div>';
+    }
+  }
+  close();
+  return html;
+}
 function pendMeta(p){ const a=[]; if(p&&p.responsable)a.push(esc(p.responsable));
   const fh=[p&&p.fecha,p&&p.hora].filter(Boolean).map(esc).join(' '); if(fh)a.push('\\uD83D\\uDCC5 '+fh);
   return a.length?' <span class="text-white/35">('+a.join(' \\u00b7 ')+')</span>':''; }
@@ -2070,28 +2114,93 @@ async function loadHistory(){
         +'<button onclick="delMeeting('+m.id+')" class="text-white/25 hover:text-red-300 text-sm px-1" title="Eliminar esta reunión">\\uD83D\\uDDD1</button>'
         +'</div>'; }).join('');
   }catch(e){} }
+function jumpToMoment(t, segs){
+  // Busca el segmento cuyo data-t sea el más cercano a t y hace scroll + highlight
+  const body=document.getElementById('mt-transcript-body');
+  if(!body) return;
+  const divs=body.querySelectorAll('[data-t]');
+  if(!divs.length) return;
+  let best=null, bestDiff=Infinity;
+  divs.forEach(function(d){ const dt=parseFloat(d.dataset.t||'0'); const diff=Math.abs(dt-t); if(diff<bestDiff){bestDiff=diff;best=d;} });
+  if(!best) return;
+  best.scrollIntoView({behavior:'smooth',block:'center'});
+  best.classList.add('mt-seg-flash');
+  setTimeout(function(){ best.classList.remove('mt-seg-flash'); },1200);
+}
+function _renderTimeline(chapters, meetingId, v){
+  const tl=document.getElementById('mt-timeline');
+  if(!tl) return;
+  if(Array.isArray(chapters) && chapters.length){
+    let h='<div class="flex flex-wrap gap-1.5">';
+    chapters.forEach(function(ch,i){
+      h+='<button data-t="'+ch.t+'" data-idx="'+i+'" class="mt-chapter-btn text-[11px] px-2 py-1 rounded-md bg-white/[0.06] hover:bg-violet-500/20 text-white/60 hover:text-violet-300 transition-colors" title="'+esc(ch.resumen||ch.titulo)+'">'
+        +'<span class="text-white/30">'+esc(ch.inicio)+'</span> <span class="text-white/70">'+esc(ch.titulo)+'</span>'
+        +'</button>';
+    });
+    h+='</div>';
+    tl.innerHTML=h;
+    tl.querySelectorAll('.mt-chapter-btn').forEach(function(btn){
+      btn.addEventListener('click',function(){ jumpToMoment(parseFloat(btn.dataset.t||'0')); });
+    });
+  } else {
+    tl.innerHTML='<button id="mt-gen-chapters-btn" class="btn text-[11px] bg-white/[0.05] text-white/40 hover:text-violet-300 hover:bg-violet-500/15">Generar l\\u00ednea de tiempo</button>';
+    const gbtn=document.getElementById('mt-gen-chapters-btn');
+    if(gbtn) gbtn.addEventListener('click',async function(){
+      gbtn.textContent='Generando\\u2026'; gbtn.disabled=true;
+      try{
+        const r=await fetch('/api/meetings/'+meetingId+'/chapters',{method:'POST'});
+        const d=await r.json();
+        _renderTimeline(d.chapters||[], meetingId, v);
+      }catch(e){ gbtn.textContent='Error al generar'; gbtn.disabled=false; }
+    });
+  }
+}
 async function openMeeting(id){
   const v=document.getElementById('mt-viewer'); v.classList.remove('hidden'); v.innerHTML='<div class="text-xs text-white/30">Cargando\\u2026</div>';
   try{ const r=await fetch('/api/meetings/'+id); const m=await r.json();
     const dateStr=esc(m.started_at||'');
-    v.innerHTML='<div class="flex items-center justify-between mb-2"><div class="text-sm font-medium text-white/60">Reuni\\u00f3n '+dateStr+'</div>'
+    // Transcript: por segmentos si existen, si no, <pre> plano (compat reuniones viejas)
+    let transcriptHtml;
+    const segs=Array.isArray(m.segments)&&m.segments.length?m.segments:null;
+    if(segs){
+      transcriptHtml='<div id="mt-transcript-body" class="text-xs max-h-80 overflow-y-auto space-y-0.5">';
+      segs.forEach(function(s,i){
+        const isYo=(s.speaker||'').toLowerCase().indexOf('yo')!==-1||(s.speaker||'')==='Yo';
+        const clr=isYo?'text-violet-300/80':'text-sky-300/80';
+        transcriptHtml+='<div id="mtseg-'+i+'" data-t="'+parseFloat(s.t||0)+'" class="px-1 rounded hover:bg-white/[0.04]">'
+          +'<span class="text-white/25 select-none">['+esc(s.time||'')+'</span>'
+          +' <span class="'+clr+' font-medium select-none">'+esc(s.speaker||'')+'</span>'
+          +'<span class="text-white/25 select-none">]</span>'
+          +' <span class="text-white/65">'+esc(s.text||'')+'</span>'
+          +'</div>';
+      });
+      transcriptHtml+='</div>';
+    } else {
+      transcriptHtml='<pre class="text-xs text-white/60 whitespace-pre-wrap max-h-80 overflow-y-auto">'+esc(m.transcript||'')+'</pre>';
+    }
+    v.innerHTML='<style>.mt-seg-flash{background:rgba(139,92,246,0.18)!important;transition:background 0.1s;}</style>'
+      +'<div class="flex items-center justify-between mb-2"><div class="text-sm font-medium text-white/60">Reuni\\u00f3n '+dateStr+'</div>'
       +'<div class="flex gap-2">'
-      +'<button id="ask-potor-btn" class="btn bg-violet-600/20 text-violet-300 hover:bg-violet-600/35">&#128172; Preguntar a Potor</button>'
-      +'<button onclick="document.getElementById(\\'mt-viewer\\').classList.add(\\'hidden\\')" class="btn text-white/30 hover:text-white/60">Cerrar</button>'
+      +'<button id="ask-asst-btn" class="btn bg-violet-600/20 text-violet-300 hover:bg-violet-600/35">&#128172; Preguntar al asistente sobre esta reunión</button>'
+      +'<button id="mt-close-btn" class="btn text-white/30 hover:text-white/60">Cerrar</button>'
       +'</div></div>'
+      +'<div class="text-xs font-medium text-violet-300/50 mb-1">L\\u00ednea de tiempo</div><div id="mt-timeline" class="mb-3"></div>'
       +'<div class="text-xs font-medium text-emerald-300/70 mb-1">Acta</div><div class="space-y-2 mb-3">'+actaHtml(m.minutes)+'</div>'
-      +'<div class="text-xs font-medium text-white/40 mb-1">Transcripci\\u00f3n</div><pre class="text-xs text-white/60 whitespace-pre-wrap max-h-80 overflow-y-auto">'+esc(m.transcript||'')+'</pre>';
-    const _apb=document.getElementById('ask-potor-btn'); if(_apb) _apb.addEventListener('click',function(){ potorFocusMeeting(id, m.started_at||''); });
+      +'<div class="text-xs font-medium text-white/40 mb-1">Transcripci\\u00f3n</div>'+transcriptHtml;
+    const _apb=document.getElementById('ask-asst-btn'); if(_apb) _apb.addEventListener('click',function(){ asstFocusMeeting(id, m.started_at||''); });
+    const _cb=document.getElementById('mt-close-btn'); if(_cb) _cb.addEventListener('click',function(){ document.getElementById('mt-viewer').classList.add('hidden'); });
+    // Renderizar timeline (capítulos)
+    _renderTimeline(m.chapters||[], id, v);
   }catch(e){ v.innerHTML='<div class="text-xs text-red-300">No se pudo cargar.</div>'; } }
-function potorFocusMeeting(id, dateStr){
-  potorMeetingId=id; potorHistory=[];
+function asstFocusMeeting(id, dateStr){
+  asstMeetingId=id; asstHistory=[];
   const datePart=(dateStr||'').slice(0,10)||'#'+id;
-  document.getElementById('potor-scope').textContent='Sobre: Reuni\\u00f3n '+datePart;
-  document.getElementById('potor-scope-reset').classList.remove('hidden');
-  potorRenderChips(POTOR_CHIPS_MEETING);
-  document.getElementById('potor-messages').innerHTML='';
-  document.getElementById('potor-input').focus();
-  document.getElementById('potor-input').scrollIntoView({behavior:'smooth',block:'nearest'});
+  document.getElementById('asst-scope').textContent='Sobre: Reuni\\u00f3n '+datePart;
+  document.getElementById('asst-scope-reset').classList.remove('hidden');
+  asstRenderChips(ASST_CHIPS_MEETING);
+  document.getElementById('asst-messages').innerHTML='';
+  document.getElementById('asst-input').focus();
+  document.getElementById('asst-input').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 async function openFolder(){ try{ const r=await fetch('/api/meetings/open-folder',{method:'POST'}); const d=await r.json();
   if(!d.ok) alert('No se pudo abrir la carpeta: '+(d.error||'')+'\\n'+(d.path||'')); }catch(e){} }
@@ -2134,92 +2243,95 @@ async function runSearch(q){
 }
 
 // ---------------------------------------------------------------------------
-// Potor — chat de memoria sobre reuniones
+// Asistente de reuniones — chat de memoria sobre reuniones
 // ---------------------------------------------------------------------------
-let potorMeetingId = null;
-let potorHistory = [];
+let asstMeetingId = null;
+let asstHistory = [];
 
-const POTOR_CHIPS_GLOBAL = [
+const ASST_CHIPS_GLOBAL = [
   '\\u00bfCu\\u00e1les son mis pendientes?',
   'Resume mis \\u00faltimas reuniones',
   '\\u00bfQu\\u00e9 decisiones tomamos?',
   'Redacta un email de seguimiento',
   'Genera un informe de pendientes'
 ];
-const POTOR_CHIPS_MEETING = [
+const ASST_CHIPS_MEETING = [
   'Resume esta reuni\\u00f3n',
   'Lista los pendientes',
   '\\u00bfQu\\u00e9 se decidi\\u00f3?',
   'Redacta email de seguimiento'
 ];
 
-function potorRenderChips(chips){
-  const el=document.getElementById('potor-chips');
+function asstRenderChips(chips){
+  const el=document.getElementById('asst-chips');
   el.innerHTML='';
   chips.forEach(function(c){
     const b=document.createElement('button');
     b.textContent=c;
     b.className='hover:bg-violet-600/25';
     b.style.cssText='font-size:.73rem;padding:.25rem .6rem;border-radius:.4rem;cursor:pointer;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.22);color:rgba(196,181,253,0.85);';
-    b.addEventListener('click',function(){ potorSend(c); });
+    b.addEventListener('click',function(){ asstSend(c); });
     el.appendChild(b);
   });
 }
 
-function potorResetScope(){
-  potorMeetingId=null; potorHistory=[];
-  document.getElementById('potor-scope').textContent='Modo global';
-  document.getElementById('potor-scope-reset').classList.add('hidden');
-  potorRenderChips(POTOR_CHIPS_GLOBAL);
+function asstResetScope(){
+  asstMeetingId=null; asstHistory=[];
+  document.getElementById('asst-scope').textContent='Modo global';
+  document.getElementById('asst-scope-reset').classList.add('hidden');
+  asstRenderChips(ASST_CHIPS_GLOBAL);
 }
 
-function potorAddMsg(role, html){
-  const el=document.getElementById('potor-messages');
+function asstAddMsg(role, html){
+  const el=document.getElementById('asst-messages');
   const isUser=(role==='user');
   const div=document.createElement('div');
   div.className='text-xs leading-relaxed '+(isUser?'text-white/70':'text-violet-100/90');
   div.style.cssText='padding:.35rem .6rem;border-radius:.4rem;'+(isUser?'background:rgba(255,255,255,0.04);text-align:right;':'background:rgba(139,92,246,0.10);');
-  div.innerHTML=(isUser?'<span class="text-white/30 mr-1">T\\u00fa:</span>':'<span class="text-violet-300/60 mr-1">Potor:</span>')+html;
+  div.innerHTML=(isUser?'<span class="text-white/30 mr-1">T\\u00fa:</span>':'<span class="text-violet-300/60 mr-1">Asistente:</span>')+html;
   el.appendChild(div);
   el.scrollTop=el.scrollHeight;
   return div;
 }
 
-async function potorSend(text){
-  const inp=document.getElementById('potor-input');
+async function asstSend(text){
+  const inp=document.getElementById('asst-input');
   const msg=(text!==undefined?text:inp.value).trim();
   if(!msg)return;
   inp.value='';
-  potorAddMsg('user', esc(msg).replace(/\\n/g,'<br>'));
-  potorHistory.push({role:'user',content:msg});
-  const placeholder=potorAddMsg('assistant','<span class="text-white/30 italic">Potor est\\u00e1 pensando\\u2026</span>');
-  document.getElementById('potor-send').disabled=true;
+  asstAddMsg('user', esc(msg).replace(/\\n/g,'<br>'));
+  asstHistory.push({role:'user',content:msg});
+  const reasonChk=document.getElementById('asst-reason');
+  const reasoningVal=reasonChk&&reasonChk.checked?true:'auto';
+  const placeholder=asstAddMsg('assistant','<span class="text-white/30 italic">El asistente est\\u00e1 pensando\\u2026</span>');
+  document.getElementById('asst-send').disabled=true;
   try{
     const res=await fetch('/api/meetings/chat',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:msg,history:potorHistory.slice(-6),meeting_id:potorMeetingId})
+      body:JSON.stringify({message:msg,history:asstHistory.slice(-6),meeting_id:asstMeetingId,reasoning:reasoningVal})
     });
     const d=await res.json();
     if(!res.ok||d.error){
-      placeholder.innerHTML='<span class="text-white/30 mr-1">Potor:</span><span style="color:#f87171;">'
-        +esc(d.error||'Error al consultar Potor.')+'</span>';
+      placeholder.innerHTML='<span class="text-white/30 mr-1">Asistente:</span><span style="color:#f87171;">'
+        +esc(d.error||'Error al consultar el asistente.')+'</span>';
     } else {
       const ans=d.answer||'';
-      placeholder.innerHTML='<span class="text-violet-300/60 mr-1">Potor:</span>'
-        +esc(ans).replace(/\\n/g,'<br>');
-      potorHistory.push({role:'assistant',content:ans});
+      const badge=d.reasoned?'<span title="Respuesta con razonamiento extendido" style="font-size:.9em;opacity:.7;margin-right:.25rem;">&#129504;</span>':'';
+      placeholder.innerHTML='<span class="text-violet-300/60 mr-1">Asistente:</span>'
+        +badge+mdToHtml(ans);
+      asstHistory.push({role:'assistant',content:ans});
     }
   }catch(e){
-    placeholder.innerHTML='<span class="text-white/30 mr-1">Potor:</span>'
+    placeholder.innerHTML='<span class="text-white/30 mr-1">Asistente:</span>'
       +'<span style="color:#f87171;">Error de red.</span>';
   }finally{
-    document.getElementById('potor-send').disabled=false;
+    document.getElementById('asst-send').disabled=false;
   }
 }
 
 // Inicializar chips globales
-potorRenderChips(POTOR_CHIPS_GLOBAL);
+asstRenderChips(ASST_CHIPS_GLOBAL);
 
 loadLive(); startPoll(); loadHistory();
 </script></body></html>"""
@@ -2782,12 +2894,28 @@ def meeting_detail(meeting_id):
     if not m:
         return jsonify({"error": "not found"}), 404
     import json as _json
-    for k in ("minutes_json", "insights_json", "segments_json"):
+    for k in ("minutes_json", "insights_json", "segments_json", "chapters_json"):
         try:
             m[k.replace("_json", "")] = _json.loads(m.get(k) or "null")
         except Exception:  # noqa: BLE001
             m[k.replace("_json", "")] = None
     return jsonify(m)
+
+
+@app.route("/api/meetings/<int:meeting_id>/chapters", methods=["POST"])
+def meeting_chapters_generate(meeting_id):
+    """Genera (o regenera) la línea de tiempo de capítulos de una reunión."""
+    m = _db.meeting_get(meeting_id)
+    if not m:
+        return jsonify({"error": "not found"}), 404
+    import json as _json
+    try:
+        segments = _json.loads(m.get("segments_json") or "[]") or []
+    except Exception:  # noqa: BLE001
+        segments = []
+    chapters = _insights.generate_chapters(m.get("transcript") or "", segments)
+    _db.meeting_set_chapters(meeting_id, _json.dumps(chapters, ensure_ascii=False))
+    return jsonify({"chapters": chapters})
 
 
 @app.route("/api/meetings/<int:meeting_id>/delete", methods=["POST"])
@@ -2843,7 +2971,7 @@ def meetings_export():
 
 @app.route("/api/meetings/chat", methods=["POST"])
 def meetings_chat():
-    """Chat multi-turno con Potor sobre el historial de reuniones."""
+    """Chat multi-turno con el Asistente de reuniones sobre el historial de reuniones."""
     data = request.get_json(silent=True) or {}
     message = (data.get("message") or "").strip()
     if not message:
@@ -2858,7 +2986,23 @@ def meetings_chat():
         max_tokens = min(max(int(data.get("max_tokens", 1024)), 256), 2048)
     except (TypeError, ValueError):
         max_tokens = 1024
-    result = _potor.answer(_db, message, history=history, meeting_id=meeting_id, max_tokens=max_tokens)
+    # Normalizar parámetro reasoning: True/False/\"auto\"
+    _raw_reasoning = data.get("reasoning")
+    if _raw_reasoning is None:
+        reasoning = "auto"
+    elif isinstance(_raw_reasoning, bool):
+        reasoning = _raw_reasoning
+    elif isinstance(_raw_reasoning, str):
+        if _raw_reasoning.lower() == "true":
+            reasoning = True
+        elif _raw_reasoning.lower() == "false":
+            reasoning = False
+        else:
+            reasoning = "auto"
+    else:
+        reasoning = "auto"
+    result = _assistant.answer(_db, message, history=history, meeting_id=meeting_id,
+                               max_tokens=max_tokens, reasoning=reasoning)
     if not result.get("ok"):
         return jsonify({"error": result.get("error", "error")}), 503
     return jsonify(result)

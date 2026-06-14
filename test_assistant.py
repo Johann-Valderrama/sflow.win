@@ -1,6 +1,6 @@
-"""test_potor.py — Pruebas unitarias para el módulo Potor (chat de memoria).
+"""test_assistant.py — Pruebas unitarias para el módulo Asistente de reuniones (chat de memoria).
 
-Uso: python test_potor.py
+Uso: python test_assistant.py
 Exit 0 si todo pasa, 1 si algún caso falla.
 Sin red: el LLM se monkeypatchea.
 DB temporal: no toca la DB real.
@@ -86,7 +86,7 @@ ok("tiene clave title", by_id[id_a]["title"] == "Reunión Alpha")
 # ---------------------------------------------------------------------------
 print("\nCaso 2: _format_acta")
 
-from core.potor import _format_acta
+from core.assistant import _format_acta
 
 minutes_full = {
     "resumen": "Reunión sobre presupuesto.",
@@ -128,7 +128,7 @@ insert_meeting(db3, "Demo sistema", "Demo del sistema de pagos y presupuesto.",
                minutes={"resumen": "Demo completada", "temas": ["demo", "pagos"]},
                started_at="2026-06-05 10:00:00")
 
-from core.potor import build_context
+from core.assistant import build_context
 
 ctx, used = build_context(db3, "presupuesto")
 ok("contexto es string", isinstance(ctx, str))
@@ -179,18 +179,18 @@ def stub_chat_memory(messages, **kw):
 
 _ci_mod.chat_memory = stub_chat_memory
 
-from core import potor as _potor
+from core import assistant as _assistant
 
 db6 = make_db(os.path.join(tmp_dir, "test6.db"))
 insert_meeting(db6, "Reunión test6",
                minutes={"resumen": "Test6 resumen"},
                started_at="2026-06-07 10:00:00")
 
-result = _potor.answer(db6, "¿Qué se habló?")
+result = _assistant.answer(db6, "¿Qué se habló?")
 ok("ok is True", result.get("ok") is True, note=str(result))
 ok("answer empieza con [stub]", (result.get("answer") or "").startswith("[stub]"))
 ok("messages[0] role == system", captured_messages[0]["role"] == "system")
-ok("POTOR_SYSTEM embebido en messages[0]", _potor.POTOR_SYSTEM[:30] in captured_messages[0]["content"])
+ok("ASSISTANT_SYSTEM embebido en messages[0]", _assistant.ASSISTANT_SYSTEM[:30] in captured_messages[0]["content"])
 ok("último message role == user", captured_messages[-1]["role"] == "user")
 ok("último message content == pregunta", captured_messages[-1]["content"] == "¿Qué se habló?")
 
@@ -213,7 +213,7 @@ history_20 = [
     for i in range(20)
 ]
 
-result7 = _potor.answer(db6, "Pregunta final", history=history_20)
+result7 = _assistant.answer(db6, "Pregunta final", history=history_20)
 # messages = [system] + max 6 de history + [user actual]
 # contamos todos menos system y el user final
 history_in_messages = [m for m in captured_messages7 if m["role"] in ("user", "assistant")]
@@ -236,7 +236,7 @@ def stub_chat_unavailable(messages, **kw):
 
 _ci_mod.chat_memory = stub_chat_unavailable
 
-result8 = _potor.answer(db6, "¿Qué se habló?")
+result8 = _assistant.answer(db6, "¿Qué se habló?")
 ok("ok is False cuando InsightsUnavailable", result8.get("ok") is False,
    note=str(result8))
 ok("trae key error", "error" in result8)
@@ -262,8 +262,8 @@ def _counting_meetings_index(*args, **kwargs):
 db9.meetings_index = _counting_meetings_index
 
 _index_call_count = 0
-_potor_mod = __import__("core.potor", fromlist=["build_context"])
-_potor_mod.build_context(db9, "perf test")
+_asst_mod = __import__("core.assistant", fromlist=["build_context"])
+_asst_mod.build_context(db9, "perf test")
 
 ok("meetings_index llamado <= 1 vez", _index_call_count <= 1,
    note=f"llamadas={_index_call_count}")
@@ -307,7 +307,7 @@ id_focus = insert_meeting(
 # - t_full = 2000 chars -> demasiado con actas -> forzará degradado de transcript
 # - pero idx con resumen + acta FTS SÍ debe caber
 
-from core.potor import _compact_index as _ci, _format_acta as _fa
+from core.assistant import _compact_index as _ci, _format_acta as _fa
 
 entries10 = db10.meetings_index()
 idx_full_10 = _ci(entries10)
@@ -323,7 +323,7 @@ base_size = (
 # Budget: permite idx_full + actas, pero NO el transcript largo
 budget10 = base_size + 100  # pequeño margen, excluye los 2000 chars del transcript
 
-ctx10, used10 = _potor_mod.build_context(db10, "ResumenFTS-unico-9z7k", meeting_id=id_focus, budget=budget10)
+ctx10, used10 = _asst_mod.build_context(db10, "ResumenFTS-unico-9z7k", meeting_id=id_focus, budget=budget10)
 
 # (a) bloque TRANSCRIPCIÓN no está (fue degradado)
 ok("ORDEN(a): TRANSCRIPCIÓN no incluida (degradada primero)",
@@ -345,10 +345,10 @@ ok("ORDEN(c): índice conserva resumen (idx_full activo)",
 # ---------------------------------------------------------------------------
 print("\nCaso 11: _budget_chars sigue al backend BATCH resuelto")
 
-from core.potor import _budget_chars
+from core.assistant import _budget_chars
 
 _BUDGET_ENV_KEYS = (
-    "POTOR_CONTEXT_BUDGET_CHARS",
+    "ASSISTANT_CONTEXT_BUDGET_CHARS",
     "INSIGHTS_BACKEND",
     "INSIGHTS_BACKEND_BATCH",
     "INSIGHTS_BACKEND_LIVE",
@@ -403,14 +403,14 @@ try:
     ok("(e) BATCH=openrouter -> 80000", _budget_chars() == 80000,
        note=str(_budget_chars()))
 
-    # (f) Override POTOR_CONTEXT_BUDGET_CHARS gana sobre todo
-    _with_env({"POTOR_CONTEXT_BUDGET_CHARS": "5000",
+    # (f) Override ASSISTANT_CONTEXT_BUDGET_CHARS gana sobre todo
+    _with_env({"ASSISTANT_CONTEXT_BUDGET_CHARS": "5000",
                "INSIGHTS_BACKEND_BATCH": "endpoint"})
-    ok("(f) POTOR_CONTEXT_BUDGET_CHARS=5000 pisa al backend", _budget_chars() == 5000,
+    ok("(f) ASSISTANT_CONTEXT_BUDGET_CHARS=5000 pisa al backend", _budget_chars() == 5000,
        note=str(_budget_chars()))
 
     # (g) Override inválido -> cae al cálculo por backend (BATCH=endpoint -> 18000)
-    _with_env({"POTOR_CONTEXT_BUDGET_CHARS": "no-es-int",
+    _with_env({"ASSISTANT_CONTEXT_BUDGET_CHARS": "no-es-int",
                "INSIGHTS_BACKEND_BATCH": "endpoint"})
     ok("(g) override inválido -> cae al backend (18000)", _budget_chars() == 18000,
        note=str(_budget_chars()))

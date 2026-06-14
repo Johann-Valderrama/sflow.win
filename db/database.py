@@ -52,6 +52,8 @@ class TranscriptionDB:
         # Modo reunión: insights (Insight Stream) y acta (minutes) por reunión
         "ALTER TABLE meetings ADD COLUMN insights_json TEXT",
         "ALTER TABLE meetings ADD COLUMN minutes_json TEXT",
+        # Línea de tiempo de momentos clave (capítulos etiquetados por LLM)
+        "ALTER TABLE meetings ADD COLUMN chapters_json TEXT",
     ]
 
     # DDL adicional para la cola de URLs (Fase 3, paso 2)
@@ -396,14 +398,15 @@ class TranscriptionDB:
 
     def meeting_insert(self, title: str, transcript: str, segments_json: str,
                        duration_seconds: float, started_at: str = None,
-                       insights_json: str = None, minutes_json: str = None) -> int:
+                       insights_json: str = None, minutes_json: str = None,
+                       chapters_json: str = None) -> int:
         """Inserta una reunión finalizada y devuelve su id."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 "INSERT INTO meetings (title, transcript, segments_json, insights_json, "
-                "minutes_json, duration_seconds, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "minutes_json, chapters_json, duration_seconds, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (title, transcript, segments_json, insights_json, minutes_json,
-                 duration_seconds, started_at),
+                 chapters_json, duration_seconds, started_at),
             )
             meeting_id = cursor.lastrowid
             self._fts_index_meeting(conn, meeting_id, {
@@ -433,6 +436,16 @@ class TranscriptionDB:
                 "SELECT * FROM meetings WHERE id = ?", (meeting_id,)
             ).fetchone()
             return dict(row) if row else None
+
+    def meeting_set_chapters(self, meeting_id: int, chapters_json: str) -> int:
+        """Actualiza los capítulos de una reunión. Devuelve rowcount."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "UPDATE meetings SET chapters_json=? WHERE id=?",
+                (chapters_json, meeting_id),
+            )
+            conn.commit()
+            return cursor.rowcount
 
     def meeting_delete(self, meeting_id: int) -> int:
         """Elimina una reunión por id. Devuelve filas eliminadas."""
@@ -567,7 +580,7 @@ class TranscriptionDB:
             logger.warning("FTS backfill error: %s", exc)
 
     def meetings_index(self, limit: int = 200) -> list:
-        """Devuelve índice liviano de reuniones (id, title, started_at, resumen) para Potor."""
+        """Devuelve índice liviano de reuniones (id, title, started_at, resumen) para el Asistente de reuniones."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(

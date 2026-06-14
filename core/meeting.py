@@ -300,6 +300,14 @@ class MeetingSession:
         with self._lock:
             self._last_minutes = minutes  # para que el dashboard la muestre aunque se terminara por hotkey/tray
 
+        # Línea de tiempo de momentos clave (capítulos etiquetados por LLM).
+        # Fail-safe: cualquier fallo devuelve [] y nunca bloquea el insert/acta.
+        try:
+            chapters = _insights.generate_chapters(transcript, segments)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Reunión: error generando capítulos (se continúa sin ellos): %s", exc)
+            chapters = []
+
         # Persistencia ÚNICA aquí (no en los callers): así da igual si la reunión
         # se terminó desde el hotkey, el tray o el dashboard — se guarda una sola vez.
         meeting_id = None
@@ -317,6 +325,7 @@ class MeetingSession:
                     started_at=self._started_at,
                     insights_json=json.dumps(insights, ensure_ascii=False),
                     minutes_json=json.dumps(minutes, ensure_ascii=False),
+                    chapters_json=json.dumps(chapters, ensure_ascii=False),
                 )
                 saved = True
             except Exception as exc:  # noqa: BLE001

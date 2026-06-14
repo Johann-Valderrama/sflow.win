@@ -17,9 +17,9 @@ Backend: por ahora Groq (``INSIGHTS_BACKEND=groq``, modelos Llama vía el SDK
 como siguiente paso — ver ``_chat``.
 
 Backends POR TAREA: ``INSIGHTS_BACKEND_LIVE`` (update_state, consolidate) y
-``INSIGHTS_BACKEND_BATCH`` (generate_minutes, chat_memory=Potor). Si no se
+``INSIGHTS_BACKEND_BATCH`` (generate_minutes, chat_memory=Asistente de reuniones). Si no se
 setean, heredan ``INSIGHTS_BACKEND``; si tampoco, "groq". Esto permite, p. ej.,
-usar Groq para el análisis en vivo (velocidad) y OpenRouter para el acta/Potor
+usar Groq para el análisis en vivo (velocidad) y OpenRouter para el acta/Asistente de reuniones
 (más inteligencia y contexto).
 
 Todo es fail-safe: si el LLM no está disponible o falla, las funciones devuelven
@@ -123,7 +123,7 @@ def _model(task: str = "live") -> str:
     if backend == "endpoint":
         return os.getenv("INSIGHTS_ENDPOINT_MODEL", "qwen/qwen2.5-vl-7b").strip()
     if backend == "openrouter":
-        return os.getenv("OPENROUTER_MODEL", "google/gemini-3-flash").strip()
+        return os.getenv("OPENROUTER_MODEL", "google/gemini-3.1-flash-lite").strip()
     return os.getenv("INSIGHTS_MODEL", "llama-3.3-70b-versatile").strip()
 
 
@@ -142,13 +142,16 @@ def _get_groq_client():
 
 
 def _chat(messages: list, *, task: str = "live", json_mode: bool = False,
-          temperature: float = 0.2, max_tokens: int = 1024) -> str:
+          temperature: float = 0.2, max_tokens: int = 1024,
+          reasoning: bool = False) -> str:
     """Llama al LLM de insights y devuelve el contenido de texto.
 
     Dispatch por backend resuelto para la tarea: 'groq' (default), 'endpoint'
     (LM Studio / on-prem OpenAI-compatible) u 'openrouter' (nube multi-modelo).
     El parámetro ``task`` ("live" o "batch") determina qué variable de entorno
     se usa para seleccionar el backend.
+    El parámetro ``reasoning`` activa razonamiento extendido en backends que lo
+    soportan (openrouter). Ignorado en groq y endpoint.
     """
     backend = _resolve_backend(task)
 
@@ -158,7 +161,8 @@ def _chat(messages: list, *, task: str = "live", json_mode: bool = False,
 
     if backend == "openrouter":
         return _chat_openrouter(messages, task=task, json_mode=json_mode,
-                                temperature=temperature, max_tokens=max_tokens)
+                                temperature=temperature, max_tokens=max_tokens,
+                                reasoning=reasoning)
 
     if backend != "groq":
         raise InsightsUnavailable(f"Backend de insights '{backend}' aún no implementado")
@@ -210,13 +214,16 @@ def _chat_endpoint(messages: list, *, task: str = "live", json_mode: bool,
 
 
 def _chat_openrouter(messages: list, *, task: str = "live", json_mode: bool,
-                     temperature: float, max_tokens: int) -> str:
+                     temperature: float, max_tokens: int,
+                     reasoning: bool = False) -> str:
     """Llamada a OpenRouter (nube multi-modelo, API OpenAI-compatible).
 
     Requiere OPENROUTER_API_KEY. Modelo configurable vía OPENROUTER_MODEL.
     No envía response_format (misma razón que _chat_endpoint: compatibilidad máxima);
     confía en el prompt + _extract_json para JSON mode.
     Timeout (10, 120): conexión rápida, generación puede tardar con modelos grandes.
+    Si ``reasoning`` es True, activa razonamiento extendido vía el campo "reasoning"
+    de OpenRouter (effort configurable con OPENROUTER_REASONING_EFFORT, default "medium").
     """
     import requests  # noqa: PLC0415
     key = os.getenv("OPENROUTER_API_KEY", "").strip()
@@ -229,6 +236,9 @@ def _chat_openrouter(messages: list, *, task: str = "live", json_mode: bool,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    if reasoning:
+        effort = os.getenv("OPENROUTER_REASONING_EFFORT", "medium")
+        payload["reasoning"] = {"enabled": True, "effort": effort}
     # json_mode: igual que _chat_endpoint, confiamos en prompt + _extract_json
     _ = json_mode
     try:
@@ -245,7 +255,16 @@ def _chat_openrouter(messages: list, *, task: str = "live", json_mode: bool,
         )
         resp.raise_for_status()
     except requests.RequestException as exc:
-        raise InsightsUnavailable(f"OpenRouter no disponible: {exc}") from exc
+        # Incluir el cuerpo de la respuesta (p.ej. "X is not a valid model ID") para que
+        # un slug/parametro invalido no quede como fallo silencioso.
+        body = ""
+        resp_obj = getattr(exc, "response", None)
+        if resp_obj is not None:
+            try:
+                body = f" — {resp_obj.text[:300]}"
+            except Exception:  # noqa: BLE001
+                body = ""
+        raise InsightsUnavailable(f"OpenRouter no disponible: {exc}{body}") from exc
     data = resp.json()
     return (data["choices"][0]["message"]["content"] or "").strip()
 
@@ -415,13 +434,120 @@ _MINUTES_SYSTEM = (
 )
 
 
-def chat_memory(messages: list, *, max_tokens: int = 1024, temperature: float = 0.3) -> str:
-    """Chat genérico multi-turno sobre la memoria de reuniones (Potor). Reusa el dispatch backend."""
+def chat_memory(messages: list, *, max_tokens: int = 1024, temperature: float = 0.3,
+                reasoning: bool = False) -> str:
+    """Chat genérico multi-turno sobre la memoria de reuniones (Asistente de reuniones). Reusa el dispatch backend.
+
+    Si ``reasoning`` es True, se asegura holgura de tokens (mínimo 2048) porque los
+    tokens de razonamiento cuentan en el límite de salida y sin holgura se trunca la respuesta.
+    """
+    if reasoning:
+        max_tokens = max(max_tokens, 2048)
     return _chat(messages, task="batch", json_mode=False, temperature=temperature,
-                 max_tokens=max_tokens)
+                 max_tokens=max_tokens, reasoning=reasoning)
 
 
-def generate_minutes(transcript: str, insights: dict | None = None) -> dict:
+def _mmss_to_seconds(s: str) -> float:
+    """Convierte 'mm:ss' o 'h:mm:ss' a segundos. Defensivo: devuelve 0 ante cualquier entrada inválida."""
+    try:
+        parts = str(s).strip().split(":")
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + float(parts[1])
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+    except Exception:  # noqa: BLE001
+        pass
+    return 0.0
+
+
+_CHAPTERS_SYSTEM = (
+    "Eres un asistente que analiza reuniones. Recibes la transcripción de una reunión "
+    "(con marcadores de tiempo [mm:ss] y hablantes 'Yo'/'Ellos') y debes identificar sus "
+    "MOMENTOS CLAVE / capítulos en orden cronológico.\n\n"
+    "INSTRUCCIONES:\n"
+    "- Divide la reunión en sus momentos clave (típicamente 3 a 8; nunca más de 10).\n"
+    "- 'inicio': copia EXACTAMENTE un timestamp [mm:ss] que APAREZCA en la transcripción "
+    "(búscalo en los marcadores, NO lo inventes ni lo aproximes). Formato: 'mm:ss'.\n"
+    "- 'titulo': etiqueta corta (3-6 palabras) que describa DE QUÉ se habló en ese tramo, "
+    "basada SOLO en el contenido real. No inventes temas.\n"
+    "- 'resumen': una frase opcional que resume el tramo. Omítela o déjala vacía si no "
+    "hay suficiente contenido. No inventes datos, nombres ni decisiones.\n"
+    "- Si la reunión es muy corta o sin estructura clara, devuelve 1 o 2 capítulos.\n\n"
+    "Responde SOLO con un objeto JSON con esta forma exacta (sin texto extra):\n"
+    '{"capitulos": [{"inicio": "mm:ss", "titulo": "...", "resumen": "..."}, ...]}\n\n'
+    "REGLA ANTI-ALUCINACIÓN: si no encuentras un timestamp real para un capítulo, no lo incluyas."
+)
+
+
+def generate_chapters(transcript: str, segments: list | None = None) -> list:
+    """Genera la línea de tiempo de momentos clave (capítulos) de la reunión. Fail-safe.
+
+    Devuelve lista de dicts {t: float, inicio: 'mm:ss', titulo: str, resumen: str}
+    ordenada por t ascendente, o [] si el LLM no está disponible o falla.
+    """
+    if not transcript.strip() or not is_available(task="batch"):
+        return []
+    try:
+        content = _chat(
+            messages=[
+                {"role": "system", "content": _CHAPTERS_SYSTEM},
+                {"role": "user", "content": f"TRANSCRIPCIÓN:\n{transcript}"},
+            ],
+            task="batch",
+            json_mode=True,
+            temperature=0.2,
+            max_tokens=900,
+        )
+        data = _extract_json(content)
+        # Acepta {"capitulos": [...]} o {"chapters": [...]} o lista directa
+        if isinstance(data, list):
+            raw_list = data
+        elif isinstance(data, dict):
+            raw_list = data.get("capitulos") or data.get("chapters") or []
+        else:
+            return []
+
+        if not isinstance(raw_list, list):
+            return []
+
+        segs = segments or []
+
+        result = []
+        for item in raw_list:
+            if not isinstance(item, dict):
+                continue
+            titulo = (item.get("titulo") or "").strip()
+            if not titulo:
+                continue
+            inicio_raw = str(item.get("inicio") or "0:00").strip()
+            resumen = (item.get("resumen") or "").strip()
+
+            secs = _mmss_to_seconds(inicio_raw)
+
+            if segs:
+                # Snap al segmento más cercano
+                best = min(segs, key=lambda s: abs(float(s.get("t", 0)) - secs))
+                t = float(best.get("t", secs))
+                inicio = best.get("time", inicio_raw)
+            else:
+                t = secs
+                inicio = inicio_raw
+
+            result.append({"t": t, "inicio": inicio, "titulo": titulo, "resumen": resumen})
+
+        # Ordenar por t y limitar a 10
+        result.sort(key=lambda x: x["t"])
+        return result[:10]
+
+    except InsightsUnavailable:
+        return []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Capítulos: error generando línea de tiempo: %s", exc)
+        return []
+
+
+def generate_minutes(transcript: str, insights: dict | None = None,
+                     reasoning: bool = False) -> dict:
     """Genera el acta de la reunión (una sola llamada LLM). Fail-safe.
 
     Recibe opcionalmente el análisis en vivo (temas/pendientes/propuestas) para que el
@@ -434,6 +560,7 @@ def generate_minutes(transcript: str, insights: dict | None = None) -> dict:
     user = f"TRANSCRIPCIÓN:\n{transcript}"
     if insights:
         user += f"\n\nANÁLISIS EN VIVO DETECTADO:\n{json.dumps(insights, ensure_ascii=False)}"
+    minutes_max_tokens = max(1600, 2400) if reasoning else 1600
     try:
         content = _chat(
             messages=[
@@ -443,7 +570,8 @@ def generate_minutes(transcript: str, insights: dict | None = None) -> dict:
             task="batch",
             json_mode=True,
             temperature=0.2,
-            max_tokens=1600,
+            max_tokens=minutes_max_tokens,
+            reasoning=reasoning,
         )
         data = _extract_json(content)
         if not isinstance(data, dict):

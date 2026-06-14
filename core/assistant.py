@@ -1,4 +1,4 @@
-"""Potor — orquestador de retrieval + contexto + LLM para chat sobre reuniones.
+"""Asistente de reuniones — orquestador de retrieval + contexto + LLM para chat sobre reuniones.
 
 Construye el contexto (índice + actas + transcripción) y delega la generación
 en insights.chat_memory. Sin importar db: recibe la instancia como parámetro.
@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 # System prompt
 # ---------------------------------------------------------------------------
 
-POTOR_SYSTEM = (
-    "Eres Potor, el asistente de memoria de reuniones del usuario. "
+ASSISTANT_SYSTEM = (
+    "Eres un asistente de memoria de las reuniones del usuario. "
     "Tu función es ayudar a recordar, buscar y sintetizar lo que ocurrió en sus reuniones.\n\n"
     "REGLAS ESTRICTAS:\n"
     "- Responde SOLO con base en el CONTEXTO provisto (índice de reuniones, actas y transcripción). "
@@ -39,13 +39,13 @@ POTOR_SYSTEM = (
 
 def _budget_chars() -> int:
     """Presupuesto de caracteres para el bloque de contexto."""
-    env_val = os.getenv("POTOR_CONTEXT_BUDGET_CHARS", "").strip()
+    env_val = os.getenv("ASSISTANT_CONTEXT_BUDGET_CHARS", "").strip()
     if env_val:
         try:
             return int(env_val)
         except ValueError:
             pass
-    # Potor corre sobre el backend "batch" (acta/Potor), no el global: el presupuesto
+    # El asistente corre sobre el backend "batch" (acta/asistente), no el global: el presupuesto
     # debe seguir a ese backend (p.ej. LM Studio local necesita una ventana más chica).
     backend = insights._resolve_backend("batch")
     return 18000 if backend == "endpoint" else 80000
@@ -150,7 +150,7 @@ def _compact_index(entries: list, drop_resumen: bool = False, max_rows: int = No
 # ---------------------------------------------------------------------------
 
 def build_context(db, message: str, meeting_id=None, budget: int = None) -> tuple:
-    """Construye el bloque de contexto para Potor con truncado en cascada.
+    """Construye el bloque de contexto para el asistente con truncado en cascada.
 
     Devuelve (context_str, used_meeting_ids).
 
@@ -298,26 +298,69 @@ def build_context(db, message: str, meeting_id=None, budget: int = None) -> tupl
 
 
 # ---------------------------------------------------------------------------
+# Reasoning heuristic
+# ---------------------------------------------------------------------------
+
+def _needs_reasoning(message: str) -> bool:
+    """Heurística nivel-2: ¿la pregunta requiere razonamiento analítico?
+
+    Normaliza el mensaje (minúsculas + quita acentos) y busca disparadores
+    analíticos. Devuelve True para preguntas complejas/analíticas, False para
+    lookups simples (lista/resume/cuáles/pendientes/quién/cuándo/citas).
+    """
+    import unicodedata  # noqa: PLC0415
+    normalized = unicodedata.normalize("NFD", (message or "").lower())
+    normalized = "".join(c for c in normalized if unicodedata.category(c) != "Mn")
+
+    _ANALYTICAL_TRIGGERS = (
+        "compar", "analiz", "recomien", "recomend", "estrateg",
+        "plan de accion", "redacta un plan", "evalu", "pros y contra",
+        "ventajas y desventaj", "por que", "deberia", "que harias",
+        "sugier", "propon", "prioriz", "implicacion", "consecuencia",
+        "que conviene", "ayudame a decidir", "razona",
+        "explica por que", "analisis", "diferencia entre",
+    )
+
+    return any(trigger in normalized for trigger in _ANALYTICAL_TRIGGERS)
+
+
+# ---------------------------------------------------------------------------
 # Public answer function
 # ---------------------------------------------------------------------------
 
-def answer(db, message: str, history=None, meeting_id=None, max_tokens: int = 1024) -> dict:
+def answer(db, message: str, history=None, meeting_id=None, max_tokens: int = 1024,
+           reasoning="auto") -> dict:
     """Responde una pregunta sobre el historial de reuniones usando retrieval + LLM.
 
-    Devuelve {ok: True, answer: str, used_meeting_ids: list} o {ok: False, error: str}.
+    Devuelve {ok: True, answer: str, used_meeting_ids: list, reasoned: bool}
+    o {ok: False, error: str, reasoned: bool}.
+
+    El parámetro ``reasoning`` controla el razonamiento extendido:
+      - True  → siempre razona
+      - False → nunca razona
+      - "auto" o None → heurística (_needs_reasoning) decide
     """
     message = (message or "").strip()
+
+    # Resolver reasoning antes de cualquier return (se incluye en todos los paths)
+    if reasoning is True:
+        resolved = True
+    elif reasoning is False:
+        resolved = False
+    else:
+        resolved = _needs_reasoning(message)
+
     if not message:
-        return {"ok": False, "error": "Mensaje vacío"}
+        return {"ok": False, "error": "Mensaje vacío", "reasoned": resolved}
 
     try:
         context, used = build_context(db, message, meeting_id=meeting_id)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Potor: error construyendo contexto: %s", exc)
+        logger.warning("Asistente: error construyendo contexto: %s", exc)
         context = ""
         used = []
 
-    system_content = POTOR_SYSTEM + "\n\n" + context
+    system_content = ASSISTANT_SYSTEM + "\n\n" + context
 
     messages = [{"role": "system", "content": system_content}]
 
@@ -333,9 +376,11 @@ def answer(db, message: str, history=None, meeting_id=None, max_tokens: int = 10
     messages.append({"role": "user", "content": message})
 
     try:
-        text = insights.chat_memory(messages, max_tokens=max_tokens)
-        return {"ok": True, "answer": text, "used_meeting_ids": used}
+        text = insights.chat_memory(messages, max_tokens=max_tokens, reasoning=resolved)
+        return {"ok": True, "answer": text, "used_meeting_ids": used, "reasoned": resolved}
     except insights.InsightsUnavailable as exc:
-        return {"ok": False, "error": str(exc) or "Backend de insights no disponible"}
+        return {"ok": False, "error": str(exc) or "Backend de insights no disponible",
+                "reasoned": resolved}
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": "Error al consultar Potor: " + str(exc)}
+        return {"ok": False, "error": "Error al consultar el asistente: " + str(exc),
+                "reasoned": resolved}
