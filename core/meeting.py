@@ -119,7 +119,7 @@ class MeetingSession:
         # asigna IDs, deduplica por similitud y NUNCA retira ítems (anti-flicker /
         # anti-retracción). Cada ítem es un dict con "id". temas: {id,text};
         # pendientes: {id,texto,responsable}; propuestas: {id,texto,confianza}.
-        self._insights: dict = {"temas": [], "pendientes": [], "propuestas": []}
+        self._insights: dict = {"temas": [], "pendientes": [], "propuestas": [], "citas": []}
         self._next_insight_id = 1
         self._insight_buffer: list = []     # texto nuevo no enviado aún al LLM
         self._insight_running = False       # evita llamadas LLM concurrentes
@@ -165,6 +165,7 @@ class MeetingSession:
                 "temas": list(self._insights.get("temas", [])),
                 "pendientes": list(self._insights.get("pendientes", [])),
                 "propuestas": list(self._insights.get("propuestas", [])),
+                "citas": list(self._insights.get("citas", [])),
             }
 
     def get_last_minutes(self) -> "dict | None":
@@ -203,7 +204,7 @@ class MeetingSession:
             self._carry = {self.LABEL_MIC: "", self.LABEL_SYS: ""}
             self._window_start = 0.0
             self._drain_viz_queue()
-            self._insights = {"temas": [], "pendientes": [], "propuestas": []}
+            self._insights = {"temas": [], "pendientes": [], "propuestas": [], "citas": []}
             self._next_insight_id = 1
             self._insight_buffer = []
             self._insight_running = False
@@ -565,7 +566,7 @@ class MeetingSession:
         with self._lock:
             if self._last_insight_at:
                 self._insight_intervals.append(now - self._last_insight_at)
-            prev_total = sum(len(self._insights[k]) for k in ("temas", "pendientes", "propuestas"))
+            prev_total = sum(len(self._insights.get(k, [])) for k in ("temas", "pendientes", "propuestas", "citas"))
             _added, changed = self._merge_plain_into_store(llm_state)
             if prev_total:
                 self._churn_samples.append(changed / prev_total)
@@ -590,6 +591,8 @@ class MeetingSession:
                            for p in self._insights["pendientes"]],
             "propuestas": [{"texto": p["texto"], "confianza": p.get("confianza", "media")}
                            for p in self._insights["propuestas"]],
+            "citas": [{"texto": c["texto"], "fecha": c.get("fecha"), "hora": c.get("hora")}
+                      for c in self._insights.get("citas", [])],
         }
 
     def _store_to_plain(self) -> dict:
@@ -694,6 +697,8 @@ class MeetingSession:
         merge_list(self._insights["temas"], plain.get("temas", []), None)
         merge_list(self._insights["pendientes"], plain.get("pendientes", []), "texto")
         merge_list(self._insights["propuestas"], plain.get("propuestas", []), "texto")
+        self._insights.setdefault("citas", [])
+        merge_list(self._insights["citas"], plain.get("citas", []), "texto")
         return added, changed
 
     def _fluidity_metrics(self) -> dict:

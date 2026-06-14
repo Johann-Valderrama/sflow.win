@@ -1261,6 +1261,11 @@ HTML_TEMPLATE = """
                 html += '<div><div class="text-[11px] uppercase tracking-wide text-sky-300/50 mb-1">Propuestas</div>'
                     + prop.map(p => '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">💡 ' + escapeHtml(String(p.texto || '')) + '</div>').join('') + '</div>';
             }
+            const citas = ins.citas || [];
+            if (citas.length) {
+                html += '<div><div class="text-[11px] uppercase tracking-wide text-emerald-300/50 mb-1">Próximas reuniones</div>'
+                    + citas.map(c => '<div class="text-xs text-white/75 mb-0.5' + fadeCls(c.id) + '">📅 ' + escapeHtml(String(c.texto || '')) + pendMeta({fecha: c.fecha, hora: c.hora}) + '</div>').join('') + '</div>';
+            }
             el.innerHTML = html;
         }
 
@@ -1269,8 +1274,8 @@ HTML_TEMPLATE = """
             const body = document.getElementById('mt-minutes-body');
             if (!wrap || !body) return;
             m = m || {};
-            const dec = m.decisiones || [], tem = m.temas || [], pen = m.pendientes || [], prop = m.propuestas || [];
-            if (!m.resumen && !dec.length && !tem.length && !pen.length && !prop.length) {
+            const dec = m.decisiones || [], tem = m.temas || [], pen = m.pendientes || [], prop = m.propuestas || [], cit = m.citas || [];
+            if (!m.resumen && !dec.length && !tem.length && !pen.length && !prop.length && !cit.length) {
                 wrap.classList.add('hidden');
                 return;
             }
@@ -1282,6 +1287,8 @@ HTML_TEMPLATE = """
                 + pen.map(p => '<div class="text-xs text-white/75">☐ ' + escapeHtml(String(p.texto || p)) + pendMeta(p) + '</div>').join('') + '</div>';
             if (prop.length) html += '<div><div class="text-xs text-sky-300/50 mt-2 mb-1">Propuestas</div>'
                 + prop.map(p => '<div class="text-xs text-white/75">💡 ' + escapeHtml(String(p.texto != null ? p.texto : p)) + '</div>').join('') + '</div>';
+            if (cit.length) html += '<div><div class="text-xs text-emerald-300/50 mt-2 mb-1">Próximas reuniones</div>'
+                + cit.map(c => '<div class="text-xs text-white/75">📅 ' + escapeHtml(String(c.texto || c)) + pendMeta({fecha: c.fecha, hora: c.hora}) + '</div>').join('') + '</div>';
             if (tem.length) html += '<div><div class="text-xs text-white/40 mt-2 mb-1">Temas tratados</div>'
                 + tem.map(t => '<div class="text-xs text-white/75">• ' + escapeHtml(String(t)) + '</div>').join('') + '</div>';
             body.innerHTML = html;

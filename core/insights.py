@@ -72,7 +72,7 @@ class InsightsUnavailable(Exception):
 
 def empty_state() -> dict:
     """Estado inicial vacío del Insight Stream."""
-    return {"temas": [], "pendientes": [], "propuestas": []}
+    return {"temas": [], "pendientes": [], "propuestas": [], "citas": []}
 
 
 def is_available() -> bool:
@@ -189,7 +189,9 @@ _INSIGHTS_SYSTEM = (
     '  "pendientes": lista de objetos {"texto": string, "responsable": string|null, '
     '"fecha": string|null, "hora": string|null} — compromisos/tareas acordados; incluye '
     'responsable, fecha y hora SOLO si se mencionan (p. ej. "viernes", "15:00")\n'
-    '  "propuestas": lista de objetos {"texto": string, "confianza": "alta"|"media"}\n\n'
+    '  "propuestas": lista de objetos {"texto": string, "confianza": "alta"|"media"}\n'
+    '  "citas": lista de objetos {"texto": string, "fecha": string|null, "hora": string|null} '
+    "— próximas REUNIONES/citas agendadas (cuándo se vuelve a hablar y de qué); [] si no se acordó ninguna\n\n"
     "REGLAS ESTRICTAS:\n"
     "- Solo añade un pendiente o una propuesta si hay EVIDENCIA EXPLÍCITA en el texto nuevo. "
     "Es preferible OMITIR a inventar. No infieras intenciones no dichas.\n"
@@ -234,6 +236,7 @@ def update_state(state: dict, delta_text: str) -> dict:
             "temas": new_state.get("temas", []) or [],
             "pendientes": new_state.get("pendientes", []) or [],
             "propuestas": new_state.get("propuestas", []) or [],
+            "citas": new_state.get("citas", []) or [],
         }
     except InsightsUnavailable as exc:
         _last_error = str(exc)
@@ -256,7 +259,9 @@ _CONSOLIDATE_SYSTEM = (
     '  "temas": lista de strings (AMPLIOS y no redundantes; fusiona micro-temas; ~8 máx)\n'
     '  "pendientes": lista de objetos {"texto": string, "responsable": string|null, '
     '"fecha": string|null, "hora": string|null} — compromisos con responsable/fecha/hora si se dijeron\n'
-    '  "propuestas": lista de objetos {"texto": string, "confianza": "alta"|"media"}\n\n'
+    '  "propuestas": lista de objetos {"texto": string, "confianza": "alta"|"media"}\n'
+    '  "citas": lista de objetos {"texto": string, "fecha": string|null, "hora": string|null} '
+    "— próximas reuniones/citas agendadas\n\n"
     "REGLAS:\n"
     "- Corrige y mejora con la visión completa: fusiona duplicados y temas relacionados, "
     "renombra temas confusos, añade lo importante que el borrador haya omitido.\n"
@@ -290,6 +295,7 @@ def consolidate(transcript: str, current: dict) -> dict:
             "temas": data.get("temas", []) or [],
             "pendientes": data.get("pendientes", []) or [],
             "propuestas": data.get("propuestas", []) or [],
+            "citas": data.get("citas", []) or [],
         }
     except InsightsUnavailable:
         return current
@@ -312,7 +318,9 @@ _MINUTES_SYSTEM = (
     '  "temas": lista de strings (asuntos tratados; amplios, no redundantes)\n'
     '  "pendientes": lista de objetos {"texto": string, "responsable": string|null, '
     '"fecha": string|null, "hora": string|null} — compromisos/tareas con responsable, fecha y hora si se mencionaron\n'
-    '  "propuestas": lista de strings (sugerencias/ideas accionables planteadas)\n\n'
+    '  "propuestas": lista de strings (sugerencias/ideas accionables planteadas)\n'
+    '  "citas": lista de objetos {"texto": string, "fecha": string|null, "hora": string|null} '
+    "— próximas reuniones/citas agendadas; [] si no hubo\n\n"
     "REGLAS:\n"
     "- Básate en la transcripción y el análisis en vivo; no inventes.\n"
     "- Conserva los pendientes y propuestas detectados en vivo si la transcripción los respalda.\n"
@@ -328,7 +336,7 @@ def generate_minutes(transcript: str, insights: dict | None = None) -> dict:
     acta sea consistente con lo que vio el usuario. Devuelve un dict con claves
     resumen/decisiones/temas/pendientes/propuestas, o un acta vacía si el LLM falla.
     """
-    empty = {"resumen": "", "decisiones": [], "temas": [], "pendientes": [], "propuestas": []}
+    empty = {"resumen": "", "decisiones": [], "temas": [], "pendientes": [], "propuestas": [], "citas": []}
     if not transcript.strip() or not is_available():
         return empty
     user = f"TRANSCRIPCIÓN:\n{transcript}"
@@ -353,6 +361,7 @@ def generate_minutes(transcript: str, insights: dict | None = None) -> dict:
             "temas": data.get("temas", []) or [],
             "pendientes": data.get("pendientes", []) or [],
             "propuestas": data.get("propuestas", []) or [],
+            "citas": data.get("citas", []) or [],
         }
     except InsightsUnavailable:
         return empty
