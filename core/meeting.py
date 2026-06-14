@@ -34,6 +34,7 @@ from config import (
     SAMPLE_RATE,
     MEETING_CHUNK_SECONDS,
     INSIGHTS_MIN_WORDS,
+    INSIGHTS_FIRST_WORDS,
     INSIGHTS_INTERVAL_SECONDS,
     INSIGHTS_CONSOLIDATE_SECONDS,
     INSIGHTS_CONSOLIDATE_COOLDOWN,
@@ -379,8 +380,11 @@ class MeetingSession:
             if self._insight_running or not self._insight_buffer:
                 return
             words = sum(len(s.split()) for s in self._insight_buffer)
+            # Primera actualización: umbral bajo para que el análisis aparezca pronto
+            # (si no, el panel se siente "congelado" durante el primer minuto).
+            threshold = INSIGHTS_FIRST_WORDS if self._updates_count == 0 else INSIGHTS_MIN_WORDS
             elapsed_ok = (time.monotonic() - self._last_insight_at) >= INSIGHTS_INTERVAL_SECONDS
-            if words < INSIGHTS_MIN_WORDS and not elapsed_ok:
+            if words < threshold and not elapsed_ok:
                 return
             delta = "\n".join(self._insight_buffer)
             self._insight_buffer = []
@@ -458,6 +462,9 @@ class MeetingSession:
             self._prev_topic_count = n_temas
             self._insight_running = False
             self._last_insight_at = now
+            # Surfacing del error del backend de insights (p. ej. LM Studio caído):
+            # que el panel muestre el fallo en vez de parecer "congelado".
+            self._last_error = _insights.last_error()
 
     def _store_to_plain(self) -> dict:
         """Convierte el store con IDs a texto plano (lo que el LLM recibe y devuelve)."""

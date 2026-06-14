@@ -133,7 +133,11 @@ MEETING_CHUNK_SECONDS = int(os.getenv("MEETING_CHUNK_SECONDS", "20"))
 INSIGHTS_ENABLED = os.getenv("INSIGHTS_ENABLED", "true")
 INSIGHTS_BACKEND = os.getenv("INSIGHTS_BACKEND", "groq")
 INSIGHTS_MODEL = os.getenv("INSIGHTS_MODEL", "llama-3.3-70b-versatile")
-INSIGHTS_MIN_WORDS = int(os.getenv("INSIGHTS_MIN_WORDS", "45"))
+INSIGHTS_MIN_WORDS = int(os.getenv("INSIGHTS_MIN_WORDS", "30"))
+# Umbral reducido para la PRIMERA actualización: que el análisis aparezca pronto
+# (tras la primera ventana con algo de contenido) en vez de sentirse "congelado"
+# durante el primer minuto. Las siguientes usan INSIGHTS_MIN_WORDS.
+INSIGHTS_FIRST_WORDS = int(os.getenv("INSIGHTS_FIRST_WORDS", "12"))
 # Techo de tiempo (fallback): aunque no se acumulen MIN_WORDS, refrescar al menos cada
 # este intervalo para que en tramos tranquilos el análisis no se sienta congelado.
 # Bajado de 90 a 60s para una cadencia más regular (evidencia: políticas adaptativas

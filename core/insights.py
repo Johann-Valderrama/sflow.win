@@ -29,6 +29,12 @@ logger = logging.getLogger(__name__)
 
 _client = None
 _client_lock = threading.Lock()
+_last_error: str | None = None  # último error real de llamada (para surfacing en la UI)
+
+
+def last_error() -> "str | None":
+    """Último error de una llamada al backend de insights (None si la última fue OK)."""
+    return _last_error
 
 
 def _extract_json(text: str):
@@ -199,6 +205,7 @@ def update_state(state: dict, delta_text: str) -> dict:
     Devuelve el nuevo estado, o el anterior sin cambios si el LLM no está
     disponible, falla, o devuelve JSON inválido.
     """
+    global _last_error
     if not delta_text.strip() or not is_available():
         return state
     prev = json.dumps(state, ensure_ascii=False)
@@ -216,16 +223,20 @@ def update_state(state: dict, delta_text: str) -> dict:
         # Validar forma mínima; si falla, conservar el estado anterior (fail-safe)
         if not isinstance(new_state, dict) or "temas" not in new_state:
             logger.debug("Insights: JSON con forma inesperada, conservando estado previo")
+            _last_error = "el modelo no devolvió un JSON válido"
             return state
+        _last_error = None  # llamada OK
         return {
             "temas": new_state.get("temas", []) or [],
             "pendientes": new_state.get("pendientes", []) or [],
             "propuestas": new_state.get("propuestas", []) or [],
         }
-    except InsightsUnavailable:
+    except InsightsUnavailable as exc:
+        _last_error = str(exc)
         return state
     except Exception as exc:  # noqa: BLE001
         logger.warning("Insights: error actualizando estado (se conserva el previo): %s", exc)
+        _last_error = str(exc)
         return state
 
 

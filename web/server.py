@@ -1278,7 +1278,7 @@ HTML_TEMPLATE = """
 
             // Estado/botones: solo tocar el DOM si cambió (anti-parpadeo)
             const thinking = status.active && status.insight_running ? ' · analizando…' : '';
-            const statusSig = JSON.stringify([status.active, status.elapsed_fmt, status.segment_count, status.sys_available, !!status.insight_running]);
+            const statusSig = JSON.stringify([status.active, status.elapsed_fmt, status.segment_count, status.sys_available, !!status.insight_running, status.error || '']);
             if (statusSig !== _mtStatusSig) {
                 _mtStatusSig = statusSig;
                 if (status.active) {
@@ -1286,8 +1286,9 @@ HTML_TEMPLATE = """
                     stopBtn.classList.remove('hidden');
                     let txt = 'Grabando ' + (status.elapsed_fmt || '00:00') + ' · ' + (status.segment_count || 0) + ' intervenciones';
                     if (status.sys_available === false) txt += ' · solo micrófono';
+                    if (status.error) txt += ' · ⚠ ' + status.error;
                     statusEl.textContent = txt + thinking;
-                    statusEl.className = 'text-xs text-red-300';
+                    statusEl.className = status.error ? 'text-xs text-amber-300' : 'text-xs text-red-300';
                 } else {
                     startBtn.classList.remove('hidden');
                     stopBtn.classList.add('hidden');
