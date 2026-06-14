@@ -42,6 +42,20 @@ Se invoca como un modelo normal, como tool (`openrouter:fusion`) o como plugin. 
 
 ---
 
+## 1b. Detalle técnico del Fusion Router (config + límites)
+
+Tres formas de invocar (mismo pipeline): como **modelo** (`openrouter/fusion`, siempre delibera), como **tool** (`openrouter:fusion`, el outer decide si invocar; `tool_choice:"required"` lo fuerza), o como **plugin** (`plugins:[{id:"fusion",...}]`).
+
+**Parámetros** (default → rango): `analysis_models` (panel custom, **1–8** modelos), `model` (el judge; default = outer), `max_tool_calls` (8; **1–16**), `max_completion_tokens` (cap de output por llamada interna), `reasoning` (`{effort, max_tokens}`, forwardeable al panel y judge), `temperature` (0–2), `enabled:false` (desactiva Fusion para esa petición). Panel barato = pasar `analysis_models` con modelos baratos + `model` (judge) barato + `max_completion_tokens` para capar. No hay "Budget preset" con nombres publicados.
+
+**DOS LÍMITES CRÍTICOS para Vflow:**
+1. ⛔ **Las web-tools (`web_search`/`web_fetch`) NO se pueden desactivar.** No hay flag documentado; el único control es `max_tool_calls:1` (las limita, no las apaga). Para contexto **interno** (el transcript ya está en el prompt, no necesitamos web) esto añade costo/latencia/ruido **sin poder evitarlo** → argumento técnico fuerte **contra** Fusion nativo en Vflow.
+2. ⚠️ **Privacidad/ZDR no documentado para Fusion.** El panel reenvía el prompt a varios proveedores en paralelo → improbable que ZDR (acuerdo bilateral por proveedor) aplique consistente. Para datos de cliente, **asumir peor caso**.
+
+**Otros:** streaming **no documentado**; el JSON del judge lo consume el outer model → el cliente recibe la respuesta sintetizada, NO el JSON crudo (auditar vía "Activity" del dashboard). Recursión acotada a 1 nivel (header `x-openrouter-fusion-depth`).
+
+---
+
 ## 2. El principio generalizado: ensemble por bandas
 
 El estudio es **un solo ejemplo** (gama alta barata fusionada vs frontier alta). La enseñanza reutilizable:
@@ -76,7 +90,18 @@ El estudio es **un solo ejemplo** (gama alta barata fusionada vs frontier alta).
 - **Fusión casera, cuando haga falta** (orden recomendado por costo/complejidad):
   - **(B) Verificación cruzada** — modelo A genera acta → modelo B lista gaps/inconsistencias → A re-pasa. Barata, auditable, **ataca el mecanismo correcto para extracción**. Primer experimento si el acta se queda corta.
   - **(A) Ensemble serial** — 2 modelos baratos + juez que sintetiza (~3× costo de modelos baratos).
-  - **(C) Fusion con panel barato custom** — `analysis_models` con modelos baratos; cero código propio pero opaco y con web-tools de ruido.
+  - **(C) Fusion con panel barato custom** — `analysis_models` con modelos baratos; cero código propio pero opaco, **con web-tools de ruido que no se pueden apagar** (§1b) y sin garantía de ZDR.
+
+### Receta mínima de "fusión casera" (verificación cruzada, sin web tools)
+
+La doc de Fusion básicamente documenta la arquitectura a imitar. Mínimo viable para el acta (contexto interno, transcript ya en el prompt):
+
+1. **N llamadas paralelas** (2-3) al mismo prompt con modelos distintos (paralelas → misma latencia que una sola).
+2. **1 llamada al juez** con las respuestas concatenadas y este schema (inferido de los docs; los nombres exactos de OpenRouter no son públicos):
+   `{consensus, contradictions, partial_coverage, unique_insights, blind_spots}`.
+3. **1 llamada de síntesis** (el mismo juez u otro) que produce el acta/respuesta final usando ese JSON.
+
+Sin web tools, sin recursión, **costo predecible** (~3-4 llamadas de modelos baratos) y **auditable** (vemos el JSON del juez). Para extracción (acta), la variante aún más barata es 2 modelos (A genera, B revisa gaps/contradicciones) en vez del panel completo.
 
 **Regla práctica:** la decisión se valida con una tanda de evals sobre las mismas entradas (acta sobre el mismo transcript), no en teoría. Hoy parqueado; reconsiderar tras validar en reuniones reales.
 
@@ -85,7 +110,9 @@ El estudio es **un solo ejemplo** (gama alta barata fusionada vs frontier alta).
 ## Fuentes
 
 - [OpenRouter Blog — Surpassing Frontier Performance with Fusion](https://openrouter.ai/blog/announcements/fusion-beats-frontier/)
-- [OpenRouter Docs — Fusion Router](https://openrouter.ai/docs/guides/routing/routers/fusion-router)
+- [OpenRouter Docs — Fusion Router](https://openrouter.ai/docs/guides/routing/routers/fusion-router) (config, parámetros, límites)
+- [OpenRouter Docs — Fusion Plugin](https://openrouter.ai/docs/guides/features/plugins/fusion)
+- [OpenRouter Docs — Server Tools](https://openrouter.ai/docs/guides/features/server-tools)
 - [OpenRouter — Fusion model page](https://openrouter.ai/openrouter/fusion)
 - [DRACO dataset (Perplexity AI, HuggingFace)](https://huggingface.co/datasets/perplexity-ai/draco)
 - [DRACO paper (arXiv 2602.11685)](https://arxiv.org/pdf/2602.11685v1)
