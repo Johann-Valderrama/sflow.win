@@ -737,6 +737,7 @@ class VflowApp(QObject):
         res = MEETING.start()
         if res.get("ok"):
             self._meeting_active_seen = True  # sincronizar con el poller
+            self._apply_meeting_viz(True)     # visualizador del pill = audio de la reunión
             self.pill.set_state(PillWidget.STATE_RECORDING)
             if self.tray:
                 extra = "" if res.get("sys_available", True) else " (solo micrófono: no se detectó audio del sistema)"
@@ -770,6 +771,7 @@ class VflowApp(QObject):
         """Persiste la reunión finalizada y notifica el resultado."""
         self._meeting_stopping = False
         self._meeting_active_seen = False  # sincronizar con el poller
+        self._apply_meeting_viz(False)     # restaurar visualizador al recorder de dictado
         if not res.get("ok"):
             self.pill.set_state(PillWidget.STATE_ERROR)
             if self.tray:
@@ -815,11 +817,21 @@ class VflowApp(QObject):
             return  # hay un dictado en curso: no interferir con su pill
         if active:
             # Reunión iniciada desde fuera (dashboard) → reflejar en la pill
+            self._apply_meeting_viz(True)
             self.pill.set_state(PillWidget.STATE_RECORDING)
         elif not self._meeting_stopping:
             # Reunión terminada desde fuera (dashboard). Si fue por hotkey/tray,
             # _on_meeting_stopped ya gestiona la pill (_meeting_stopping=True).
+            self._apply_meeting_viz(False)
             self.pill.set_state(PillWidget.STATE_DONE)
+
+    def _apply_meeting_viz(self, active: bool):
+        """Apunta el visualizador del pill al audio de la reunión (tu voz) o lo
+        restaura al grabador de dictado. Así las barras se mueven durante la reunión."""
+        try:
+            self.pill.visualizer.set_audio_queue(MEETING.viz_queue if active else self.recorder.audio_queue)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("No se pudo cambiar la cola del visualizador: %s", exc)
 
     @pyqtSlot()
     def _check_mic_alive(self):

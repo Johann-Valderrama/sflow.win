@@ -24,6 +24,7 @@ import io
 import json
 import logging
 import os
+import queue
 import threading
 import time
 import wave
@@ -78,7 +79,13 @@ class MeetingSession:
     LABEL_SYS = "Ellos"
 
     def __init__(self):
-        self._lock = threading.Lock()
+        # Cola de audio del micrófono para el visualizador del pill (mostrar TU voz
+        # durante la reunión). El pill apunta su visualizador aquí mientras hay reunión.
+        self.viz_queue: queue.Queue = queue.Queue()
+        # RLock (reentrante): varios métodos que adquieren el lock se llaman entre sí
+        # (p. ej. desde un bloque ya bloqueado). Con Lock no reentrante eso deadlockea
+        # y congela todo el proceso (audio + servidor). RLock lo evita de forma segura.
+        self._lock = threading.RLock()
         self._active = False
         self._mic_frames: list = []
         self._sys_frames: list = []
@@ -106,6 +113,7 @@ class MeetingSession:
         self._prev_topic_count = 0          # nº de temas en la actualización previa
         self._topic_changed_pending = False # un tema nuevo emergió (señal para consolidación)
         self._last_consolidate_at = 0.0     # monotónico de la última consolidación
+        self._last_minutes: dict | None = None  # acta de la última reunión terminada (para el dashboard)
         # Métricas de fluidez (instrumentación para medir, no opinar)
         self._insight_intervals: list = []  # segundos entre actualizaciones (jitter)
         self._churn_samples: list = []      # fracción de ítems que cambian por actualización
@@ -145,6 +153,11 @@ class MeetingSession:
                 "propuestas": list(self._insights.get("propuestas", [])),
             }
 
+    def get_last_minutes(self) -> "dict | None":
+        """Acta de la última reunión terminada (None si la actual sigue activa o no hubo)."""
+        with self._lock:
+            return dict(self._last_minutes) if self._last_minutes else None
+
     def transcript_segments(self) -> list:
         """Devuelve los segmentos ordenados cronológicamente, listos para render."""
         with self._lock:
@@ -173,6 +186,7 @@ class MeetingSession:
             self._sys_frames = []
             self._segments = []
             self._last_error = None
+            self._drain_viz_queue()
             self._insights = {"temas": [], "pendientes": [], "propuestas": []}
             self._next_insight_id = 1
             self._insight_buffer = []
@@ -181,6 +195,7 @@ class MeetingSession:
             self._prev_topic_count = 0
             self._topic_changed_pending = False
             self._last_consolidate_at = time.monotonic()
+            self._last_minutes = None
             self._insight_intervals = []
             self._churn_samples = []
             self._retractions = 0
@@ -242,14 +257,18 @@ class MeetingSession:
 
         self._mic = None
         self._sys = None
+        self._drain_viz_queue()
 
         transcript = self.transcript_text()
         segments = self.transcript_segments()
         insights = self.get_insights()
 
-        # Acta post-reunión: una sola llamada LLM sobre el transcript completo.
+        # Acta post-reunión: una sola llamada LLM sobre el transcript completo, alimentada
+        # con el análisis en vivo para que sea consistente con lo que vio el usuario.
         # Fail-safe: si el LLM no está disponible devuelve un acta vacía.
-        minutes = _insights.generate_minutes(transcript)
+        minutes = _insights.generate_minutes(transcript, self._store_to_plain())
+        with self._lock:
+            self._last_minutes = minutes  # para que el dashboard la muestre aunque se terminara por hotkey/tray
 
         # Persistencia ÚNICA aquí (no en los callers): así da igual si la reunión
         # se terminó desde el hotkey, el tray o el dashboard — se guarda una sola vez.
@@ -311,11 +330,23 @@ class MeetingSession:
         with self._lock:
             if self._active:
                 self._mic_frames.append(chunk)
+                # Alimentar el visualizador del pill (tu voz). Cap para no crecer sin
+                # límite si nadie consume; el visualizador drena a VIZ_FPS.
+                if self.viz_queue.qsize() < 32:
+                    self.viz_queue.put(chunk)
 
     def _sys_callback(self, chunk: np.ndarray):
         with self._lock:
             if self._active:
                 self._sys_frames.append(chunk)
+
+    def _drain_viz_queue(self):
+        """Vacía la cola del visualizador (al iniciar/terminar reunión)."""
+        while True:
+            try:
+                self.viz_queue.get_nowait()
+            except queue.Empty:
+                break
 
     def _chunk_loop(self):
         """Cada MEETING_CHUNK_SECONDS cierra una ventana por canal y la transcribe.
@@ -389,7 +420,7 @@ class MeetingSession:
             delta = "\n".join(self._insight_buffer)
             self._insight_buffer = []
             self._insight_running = True
-            state = self._store_to_plain()  # el LLM recibe/devuelve texto plano
+            state = self._store_to_plain_locked()  # ya estamos dentro del lock
 
         threading.Thread(target=self._run_insight_update, args=(state, delta), daemon=True).start()
 
@@ -466,16 +497,20 @@ class MeetingSession:
             # que el panel muestre el fallo en vez de parecer "congelado".
             self._last_error = _insights.last_error()
 
+    def _store_to_plain_locked(self) -> dict:
+        """Convierte el store con IDs a texto plano. EL CALLER DEBE TENER EL LOCK."""
+        return {
+            "temas": [t["text"] for t in self._insights["temas"]],
+            "pendientes": [{"texto": p["texto"], "responsable": p.get("responsable")}
+                           for p in self._insights["pendientes"]],
+            "propuestas": [{"texto": p["texto"], "confianza": p.get("confianza", "media")}
+                           for p in self._insights["propuestas"]],
+        }
+
     def _store_to_plain(self) -> dict:
-        """Convierte el store con IDs a texto plano (lo que el LLM recibe y devuelve)."""
+        """Convierte el store con IDs a texto plano (adquiere el lock)."""
         with self._lock:
-            return {
-                "temas": [t["text"] for t in self._insights["temas"]],
-                "pendientes": [{"texto": p["texto"], "responsable": p.get("responsable")}
-                               for p in self._insights["pendientes"]],
-                "propuestas": [{"texto": p["texto"], "confianza": p.get("confianza", "media")}
-                               for p in self._insights["propuestas"]],
-            }
+            return self._store_to_plain_locked()
 
     def _new_insight_id(self) -> int:
         i = self._next_insight_id
@@ -491,22 +526,37 @@ class MeetingSession:
 
     @classmethod
     def _tokens(cls, s: str) -> set:
-        return {w for w in s.strip().lower().split() if w not in cls._STOPWORDS and len(w) >= 2}
+        # Mantener tokens largos y CUALQUIER token con dígito (los números discriminan:
+        # "Resident Evil 2" ≠ "Resident Evil 3"; "Q1" ≠ "Q2"; "versión 2020" ≠ "2024").
+        return {w for w in s.strip().lower().split()
+                if w not in cls._STOPWORDS and (len(w) >= 2 or any(c.isdigit() for c in w))}
+
+    @staticmethod
+    def _num_tokens(toks: set) -> set:
+        """Tokens que contienen algún dígito (2, 3, q1, 2020…) — son discriminantes."""
+        return {t for t in toks if any(c.isdigit() for c in t)}
 
     @classmethod
     def _same_item(cls, a: str, b: str) -> bool:
-        """¿a y b son el mismo ítem? Combina similitud de caracteres y solapamiento de tokens.
+        """¿a y b son el mismo ítem? Combina similitud de caracteres y solapamiento de tokens,
+        pero NUNCA fusiona si difieren sus tokens numéricos.
 
-        El solapamiento de tokens captura reformulaciones que SequenceMatcher pierde
-        (p. ej. "plazo Q1" vs "el plazo del hito Q1"), sin sobre-fusionar ítems distintos.
+        Esto evita el sobre-merge por similitud de caracteres ("Resident Evil 2" vs
+        "Resident Evil 3" tienen ~0.93 de ratio pero son temas distintos), conservando
+        el match de reformulaciones reales ("plazo Q1" vs "el plazo del hito Q1").
         """
         import difflib
         a, b = a.strip().lower(), b.strip().lower()
         if not a or not b:
             return False
-        if difflib.SequenceMatcher(None, a, b).ratio() >= cls._MATCH_THRESHOLD:
+        if a == b:
             return True
         ta, tb = cls._tokens(a), cls._tokens(b)
+        # Números/identificadores distintos → ítems distintos (regla decisiva).
+        if cls._num_tokens(ta) != cls._num_tokens(tb):
+            return False
+        if difflib.SequenceMatcher(None, a, b).ratio() >= cls._MATCH_THRESHOLD:
+            return True
         if not ta or not tb:
             return False
         inter = len(ta & tb)

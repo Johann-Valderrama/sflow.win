@@ -1152,6 +1152,7 @@ HTML_TEMPLATE = """
         let _mtStatusSig = null;
         let _mtSeenInsightIds = new Set();  // ids ya mostrados → solo los nuevos animan (fade)
         let _mtViewMode = 'revision';       // 'foco' (mínimo, en reunión) | 'revision' (todo)
+        let _mtMinutesShown = false;        // acta ya mostrada para la reunión terminada actual
 
         function setMeetingView(mode) {
             _mtViewMode = mode;
@@ -1185,9 +1186,18 @@ HTML_TEMPLATE = """
             try {
                 const res = await fetch('/api/meeting');
                 const data = await res.json();
-                renderMeeting(data.status || {}, data.segments || []);
+                const st = data.status || {};
+                renderMeeting(st, data.segments || []);
                 renderInsights(data.insights || {});
-                return data.status || {};
+                // Mostrar el acta cuando la reunión haya terminado, sin importar cómo
+                // se terminó (botón, AltGr+R o bandeja). Mientras está activa, se rearma.
+                if (st.active) {
+                    _mtMinutesShown = false;
+                } else if (data.last_minutes && !_mtMinutesShown) {
+                    renderMinutes(data.last_minutes);
+                    _mtMinutesShown = true;
+                }
+                return st;
             } catch(e) { return {}; }
         }
 
@@ -1252,8 +1262,8 @@ HTML_TEMPLATE = """
             const body = document.getElementById('mt-minutes-body');
             if (!wrap || !body) return;
             m = m || {};
-            const dec = m.decisiones || [], tem = m.temas || [], pen = m.pendientes || [];
-            if (!m.resumen && !dec.length && !tem.length && !pen.length) {
+            const dec = m.decisiones || [], tem = m.temas || [], pen = m.pendientes || [], prop = m.propuestas || [];
+            if (!m.resumen && !dec.length && !tem.length && !pen.length && !prop.length) {
                 wrap.classList.add('hidden');
                 return;
             }
@@ -1261,9 +1271,11 @@ HTML_TEMPLATE = """
             if (m.resumen) html += '<p class="text-white/80">' + escapeHtml(String(m.resumen)) + '</p>';
             if (dec.length) html += '<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'
                 + dec.map(d => '<div class="text-xs text-white/75">• ' + escapeHtml(String(d)) + '</div>').join('') + '</div>';
-            if (pen.length) html += '<div><div class="text-xs text-white/40 mt-2 mb-1">Pendientes</div>'
-                + pen.map(p => { const r = p.responsable ? ' (' + escapeHtml(String(p.responsable)) + ')' : '';
-                    return '<div class="text-xs text-white/75">☐ ' + escapeHtml(String(p.texto || '')) + r + '</div>'; }).join('') + '</div>';
+            if (pen.length) html += '<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'
+                + pen.map(p => { const r = p.responsable ? ' <span class="text-white/35">(' + escapeHtml(String(p.responsable)) + ')</span>' : '';
+                    return '<div class="text-xs text-white/75">☐ ' + escapeHtml(String(p.texto || p)) + r + '</div>'; }).join('') + '</div>';
+            if (prop.length) html += '<div><div class="text-xs text-sky-300/50 mt-2 mb-1">Propuestas</div>'
+                + prop.map(p => '<div class="text-xs text-white/75">💡 ' + escapeHtml(String(p.texto != null ? p.texto : p)) + '</div>').join('') + '</div>';
             if (tem.length) html += '<div><div class="text-xs text-white/40 mt-2 mb-1">Temas tratados</div>'
                 + tem.map(t => '<div class="text-xs text-white/75">• ' + escapeHtml(String(t)) + '</div>').join('') + '</div>';
             body.innerHTML = html;
@@ -1336,6 +1348,7 @@ HTML_TEMPLATE = """
             document.getElementById('mt-minutes').classList.add('hidden');  // limpiar acta previa
             _mtSegSig = _mtInsSig = _mtStatusSig = null;  // forzar render limpio de la nueva reunión
             _mtSeenInsightIds = new Set();
+            _mtMinutesShown = false;
             document.getElementById('mt-transcript').dataset.count = '0';
             try {
                 const res = await fetch('/api/meeting/start', {method:'POST'});
@@ -1370,6 +1383,7 @@ HTML_TEMPLATE = """
                 _stopMtPoll();
                 await loadMeeting();
                 renderMinutes(data.minutes);
+                _mtMinutesShown = true;  // ya mostrada por esta vía (evita doble render del poller)
                 const fb = document.getElementById('mt-feedback');
                 const dur = data.duration_seconds || 0;
                 const mins = Math.floor(dur/60), secs = Math.floor(dur%60);
@@ -2377,6 +2391,7 @@ def meeting_status():
         "status": MEETING.status(),
         "segments": MEETING.transcript_segments(),
         "insights": MEETING.get_insights(),
+        "last_minutes": MEETING.get_last_minutes(),  # acta de la última reunión terminada
     })
 
 

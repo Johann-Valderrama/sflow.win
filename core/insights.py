@@ -299,37 +299,44 @@ def consolidate(transcript: str, current: dict) -> dict:
 
 _MINUTES_SYSTEM = (
     "Eres un asistente que redacta el ACTA de una reunión a partir de su transcripción "
-    "(con hablantes 'Yo' = quien graba y 'Ellos' = los demás). Devuelve un objeto JSON "
-    "con exactamente estas claves:\n"
+    "(con hablantes 'Yo' = quien graba y 'Ellos' = los demás). También recibes el ANÁLISIS "
+    "EN VIVO que se detectó durante la reunión (temas, pendientes y propuestas); úsalo como "
+    "guía e incorpóralo si sigue siendo válido. Devuelve un objeto JSON con exactamente estas claves:\n"
     '  "resumen": string (2-4 frases con lo esencial)\n'
-    '  "decisiones": lista de strings (decisiones tomadas)\n'
+    '  "decisiones": lista de strings (decisiones tomadas; [] si no hubo)\n'
     '  "temas": lista de strings (asuntos tratados)\n'
-    '  "pendientes": lista de objetos {"texto": string, "responsable": string|null}\n\n'
+    '  "pendientes": lista de objetos {"texto": string, "responsable": string|null}\n'
+    '  "propuestas": lista de strings (sugerencias/ideas accionables planteadas)\n\n'
     "REGLAS:\n"
-    "- Básate solo en lo que dice la transcripción; no inventes.\n"
+    "- Básate en la transcripción y el análisis en vivo; no inventes.\n"
+    "- Conserva los pendientes y propuestas detectados en vivo si la transcripción los respalda.\n"
     "- Si una sección no tiene contenido real, devuélvela como lista vacía.\n"
     "- Responde SOLO con el objeto JSON. Todo en español."
 )
 
 
-def generate_minutes(transcript: str) -> dict:
+def generate_minutes(transcript: str, insights: dict | None = None) -> dict:
     """Genera el acta de la reunión (una sola llamada LLM). Fail-safe.
 
-    Devuelve un dict con claves resumen/decisiones/temas/pendientes, o un acta
-    vacía si el LLM no está disponible o falla.
+    Recibe opcionalmente el análisis en vivo (temas/pendientes/propuestas) para que el
+    acta sea consistente con lo que vio el usuario. Devuelve un dict con claves
+    resumen/decisiones/temas/pendientes/propuestas, o un acta vacía si el LLM falla.
     """
-    empty = {"resumen": "", "decisiones": [], "temas": [], "pendientes": []}
+    empty = {"resumen": "", "decisiones": [], "temas": [], "pendientes": [], "propuestas": []}
     if not transcript.strip() or not is_available():
         return empty
+    user = f"TRANSCRIPCIÓN:\n{transcript}"
+    if insights:
+        user += f"\n\nANÁLISIS EN VIVO DETECTADO:\n{json.dumps(insights, ensure_ascii=False)}"
     try:
         content = _chat(
             messages=[
                 {"role": "system", "content": _MINUTES_SYSTEM},
-                {"role": "user", "content": f"TRANSCRIPCIÓN:\n{transcript}"},
+                {"role": "user", "content": user},
             ],
             json_mode=True,
             temperature=0.2,
-            max_tokens=1500,
+            max_tokens=1600,
         )
         data = _extract_json(content)
         if not isinstance(data, dict):
@@ -339,6 +346,7 @@ def generate_minutes(transcript: str) -> dict:
             "decisiones": data.get("decisiones", []) or [],
             "temas": data.get("temas", []) or [],
             "pendientes": data.get("pendientes", []) or [],
+            "propuestas": data.get("propuestas", []) or [],
         }
     except InsightsUnavailable:
         return empty

@@ -30,3 +30,7 @@ cookies.txt
 mic_yo.wav
 loopback_ellos.wav
 *.wav
+
+# Logs
+vflow.log
+vflow.log.*
