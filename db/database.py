@@ -402,6 +402,16 @@ class TranscriptionDB:
             ).fetchone()
             return dict(row) if row else None
 
+    def meeting_delete(self, meeting_id: int) -> int:
+        """Elimina una reunión por id. Devuelve filas eliminadas."""
+        with sqlite3.connect(self.db_path) as conn:
+            return conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,)).rowcount
+
+    def meetings_delete_all(self) -> int:
+        """Elimina todas las reuniones. Devuelve filas eliminadas."""
+        with sqlite3.connect(self.db_path) as conn:
+            return conn.execute("DELETE FROM meetings").rowcount
+
     def prune_older_than(self, days: int) -> int:
         """Elimina transcripciones más antiguas que *days* días.
 

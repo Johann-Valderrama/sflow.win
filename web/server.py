@@ -1940,7 +1940,10 @@ MEETING_PAGE = """<!DOCTYPE html>
 
   <div class="flex items-center justify-between mb-2 mt-8">
     <div class="text-sm font-medium text-white/60">Historial de reuniones</div>
-    <button onclick="exportAll()" class="btn text-white/40 hover:text-white/70 hover:bg-white/5" title="Exportar todas a Markdown">Exportar todas (.md)</button>
+    <div class="flex gap-2">
+      <button onclick="exportAll()" class="btn text-white/40 hover:text-white/70 hover:bg-white/5" title="Exportar todas a Markdown">Exportar todas (.md)</button>
+      <button onclick="clearAll()" class="btn text-white/30 hover:text-red-300 hover:bg-white/5" title="Eliminar todas las reuniones">Limpiar todo</button>
+    </div>
   </div>
   <div id="mt-history" class="space-y-1"></div>
   <div id="mt-viewer" class="glass rounded-xl p-4 mt-3 hidden"></div>
@@ -2015,9 +2018,11 @@ async function loadHistory(){
   try{ const r=await fetch('/api/meetings'); const d=await r.json(); const el=document.getElementById('mt-history');
     const ms=d.meetings||[]; if(!ms.length){ el.innerHTML='<div class="text-xs text-white/20">Aún no hay reuniones guardadas.</div>'; return; }
     el.innerHTML=ms.map(m=>{ const dur=Math.round((m.duration_seconds||0)/60);
-      return '<div class="glass rounded-lg px-3 py-2 flex items-center justify-between hover:bg-white/[0.04] cursor-pointer" onclick="openMeeting('+m.id+')">'
-        +'<span class="text-xs text-white/70">'+esc(m.started_at||m.created_at||'')+'</span>'
-        +'<span class="text-[11px] text-white/30">'+dur+' min</span></div>'; }).join('');
+      return '<div class="glass rounded-lg px-3 py-2 flex items-center gap-2 hover:bg-white/[0.04]">'
+        +'<span class="text-xs text-white/70 flex-1 cursor-pointer" onclick="openMeeting('+m.id+')">'+esc(m.started_at||m.created_at||'')+'</span>'
+        +'<span class="text-[11px] text-white/30">'+dur+' min</span>'
+        +'<button onclick="delMeeting('+m.id+')" class="text-white/25 hover:text-red-300 text-sm px-1" title="Eliminar esta reunión">\\uD83D\\uDDD1</button>'
+        +'</div>'; }).join('');
   }catch(e){} }
 async function openMeeting(id){
   const v=document.getElementById('mt-viewer'); v.classList.remove('hidden'); v.innerHTML='<div class="text-xs text-white/30">Cargando\\u2026</div>';
@@ -2031,6 +2036,12 @@ async function openFolder(){ try{ const r=await fetch('/api/meetings/open-folder
   if(!d.ok) alert('No se pudo abrir la carpeta: '+(d.error||'')+'\\n'+(d.path||'')); }catch(e){} }
 async function exportAll(){ try{ const r=await fetch('/api/meetings/export',{method:'POST'}); const d=await r.json();
   alert(d.ok?('Exportadas '+d.exported+' reuniones a:\\n'+d.path):'Error al exportar'); }catch(e){} }
+async function delMeeting(id){ if(!confirm('¿Eliminar esta reunión? No se puede deshacer.'))return;
+  try{ await fetch('/api/meetings/'+id+'/delete',{method:'POST'});
+    document.getElementById('mt-viewer').classList.add('hidden'); loadHistory(); }catch(e){} }
+async function clearAll(){ if(!confirm('¿Eliminar TODAS las reuniones del historial? No se puede deshacer.'))return;
+  try{ const r=await fetch('/api/meetings/clear',{method:'POST'}); const d=await r.json();
+    document.getElementById('mt-viewer').classList.add('hidden'); loadHistory(); alert('Eliminadas '+(d.deleted||0)+' reuniones.'); }catch(e){} }
 
 loadLive(); startPoll(); loadHistory();
 </script></body></html>"""
@@ -2591,6 +2602,22 @@ def meeting_detail(meeting_id):
         except Exception:  # noqa: BLE001
             m[k.replace("_json", "")] = None
     return jsonify(m)
+
+
+@app.route("/api/meetings/<int:meeting_id>/delete", methods=["POST"])
+def meeting_delete_endpoint(meeting_id):
+    """Elimina una reunión (DB + su .md)."""
+    n = _db.meeting_delete(meeting_id)
+    _meeting_export.delete_meeting_files(MEETINGS_DIR, meeting_id)
+    return jsonify({"ok": True, "deleted": n})
+
+
+@app.route("/api/meetings/clear", methods=["POST"])
+def meetings_clear():
+    """Elimina TODAS las reuniones (DB + .md)."""
+    n = _db.meetings_delete_all()
+    _meeting_export.clear_all_files(MEETINGS_DIR)
+    return jsonify({"ok": True, "deleted": n})
 
 
 @app.route("/api/meetings/open-folder", methods=["POST"])

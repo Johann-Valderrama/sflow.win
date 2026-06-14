@@ -130,6 +130,32 @@ def export_meeting(meeting: dict, meetings_dir: str) -> "str | None":
         return None
 
 
+def delete_meeting_files(meetings_dir: str, meeting_id) -> int:
+    """Elimina el/los .md de una reunión (mantiene la carpeta en sync con la DB)."""
+    import glob
+    removed = 0
+    try:
+        for p in glob.glob(os.path.join(meetings_dir, f"*reunion-{meeting_id}.md")):
+            os.remove(p)
+            removed += 1
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("No se pudo borrar el .md de la reunión %s: %s", meeting_id, exc)
+    return removed
+
+
+def clear_all_files(meetings_dir: str) -> int:
+    """Elimina todos los .md de reuniones exportados."""
+    import glob
+    removed = 0
+    try:
+        for p in glob.glob(os.path.join(meetings_dir, "*reunion-*.md")):
+            os.remove(p)
+            removed += 1
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("No se pudieron borrar los .md: %s", exc)
+    return removed
+
+
 def export_all(db, meetings_dir: str) -> int:
     """Backfill: exporta todas las reuniones de la DB. Devuelve cuántas escribió."""
     n = 0
