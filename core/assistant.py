@@ -6,10 +6,49 @@ en insights.chat_memory. Sin importar db: recibe la instancia como parámetro.
 import json
 import logging
 import os
+import re
+import unicodedata
 
 from core import insights
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Stopwords (español) — palabras vacías o de marco de pregunta que no aportan
+# señal de búsqueda en FTS.  Se compara en minúsculas + sin acentos.
+# ---------------------------------------------------------------------------
+
+_STOPWORDS: frozenset = frozenset({
+    "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas",
+    "y", "o", "u", "a", "ante", "con", "en", "para", "por", "sin", "sobre",
+    "que", "que", "cual", "cual", "cuales", "cuales",
+    "se", "su", "sus", "lo", "le", "les", "mi", "mis", "tu", "tus",
+    "al", "es", "son", "fue", "era", "hay", "me", "te", "nos",
+    "algo", "alguna", "algun", "esto", "eso", "esta", "este", "esa", "ese",
+    "dijeron", "dijo", "dice", "decir",
+    "menciona", "menciono", "mencionaron",
+    "hablar", "hablaron", "habla", "hablo",
+    "sabe", "saben",
+    "cuando", "donde", "como",
+})
+
+
+def _normalize(token: str) -> str:
+    """Normaliza un token a minúsculas sin acentos para comparar con _STOPWORDS."""
+    nfd = unicodedata.normalize("NFD", token.lower())
+    return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
+
+
+def _search_terms(message: str) -> str:
+    """Extrae tokens de búsqueda del mensaje, descartando stopwords y tokens <2 chars.
+
+    Si no queda ningún token relevante devuelve el mensaje original (fallback seguro).
+    """
+    raw_tokens = re.split(r"[^\w]+", message, flags=re.UNICODE)
+    kept = [t for t in raw_tokens if t and len(t) >= 2 and _normalize(t) not in _STOPWORDS]
+    return " ".join(kept) if kept else message
+
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -21,8 +60,10 @@ ASSISTANT_SYSTEM = (
     "REGLAS ESTRICTAS:\n"
     "- Responde SOLO con base en el CONTEXTO provisto (índice de reuniones, actas y transcripción). "
     "Prohibido usar conocimiento externo o inventar datos, nombres, fechas o compromisos que no estén en el contexto.\n"
-    "- Cita siempre la reunión de la que proviene cada dato, indicando su fecha y/o título "
-    "(ej.: \"(reunión del 2026-06-10)\").\n"
+    "- Cita siempre la reunión de la que proviene cada dato usando su identificador entre "
+    "corchetes EXACTAMENTE como aparece en el contexto (solo el número), p.ej. [10]. Puedes "
+    "añadir la fecha para legibilidad (ej.: \"reunión del 2026-06-10 [10]\"), pero NUNCA omitas "
+    "los corchetes con el número: son obligatorios en cada cita.\n"
     "- Si la información solicitada NO está en el contexto, dilo con claridad: "
     "\"No encuentro eso en tus reuniones.\" Nunca inventes ni extrapoles.\n"
     "- SÍ puedes redactar entregables (email de seguimiento, informe, FAQ, resumen ejecutivo) "
@@ -187,13 +228,20 @@ def build_context(db, message: str, meeting_id=None, budget: int = None) -> tupl
             focus_acta_str = _format_acta(focus_minutes)
             focus_transcript = focus.get("transcript") or ""
 
-    # FTS search — excluye el focus si coincide
+    # FTS search — excluye el focus si coincide.
+    # Usa _search_terms para filtrar stopwords y match="or" para tolerar lenguaje natural.
     try:
-        fts_results = db.meetings_search(message, limit=3)
+        fts_results = db.meetings_search(_search_terms(message), limit=3, match="or")
     except Exception:  # noqa: BLE001
         fts_results = []
 
-    fts_actas = []  # list of (id, acta_str, meeting_row)
+    # Mapa id → snippet limpio (sin marcadores \x02/\x03) para incluir en contexto
+    _fts_snippets: dict = {}
+    for r in fts_results:
+        raw_snip = r.get("snippet") or ""
+        _fts_snippets[r["id"]] = raw_snip.replace("\x02", "").replace("\x03", "")
+
+    fts_actas = []  # list of (id, acta_str, meeting_row, snippet_str)
     for r in fts_results:
         if r["id"] == focus_id:
             continue
@@ -207,7 +255,7 @@ def build_context(db, message: str, meeting_id=None, budget: int = None) -> tupl
             except Exception:  # noqa: BLE001
                 fm_minutes = {}
             fm_acta = _format_acta(fm_minutes)
-            fts_actas.append((full["id"], fm_acta, full))
+            fts_actas.append((full["id"], fm_acta, full, _fts_snippets.get(full["id"], "")))
         if len(fts_actas) >= 3:
             break
 
@@ -250,12 +298,15 @@ def build_context(db, message: str, meeting_id=None, budget: int = None) -> tupl
         # Actas relevantes FTS (primeras k)
         if k > 0 and fts_actas:
             fts_block_parts = []
-            for fid, facta, frow in fts_actas[:k]:
+            for fid, facta, frow, fsnippet in fts_actas[:k]:
                 if facta:
-                    fts_block_parts.append(
+                    block = (
                         f"--- Reunión [{fid}] {(frow.get('started_at') or '')[:10]} ---\n"
                         + facta
                     )
+                    if fsnippet:
+                        block += f"\nFragmento relevante: {fsnippet}"
+                    fts_block_parts.append(block)
                     used_ids.append(fid)
             if fts_block_parts:
                 parts.append("=== ACTAS RELEVANTES ===\n" + "\n\n".join(fts_block_parts))

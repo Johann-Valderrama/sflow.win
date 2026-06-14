@@ -601,10 +601,17 @@ class TranscriptionDB:
             })
         return result
 
-    def meetings_search(self, query: str, limit: int = 50) -> list:
+    def meetings_search(self, query: str, limit: int = 50, match: str = "and") -> list:
         """Busca reuniones por texto completo (FTS5) o LIKE si FTS no está disponible.
 
         Devuelve lista de dicts con: id, title, started_at, duration_seconds, snippet.
+
+        match="and"  → los tokens se unen con AND (comportamiento por defecto, para la
+                       caja de búsqueda del dashboard: busca reuniones que contengan
+                       TODOS los tokens).
+        match="or"   → los tokens se unen con OR (para el Asistente de reuniones, que
+                       recibe preguntas en lenguaje natural donde no todos los tokens
+                       son términos clave).
         """
         query = (query or "").strip()
         if not query:
@@ -616,7 +623,10 @@ class TranscriptionDB:
             if not tokens:
                 return []
             escaped_tokens = ['"' + t.replace('"', '""') + '"*' for t in tokens]
-            fts_query = " ".join(escaped_tokens)
+            if match == "or":
+                fts_query = " OR ".join(escaped_tokens)
+            else:
+                fts_query = " ".join(escaped_tokens)
 
             try:
                 with sqlite3.connect(self.db_path) as conn:

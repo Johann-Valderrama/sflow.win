@@ -1936,6 +1936,7 @@ MEETING_PAGE = """<!DOCTYPE html>
   #asst-messages strong{font-weight:600;}
   #asst-messages .md-h{font-weight:600;margin:.3rem 0 .15rem;}
   #asst-messages .md-p{margin:.15rem 0;}
+  #asst-messages .md-cite{color:#c4b5fd;text-decoration:underline;cursor:pointer;font-size:.92em;}
 </style></head>
 <body class="min-h-screen p-6">
 <div class="max-w-5xl mx-auto">
@@ -1986,9 +1987,9 @@ MEETING_PAGE = """<!DOCTYPE html>
   <div class="glass rounded-xl p-4 mt-6">
     <div class="flex items-center justify-between mb-2">
       <div class="text-sm font-medium text-violet-300/80">&#128172; Asistente de reuniones &mdash; pregúntale a tus reuniones</div>
-      <div class="flex items-center gap-2">
-        <span id="asst-scope" class="text-[11px] text-white/40">Modo global</span>
-        <button id="asst-scope-reset" onclick="asstResetScope()" class="hidden text-[11px] text-white/30 hover:text-violet-300 px-1.5 py-0.5 rounded hover:bg-white/5">&#10005; global</button>
+      <div class="flex items-center gap-1">
+        <button id="asst-scope-global" class="text-[11px] px-2 py-0.5 rounded-full border transition-colors">Global</button>
+        <button id="asst-scope-meeting" disabled class="text-[11px] px-2 py-0.5 rounded-full border transition-colors" title="Selecciona una reunión del historial para preguntar solo sobre ella">Esta reunión</button>
       </div>
     </div>
     <div id="asst-messages" class="space-y-2 overflow-y-auto mb-2" style="min-height:60px;max-height:280px;"></div>
@@ -2015,6 +2016,7 @@ function mdInline(x){
   x=x.replace(/\\*\\*([^*]+?)\\*\\*/g,'<strong>$1</strong>');
   x=x.replace(/__([^_]+?)__/g,'<strong>$1</strong>');
   x=x.replace(/(^|[^*\\w])\\*([^*\\n]+?)\\*(?=[^*\\w]|$)/g,'$1<em>$2</em>');
+  x=x.replace(/\\[(\\d+)\\]/g,'<a href="#" class="md-cite" data-mid="$1">[$1]</a>');
   return x;
 }
 function mdToHtml(t){
@@ -2181,27 +2183,29 @@ async function openMeeting(id){
     v.innerHTML='<style>.mt-seg-flash{background:rgba(139,92,246,0.18)!important;transition:background 0.1s;}</style>'
       +'<div class="flex items-center justify-between mb-2"><div class="text-sm font-medium text-white/60">Reuni\\u00f3n '+dateStr+'</div>'
       +'<div class="flex gap-2">'
-      +'<button id="ask-asst-btn" class="btn bg-violet-600/20 text-violet-300 hover:bg-violet-600/35">&#128172; Preguntar al asistente sobre esta reunión</button>'
       +'<button id="mt-close-btn" class="btn text-white/30 hover:text-white/60">Cerrar</button>'
       +'</div></div>'
       +'<div class="text-xs font-medium text-violet-300/50 mb-1">L\\u00ednea de tiempo</div><div id="mt-timeline" class="mb-3"></div>'
       +'<div class="text-xs font-medium text-emerald-300/70 mb-1">Acta</div><div class="space-y-2 mb-3">'+actaHtml(m.minutes)+'</div>'
       +'<div class="text-xs font-medium text-white/40 mb-1">Transcripci\\u00f3n</div>'+transcriptHtml;
-    const _apb=document.getElementById('ask-asst-btn'); if(_apb) _apb.addEventListener('click',function(){ asstFocusMeeting(id, m.started_at||''); });
-    const _cb=document.getElementById('mt-close-btn'); if(_cb) _cb.addEventListener('click',function(){ document.getElementById('mt-viewer').classList.add('hidden'); });
+    const _cb=document.getElementById('mt-close-btn');
+    if(_cb) _cb.addEventListener('click',function(){
+      document.getElementById('mt-viewer').classList.add('hidden');
+      currentViewerMeetingId=null;
+      const smb=document.getElementById('asst-scope-meeting');
+      smb.disabled=true; smb.textContent='Esta reuni\\u00f3n';
+      asstSetScope('global');
+    });
+    // Actualiza estado de ámbito al abrir reunión
+    currentViewerMeetingId=id;
+    currentViewerMeetingDate=m.started_at||'';
+    const smb=document.getElementById('asst-scope-meeting');
+    smb.disabled=false;
+    smb.textContent='Esta reuni\\u00f3n ('+(currentViewerMeetingDate.slice(0,10)||'#'+id)+')';
+    asstSetScope('meeting');
     // Renderizar timeline (capítulos)
     _renderTimeline(m.chapters||[], id, v);
   }catch(e){ v.innerHTML='<div class="text-xs text-red-300">No se pudo cargar.</div>'; } }
-function asstFocusMeeting(id, dateStr){
-  asstMeetingId=id; asstHistory=[];
-  const datePart=(dateStr||'').slice(0,10)||'#'+id;
-  document.getElementById('asst-scope').textContent='Sobre: Reuni\\u00f3n '+datePart;
-  document.getElementById('asst-scope-reset').classList.remove('hidden');
-  asstRenderChips(ASST_CHIPS_MEETING);
-  document.getElementById('asst-messages').innerHTML='';
-  document.getElementById('asst-input').focus();
-  document.getElementById('asst-input').scrollIntoView({behavior:'smooth',block:'nearest'});
-}
 async function openFolder(){ try{ const r=await fetch('/api/meetings/open-folder',{method:'POST'}); const d=await r.json();
   if(!d.ok) alert('No se pudo abrir la carpeta: '+(d.error||'')+'\\n'+(d.path||'')); }catch(e){} }
 async function exportAll(){ try{ const r=await fetch('/api/meetings/export',{method:'POST'}); const d=await r.json();
@@ -2247,6 +2251,8 @@ async function runSearch(q){
 // ---------------------------------------------------------------------------
 let asstMeetingId = null;
 let asstHistory = [];
+let currentViewerMeetingId = null;
+let currentViewerMeetingDate = '';
 
 const ASST_CHIPS_GLOBAL = [
   '\\u00bfCu\\u00e1les son mis pendientes?',
@@ -2275,11 +2281,22 @@ function asstRenderChips(chips){
   });
 }
 
-function asstResetScope(){
-  asstMeetingId=null; asstHistory=[];
-  document.getElementById('asst-scope').textContent='Modo global';
-  document.getElementById('asst-scope-reset').classList.add('hidden');
-  asstRenderChips(ASST_CHIPS_GLOBAL);
+function asstSetScope(mode){
+  const gb=document.getElementById('asst-scope-global');
+  const mb=document.getElementById('asst-scope-meeting');
+  if(mode==='meeting' && currentViewerMeetingId){
+    asstMeetingId=currentViewerMeetingId;
+    // Activo: Esta reunión
+    gb.className='text-[11px] px-2 py-0.5 rounded-full border transition-colors text-white/40 border-white/10 hover:text-white/70';
+    mb.className='text-[11px] px-2 py-0.5 rounded-full border transition-colors bg-violet-600/30 text-violet-200 border-violet-500/40';
+    asstRenderChips(ASST_CHIPS_MEETING);
+  } else {
+    asstMeetingId=null;
+    // Activo: Global
+    gb.className='text-[11px] px-2 py-0.5 rounded-full border transition-colors bg-violet-600/30 text-violet-200 border-violet-500/40';
+    mb.className='text-[11px] px-2 py-0.5 rounded-full border transition-colors text-white/40 border-white/10'+(mb.disabled?' opacity-40 cursor-not-allowed':' hover:text-white/70');
+    asstRenderChips(ASST_CHIPS_GLOBAL);
+  }
 }
 
 function asstAddMsg(role, html){
@@ -2330,8 +2347,30 @@ async function asstSend(text){
   }
 }
 
-// Inicializar chips globales
-asstRenderChips(ASST_CHIPS_GLOBAL);
+// Inicializar estado de ámbito: Global activo, "Esta reunión" deshabilitado
+(function(){
+  document.getElementById('asst-scope-global').addEventListener('click',function(){ asstSetScope('global'); });
+  document.getElementById('asst-scope-meeting').addEventListener('click',function(){
+    if(currentViewerMeetingId) asstSetScope('meeting');
+  });
+  asstSetScope('global');
+})();
+
+// Listener delegado para citas clickables [N]
+(function(){
+  const box=document.getElementById('asst-messages');
+  if(box) box.addEventListener('click',function(e){
+    const a=e.target.closest('.md-cite');
+    if(!a) return;
+    e.preventDefault();
+    const mid=parseInt(a.dataset.mid,10);
+    if(!isNaN(mid)){
+      openMeeting(mid);
+      const v=document.getElementById('mt-viewer');
+      if(v) v.scrollIntoView({behavior:'smooth',block:'start'});
+    }
+  });
+})();
 
 loadLive(); startPoll(); loadHistory();
 </script></body></html>"""
