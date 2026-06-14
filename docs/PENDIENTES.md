@@ -96,3 +96,40 @@ Tras reuniones reales: leer de la DB `transcript` vs `minutes_json`/`insights_js
 fallos del modelo pequeño, endurecer los system prompts en `core/insights.py`, re-validar
 re-generando el acta sobre el MISMO transcript. (1er ciclo hecho: temas 11→4, pendientes 1→0,
 propuestas 9→0 al prohibir "investigar/analizar X" desde contenido descriptivo.)
+
+## Observaciones de la UI real de Proactor (capturas, jun 2026)
+
+Detalles concretos vistos en las capturas de /work-meeting, /sales, /business, /education
+que sirven de referencia para diseñar nuestras versiones:
+
+- **Línea de tiempo con momentos clave etiquetados**: barra de tiempo con segmentos
+  nombrados por la IA ("Define Promotion Goals", "Opportunity Cost", "Client's Past Pain")
+  + timestamp, clicables para saltar al momento. → IMPLEMENTABLE: ya tenemos timestamp por
+  segmento; añadir una pasada LLM que agrupe el transcript en "capítulos/momentos" + UI de
+  timeline en /reunion. Eleva la prioridad del ítem "momentos clave/highlights".
+- **Potor (chat) como panel fijo a la derecha** con: (a) CHIPS de preguntas sugeridas
+  ("¿Cuáles son mis action items?", "Lista requisitos del cliente", "¿Qué conceptos clave…?"),
+  (b) redacción de ENTREGABLES ("escribe un plan de acción", "escribe email de seguimiento" →
+  Potor "revisa reuniones" y arma el draft con asunto). → concreta el ítem "chat de memoria".
+- **Pestañas del panel**: Insights | AI Advice | Key takeaways | To-do List | Transcribe (o Wiki).
+  Nosotros apilamos todo en Foco/Revisión; evaluar separar en pestañas para menos ruido visual.
+- **"Expand details" por insight**: tarjeta colapsada (El Qué) que se expande al razonamiento
+  (El Por Qué). + botones 👍/👎 de feedback por insight (señal para el bucle de mejora).
+- **Diarización multi-hablante con NOMBRES** (Clara, Alex, David, Professor) + avatares. Nosotros
+  hacemos 2 canales (Yo/Ellos) por diseño; nombrar a 3+ remotos requeriría diarización ML
+  (descartado por coste). Mantener Yo/Ellos salvo demanda fuerte.
+- **BANT Summary** estructurado (Budget/Authority/Need/Timeline) como insight de ventas → confirma
+  el ítem "plantillas por tipo de reunión".
+- **Colaboración**: "Shared with me" + "Share the Record" (compartir grabaciones con el equipo).
+  Para empresa; nuestro equivalente local sería el export markdown al OPS compartido.
+- **Educación — "Explora más allá del aula"**: Potor sugiere ENLACES EXTERNOS (YouTube, artículos)
+  sobre el tema. Rompe el modelo 100% local/privado; baja prioridad (opt-in si acaso).
+- **Editar título de la reunión** (✏️ junto al nombre) y **"Upload Media"** (subir audio/video a
+  transcribir) — ya tenemos lo segundo vía url_transcribe/AUDIO_SOURCE.
+
+### Prioridad refinada tras ver la UI
+1. Chat de memoria "Potor" con chips sugeridos + redacción de entregables (email/informe/plan).
+2. Línea de tiempo de momentos clave (capítulos etiquetados) + saltar al momento.
+3. Búsqueda full-text del historial (prerequisito del chat).
+4. Plantillas por tipo de reunión (ventas/BANT, educación, negocio) / modo agenda.
+5. "Expand details" + 👍/👎 en insights (UX + alimenta el bucle de mejora de prompts).
