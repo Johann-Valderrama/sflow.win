@@ -197,6 +197,11 @@ _INSIGHTS_SYSTEM = (
     "Es preferible OMITIR a inventar. No infieras intenciones no dichas.\n"
     "- Un pendiente es un COMPROMISO/tarea (alguien hará algo), no un simple tema. "
     "No inventes responsable, fecha ni hora: usa null si no se dijeron.\n"
+    "- Una propuesta solo existe si un PARTICIPANTE sugiere explícitamente una acción. "
+    "Describir, narrar, analizar o comentar un tema NO genera pendientes ni propuestas. "
+    "NUNCA crees ítems del tipo 'investigar/analizar X' a partir de contenido descriptivo o "
+    "informativo (ver un vídeo, comentar una noticia). Si nadie se compromete ni sugiere algo, "
+    "deja pendientes y propuestas como listas VACÍAS.\n"
     "- Mantén lo que ya estaba en el estado (no borres temas/pendientes previos salvo que se "
     "resuelvan explícitamente). Acumula, no reescribas.\n"
     "- Evita duplicados: si algo ya está, no lo repitas.\n"
@@ -266,6 +271,8 @@ _CONSOLIDATE_SYSTEM = (
     "- Corrige y mejora con la visión completa: fusiona duplicados y temas relacionados, "
     "renombra temas confusos, añade lo importante que el borrador haya omitido.\n"
     "- Básate solo en la transcripción; no inventes. Conserva responsables ya identificados.\n"
+    "- Pendientes/propuestas SOLO si un participante se compromete o sugiere una acción explícita. "
+    "Describir o analizar un tema NO los genera; nunca inventes 'investigar/analizar X'.\n"
     "- Es preferible omitir a inventar. Responde SOLO con el objeto JSON. Todo en español."
 )
 
@@ -324,6 +331,9 @@ _MINUTES_SYSTEM = (
     "REGLAS:\n"
     "- Básate en la transcripción y el análisis en vivo; no inventes.\n"
     "- Conserva los pendientes y propuestas detectados en vivo si la transcripción los respalda.\n"
+    "- Pendientes/propuestas SOLO si un participante se compromete o sugiere una acción explícita. "
+    "Describir, narrar o analizar un tema NO los genera; NUNCA inventes 'investigar/analizar X' a "
+    "partir de contenido informativo (p. ej. comentar un vídeo). Si no los hay, déjalos vacíos.\n"
     "- Si una sección no tiene contenido real, devuélvela como lista vacía.\n"
     "- Responde SOLO con el objeto JSON. Todo en español."
 )
