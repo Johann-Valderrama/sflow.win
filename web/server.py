@@ -12,6 +12,8 @@ from config import APP_DATA_DIR, MEETINGS_DIR
 from core import dictionary as _dictionary
 from core.meeting import MEETING
 from core import meeting_export as _meeting_export
+from core import insights as _insights
+from core import potor as _potor
 
 # ---------------------------------------------------------------------------
 # Estado de descarga del modelo local (compartido entre endpoints)
@@ -534,18 +536,35 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            <!-- Backend de análisis de reuniones (insights + acta) -->
+            <!-- Backend de análisis de reuniones (insights + acta) — POR TAREA -->
             <div class="mt-4 pt-4 border-t border-white/[0.06]">
-                <label class="text-xs text-white/40 block mb-1">Análisis de reuniones (insights en vivo + acta)</label>
-                <select id="cfg-insights-backend" class="cfg-select" onchange="onInsightsBackendChange()">
-                    <option value="groq">Groq API (nube) — instantáneo, requiere internet</option>
-                    <option value="endpoint">Local (LM Studio) — privado, sin internet</option>
-                </select>
+                <p class="text-xs text-white/30 mb-3">El análisis en vivo necesita velocidad (Groq recomendado); acta y Potor admiten modelos más potentes (OpenRouter, contexto 1 M).</p>
+                <div class="flex flex-col gap-3">
+                    <div>
+                        <label class="text-xs text-white/40 block mb-1">Análisis en vivo</label>
+                        <select id="cfg-insights-backend-live" class="cfg-select" onchange="onInsightsBackendChange()">
+                            <option value="groq">Groq API (nube) — instantáneo, requiere internet</option>
+                            <option value="openrouter">OpenRouter (nube) — multi-modelo, requiere internet</option>
+                            <option value="endpoint">Local (LM Studio) — privado, sin internet</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs text-white/40 block mb-1">Acta + Potor</label>
+                        <select id="cfg-insights-backend-batch" class="cfg-select" onchange="onInsightsBackendChange()">
+                            <option value="groq">Groq API (nube) — instantáneo, requiere internet</option>
+                            <option value="openrouter">OpenRouter (nube) — multi-modelo, requiere internet</option>
+                            <option value="endpoint">Local (LM Studio) — privado, sin internet</option>
+                        </select>
+                    </div>
+                </div>
                 <div id="cfg-insights-endpoint-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
                     <label class="text-xs text-white/40 block mb-1">Modelo local (id en LM Studio)</label>
                     <input type="text" id="cfg-insights-model" placeholder="qwen/qwen2.5-vl-7b"
                         class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 focus:outline-none focus:border-white/20 w-full">
                     <p class="text-xs text-white/25 mt-1">Requiere LM Studio abierto con el servidor local activo (localhost:1234). Probados: <span class="text-white/40">qwen/qwen2.5-vl-7b</span> (calidad, ~40s) · <span class="text-white/40">llama-3.2-3b-instruct</span> (rápido, ~15s). Si LM Studio está cerrado, la reunión sigue transcribiendo pero sin análisis.</p>
+                </div>
+                <div id="cfg-insights-openrouter-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
+                    <p class="text-xs text-white/40">La key va en <code class="text-white/60">.env</code> como <code class="text-white/60">OPENROUTER_API_KEY</code>. Consíguela en <span class="text-white/50">openrouter.ai/keys</span>. Modelo configurable con <code class="text-white/60">OPENROUTER_MODEL</code> (default: <span class="text-white/50">google/gemini-3-flash</span>).</p>
                 </div>
             </div>
 
@@ -996,8 +1015,9 @@ HTML_TEMPLATE = """
             document.getElementById('cfg-backend').value = settings.transcription_backend || 'groq';
             document.getElementById('cfg-local-model').value = settings.local_whisper_model || 'small';
             document.getElementById('cfg-groq-fallback').checked = settings.groq_fallback === true;
-            // Backend de insights (análisis de reuniones)
-            document.getElementById('cfg-insights-backend').value = settings.insights_backend || 'groq';
+            // Backend de insights (análisis de reuniones) — por tarea
+            document.getElementById('cfg-insights-backend-live').value = settings.insights_backend_live || 'groq';
+            document.getElementById('cfg-insights-backend-batch').value = settings.insights_backend_batch || 'groq';
             document.getElementById('cfg-insights-model').value = settings.insights_endpoint_model || 'qwen/qwen2.5-vl-7b';
             onInsightsBackendChange();
             updateLocalModelSection();
@@ -1018,7 +1038,8 @@ HTML_TEMPLATE = """
                 transcription_backend: document.getElementById('cfg-backend').value,
                 local_whisper_model: document.getElementById('cfg-local-model').value,
                 groq_fallback: document.getElementById('cfg-groq-fallback').checked ? 'true' : 'false',
-                insights_backend: document.getElementById('cfg-insights-backend').value,
+                insights_backend_live: document.getElementById('cfg-insights-backend-live').value,
+                insights_backend_batch: document.getElementById('cfg-insights-backend-batch').value,
                 insights_endpoint_model: document.getElementById('cfg-insights-model').value.trim(),
             };
             await fetch('/api/settings', {
@@ -1036,11 +1057,14 @@ HTML_TEMPLATE = """
             updateLocalModelSection();
         }
 
-        // --- Backend de insights (análisis de reuniones) ---
+        // --- Backend de insights (análisis de reuniones) — dos selectores por tarea ---
         function onInsightsBackendChange() {
-            const backend = document.getElementById('cfg-insights-backend').value;
-            const wrap = document.getElementById('cfg-insights-endpoint-wrap');
-            wrap.classList.toggle('hidden', backend !== 'endpoint');
+            const backendLive = document.getElementById('cfg-insights-backend-live').value;
+            const backendBatch = document.getElementById('cfg-insights-backend-batch').value;
+            const anyEndpoint = backendLive === 'endpoint' || backendBatch === 'endpoint';
+            const anyOpenrouter = backendLive === 'openrouter' || backendBatch === 'openrouter';
+            document.getElementById('cfg-insights-endpoint-wrap').classList.toggle('hidden', !anyEndpoint);
+            document.getElementById('cfg-insights-openrouter-wrap').classList.toggle('hidden', !anyOpenrouter);
         }
 
         function updateLocalModelSection() {
@@ -1945,8 +1969,30 @@ MEETING_PAGE = """<!DOCTYPE html>
       <button onclick="clearAll()" class="btn text-white/30 hover:text-red-300 hover:bg-white/5" title="Eliminar todas las reuniones">Limpiar todo</button>
     </div>
   </div>
+  <input id="meetingSearch" type="search" placeholder="Buscar en reuniones…"
+    style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.4rem .75rem;font-size:.8rem;margin-bottom:.5rem;outline:none;"
+    oninput="onSearchInput(this.value)">
   <div id="mt-history" class="space-y-1"></div>
   <div id="mt-viewer" class="glass rounded-xl p-4 mt-3 hidden"></div>
+
+  <!-- Potor — chat de memoria -->
+  <div class="glass rounded-xl p-4 mt-6">
+    <div class="flex items-center justify-between mb-2">
+      <div class="text-sm font-medium text-violet-300/80">&#128172; Potor &mdash; pregúntale a tus reuniones</div>
+      <div class="flex items-center gap-2">
+        <span id="potor-scope" class="text-[11px] text-white/40">Modo global</span>
+        <button id="potor-scope-reset" onclick="potorResetScope()" class="hidden text-[11px] text-white/30 hover:text-violet-300 px-1.5 py-0.5 rounded hover:bg-white/5">&#10005; global</button>
+      </div>
+    </div>
+    <div id="potor-messages" class="space-y-2 overflow-y-auto mb-2" style="min-height:60px;max-height:280px;"></div>
+    <div id="potor-chips" class="flex flex-wrap gap-1.5 mb-2"></div>
+    <div class="flex gap-2">
+      <input id="potor-input" type="text" placeholder="Pregunta sobre tus reuniones…"
+        style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.35rem .7rem;font-size:.8rem;outline:none;"
+        onkeydown="if(event.key==='Enter')potorSend()">
+      <button id="potor-send" onclick="potorSend()" class="btn bg-violet-600/30 text-violet-200 hover:bg-violet-600/50">Enviar</button>
+    </div>
+  </div>
 </div>
 <script>
 let _seen = new Set(), _segCount = 0, _actaShown = false, _poll = null;
@@ -2027,11 +2073,26 @@ async function loadHistory(){
 async function openMeeting(id){
   const v=document.getElementById('mt-viewer'); v.classList.remove('hidden'); v.innerHTML='<div class="text-xs text-white/30">Cargando\\u2026</div>';
   try{ const r=await fetch('/api/meetings/'+id); const m=await r.json();
-    v.innerHTML='<div class="flex items-center justify-between mb-2"><div class="text-sm font-medium text-white/60">Reunión '+esc(m.started_at||'')+'</div>'
-      +'<button onclick="document.getElementById(\\'mt-viewer\\').classList.add(\\'hidden\\')" class="btn text-white/30 hover:text-white/60">Cerrar</button></div>'
+    const dateStr=esc(m.started_at||'');
+    v.innerHTML='<div class="flex items-center justify-between mb-2"><div class="text-sm font-medium text-white/60">Reuni\\u00f3n '+dateStr+'</div>'
+      +'<div class="flex gap-2">'
+      +'<button id="ask-potor-btn" class="btn bg-violet-600/20 text-violet-300 hover:bg-violet-600/35">&#128172; Preguntar a Potor</button>'
+      +'<button onclick="document.getElementById(\\'mt-viewer\\').classList.add(\\'hidden\\')" class="btn text-white/30 hover:text-white/60">Cerrar</button>'
+      +'</div></div>'
       +'<div class="text-xs font-medium text-emerald-300/70 mb-1">Acta</div><div class="space-y-2 mb-3">'+actaHtml(m.minutes)+'</div>'
-      +'<div class="text-xs font-medium text-white/40 mb-1">Transcripción</div><pre class="text-xs text-white/60 whitespace-pre-wrap max-h-80 overflow-y-auto">'+esc(m.transcript||'')+'</pre>';
+      +'<div class="text-xs font-medium text-white/40 mb-1">Transcripci\\u00f3n</div><pre class="text-xs text-white/60 whitespace-pre-wrap max-h-80 overflow-y-auto">'+esc(m.transcript||'')+'</pre>';
+    const _apb=document.getElementById('ask-potor-btn'); if(_apb) _apb.addEventListener('click',function(){ potorFocusMeeting(id, m.started_at||''); });
   }catch(e){ v.innerHTML='<div class="text-xs text-red-300">No se pudo cargar.</div>'; } }
+function potorFocusMeeting(id, dateStr){
+  potorMeetingId=id; potorHistory=[];
+  const datePart=(dateStr||'').slice(0,10)||'#'+id;
+  document.getElementById('potor-scope').textContent='Sobre: Reuni\\u00f3n '+datePart;
+  document.getElementById('potor-scope-reset').classList.remove('hidden');
+  potorRenderChips(POTOR_CHIPS_MEETING);
+  document.getElementById('potor-messages').innerHTML='';
+  document.getElementById('potor-input').focus();
+  document.getElementById('potor-input').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
 async function openFolder(){ try{ const r=await fetch('/api/meetings/open-folder',{method:'POST'}); const d=await r.json();
   if(!d.ok) alert('No se pudo abrir la carpeta: '+(d.error||'')+'\\n'+(d.path||'')); }catch(e){} }
 async function exportAll(){ try{ const r=await fetch('/api/meetings/export',{method:'POST'}); const d=await r.json();
@@ -2042,6 +2103,123 @@ async function delMeeting(id){ if(!confirm('¿Eliminar esta reunión? No se pued
 async function clearAll(){ if(!confirm('¿Eliminar TODAS las reuniones del historial? No se puede deshacer.'))return;
   try{ const r=await fetch('/api/meetings/clear',{method:'POST'}); const d=await r.json();
     document.getElementById('mt-viewer').classList.add('hidden'); loadHistory(); alert('Eliminadas '+(d.deleted||0)+' reuniones.'); }catch(e){} }
+
+// Búsqueda FTS
+let _searchTimer=null;
+function onSearchInput(val){
+  clearTimeout(_searchTimer);
+  _searchTimer=setTimeout(()=>{ const q=val.trim(); if(!q){loadHistory();}else{runSearch(q);} },250);
+}
+function hl(s){
+  const d=document.createElement('div'); d.textContent=s||''; let h=d.innerHTML;
+  return h.split('\x02').join('<b>').split('\x03').join('</b>');
+}
+async function runSearch(q){
+  const el=document.getElementById('mt-history');
+  try{
+    const r=await fetch('/api/meetings/search?q='+encodeURIComponent(q));
+    const d=await r.json(); const res=d.results||[];
+    if(!res.length){ el.innerHTML='<div class="text-xs text-white/20">Sin resultados para \\u201c'+esc(q)+'\\u201d.</div>'; return; }
+    el.innerHTML=res.map(m=>{
+      const dateStr=document.createElement('div'); dateStr.textContent=m.started_at||'';
+      return '<div class="glass rounded-lg px-3 py-2 hover:bg-white/[0.04] cursor-pointer" onclick="openMeeting('+m.id+')">'
+        +'<div class="flex items-center gap-2">'
+        +'<span class="text-xs text-white/70 flex-1">'+esc(m.title||m.started_at||'')+'</span>'
+        +'<span class="text-[11px] text-white/30">'+esc(m.started_at||'')+'</span>'
+        +'</div>'
+        +(m.snippet?'<div class="text-[11px] text-white/40 mt-0.5 truncate">'+hl(m.snippet)+'</div>':'')
+        +'</div>';
+    }).join('');
+  }catch(e){ el.innerHTML='<div class="text-xs text-red-300">Error al buscar.</div>'; }
+}
+
+// ---------------------------------------------------------------------------
+// Potor — chat de memoria sobre reuniones
+// ---------------------------------------------------------------------------
+let potorMeetingId = null;
+let potorHistory = [];
+
+const POTOR_CHIPS_GLOBAL = [
+  '\\u00bfCu\\u00e1les son mis pendientes?',
+  'Resume mis \\u00faltimas reuniones',
+  '\\u00bfQu\\u00e9 decisiones tomamos?',
+  'Redacta un email de seguimiento',
+  'Genera un informe de pendientes'
+];
+const POTOR_CHIPS_MEETING = [
+  'Resume esta reuni\\u00f3n',
+  'Lista los pendientes',
+  '\\u00bfQu\\u00e9 se decidi\\u00f3?',
+  'Redacta email de seguimiento'
+];
+
+function potorRenderChips(chips){
+  const el=document.getElementById('potor-chips');
+  el.innerHTML='';
+  chips.forEach(function(c){
+    const b=document.createElement('button');
+    b.textContent=c;
+    b.className='hover:bg-violet-600/25';
+    b.style.cssText='font-size:.73rem;padding:.25rem .6rem;border-radius:.4rem;cursor:pointer;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.22);color:rgba(196,181,253,0.85);';
+    b.addEventListener('click',function(){ potorSend(c); });
+    el.appendChild(b);
+  });
+}
+
+function potorResetScope(){
+  potorMeetingId=null; potorHistory=[];
+  document.getElementById('potor-scope').textContent='Modo global';
+  document.getElementById('potor-scope-reset').classList.add('hidden');
+  potorRenderChips(POTOR_CHIPS_GLOBAL);
+}
+
+function potorAddMsg(role, html){
+  const el=document.getElementById('potor-messages');
+  const isUser=(role==='user');
+  const div=document.createElement('div');
+  div.className='text-xs leading-relaxed '+(isUser?'text-white/70':'text-violet-100/90');
+  div.style.cssText='padding:.35rem .6rem;border-radius:.4rem;'+(isUser?'background:rgba(255,255,255,0.04);text-align:right;':'background:rgba(139,92,246,0.10);');
+  div.innerHTML=(isUser?'<span class="text-white/30 mr-1">T\\u00fa:</span>':'<span class="text-violet-300/60 mr-1">Potor:</span>')+html;
+  el.appendChild(div);
+  el.scrollTop=el.scrollHeight;
+  return div;
+}
+
+async function potorSend(text){
+  const inp=document.getElementById('potor-input');
+  const msg=(text!==undefined?text:inp.value).trim();
+  if(!msg)return;
+  inp.value='';
+  potorAddMsg('user', esc(msg).replace(/\\n/g,'<br>'));
+  potorHistory.push({role:'user',content:msg});
+  const placeholder=potorAddMsg('assistant','<span class="text-white/30 italic">Potor est\\u00e1 pensando\\u2026</span>');
+  document.getElementById('potor-send').disabled=true;
+  try{
+    const res=await fetch('/api/meetings/chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:msg,history:potorHistory.slice(-6),meeting_id:potorMeetingId})
+    });
+    const d=await res.json();
+    if(!res.ok||d.error){
+      placeholder.innerHTML='<span class="text-white/30 mr-1">Potor:</span><span style="color:#f87171;">'
+        +esc(d.error||'Error al consultar Potor.')+'</span>';
+    } else {
+      const ans=d.answer||'';
+      placeholder.innerHTML='<span class="text-violet-300/60 mr-1">Potor:</span>'
+        +esc(ans).replace(/\\n/g,'<br>');
+      potorHistory.push({role:'assistant',content:ans});
+    }
+  }catch(e){
+    placeholder.innerHTML='<span class="text-white/30 mr-1">Potor:</span>'
+      +'<span style="color:#f87171;">Error de red.</span>';
+  }finally{
+    document.getElementById('potor-send').disabled=false;
+  }
+}
+
+// Inicializar chips globales
+potorRenderChips(POTOR_CHIPS_GLOBAL);
 
 loadLive(); startPoll(); loadHistory();
 </script></body></html>"""
@@ -2150,6 +2328,12 @@ def get_settings():
         "groq_fallback": os.getenv("GROQ_FALLBACK", "false").lower() == "true",
         "audio_source": os.getenv("AUDIO_SOURCE", "mic"),
         "insights_backend": os.getenv("INSIGHTS_BACKEND", "groq"),
+        "insights_backend_live": (os.getenv("INSIGHTS_BACKEND_LIVE", "").strip().lower()
+                                   or os.getenv("INSIGHTS_BACKEND", "groq").strip().lower()
+                                   or "groq"),
+        "insights_backend_batch": (os.getenv("INSIGHTS_BACKEND_BATCH", "").strip().lower()
+                                    or os.getenv("INSIGHTS_BACKEND", "groq").strip().lower()
+                                    or "groq"),
         "insights_endpoint_model": os.getenv("INSIGHTS_ENDPOINT_MODEL", "qwen/qwen2.5-vl-7b"),
     })
 
@@ -2172,6 +2356,8 @@ def update_settings():
         "local_whisper_model": "LOCAL_WHISPER_MODEL",
         "groq_fallback": "GROQ_FALLBACK",
         "insights_backend": "INSIGHTS_BACKEND",
+        "insights_backend_live": "INSIGHTS_BACKEND_LIVE",
+        "insights_backend_batch": "INSIGHTS_BACKEND_BATCH",
         "insights_endpoint_model": "INSIGHTS_ENDPOINT_MODEL",
         "audio_source": "AUDIO_SOURCE",
     }
@@ -2631,6 +2817,20 @@ def meetings_open_folder():
         return jsonify({"ok": False, "error": str(exc), "path": MEETINGS_DIR}), 500
 
 
+@app.route("/api/meetings/search")
+def meetings_search_api():
+    """Busca en el historial de reuniones por texto completo (FTS5 o LIKE fallback)."""
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"results": []})
+    try:
+        limit = min(max(int(request.args.get("limit", 50)), 1), 200)
+    except (TypeError, ValueError):
+        limit = 50
+    results = _db.meetings_search(q, limit=limit)
+    return jsonify({"results": results, "query": q})
+
+
 @app.route("/api/meetings/export", methods=["POST"])
 def meetings_export():
     """Backfill: exporta todas las reuniones de la DB a Markdown."""
@@ -2639,6 +2839,29 @@ def meetings_export():
         return jsonify({"ok": True, "exported": n, "path": MEETINGS_DIR})
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/meetings/chat", methods=["POST"])
+def meetings_chat():
+    """Chat multi-turno con Potor sobre el historial de reuniones."""
+    data = request.get_json(silent=True) or {}
+    message = (data.get("message") or "").strip()
+    if not message:
+        return jsonify({"error": "mensaje vacío"}), 400
+    history = data.get("history") or []
+    _mid = data.get("meeting_id")
+    try:
+        meeting_id = int(_mid) if _mid not in (None, "") else None
+    except (TypeError, ValueError):
+        meeting_id = None
+    try:
+        max_tokens = min(max(int(data.get("max_tokens", 1024)), 256), 2048)
+    except (TypeError, ValueError):
+        max_tokens = 1024
+    result = _potor.answer(_db, message, history=history, meeting_id=meeting_id, max_tokens=max_tokens)
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error", "error")}), 503
+    return jsonify(result)
 
 
 @app.route("/api/instagram-cookies/sync", methods=["POST"])

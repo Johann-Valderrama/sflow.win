@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 import sqlite3
 from datetime import datetime, timedelta
@@ -97,6 +98,30 @@ class TranscriptionDB:
                     except sqlite3.OperationalError as e:
                         if "duplicate column" not in str(e).lower():
                             raise
+                # FTS5: creación con cascada de tokenizer
+                self._fts_enabled = False
+                self._fts_tokenizer = None
+                for tokenize_opt in [
+                    "tokenize='unicode61 remove_diacritics 2'",
+                    "tokenize='unicode61 remove_diacritics 1'",
+                    "tokenize='unicode61'",
+                ]:
+                    try:
+                        conn.execute(
+                            f"CREATE VIRTUAL TABLE IF NOT EXISTS meetings_fts USING fts5("
+                            f"title, transcript, resumen, temas, pendientes, decisiones, propuestas, "
+                            f"{tokenize_opt})"
+                        )
+                        conn.commit()
+                        self._fts_enabled = True
+                        self._fts_tokenizer = tokenize_opt
+                        break
+                    except sqlite3.OperationalError:
+                        continue
+                if not self._fts_enabled:
+                    logger.warning("FTS5 no disponible en este SQLite — la búsqueda de reuniones usará LIKE")
+                else:
+                    self._fts_backfill(conn)
             finally:
                 conn.close()
         except sqlite3.DatabaseError as e:
@@ -380,7 +405,14 @@ class TranscriptionDB:
                 (title, transcript, segments_json, insights_json, minutes_json,
                  duration_seconds, started_at),
             )
-            return cursor.lastrowid
+            meeting_id = cursor.lastrowid
+            self._fts_index_meeting(conn, meeting_id, {
+                "title": title,
+                "transcript": transcript,
+                "minutes_json": minutes_json,
+                "insights_json": insights_json,
+            })
+            return meeting_id
 
     def meetings_recent(self, limit: int = 20) -> list:
         """Devuelve las reuniones más recientes (sin el transcript completo, para listar)."""
@@ -405,12 +437,209 @@ class TranscriptionDB:
     def meeting_delete(self, meeting_id: int) -> int:
         """Elimina una reunión por id. Devuelve filas eliminadas."""
         with sqlite3.connect(self.db_path) as conn:
-            return conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,)).rowcount
+            rowcount = conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,)).rowcount
+            if self._fts_enabled:
+                try:
+                    conn.execute("DELETE FROM meetings_fts WHERE rowid=?", (meeting_id,))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("FTS delete error (meeting %s): %s", meeting_id, exc)
+            return rowcount
 
     def meetings_delete_all(self) -> int:
         """Elimina todas las reuniones. Devuelve filas eliminadas."""
         with sqlite3.connect(self.db_path) as conn:
-            return conn.execute("DELETE FROM meetings").rowcount
+            rowcount = conn.execute("DELETE FROM meetings").rowcount
+            if self._fts_enabled:
+                try:
+                    conn.execute("DELETE FROM meetings_fts")
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("FTS clear error: %s", exc)
+            return rowcount
+
+    # ------------------------------------------------------------------
+    # FTS5 — búsqueda full-text en reuniones
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _flatten_str_or_dict_list(lst, key="texto") -> str:
+        """Aplana una lista de (str | dict con 'texto'/'text') a string concatenado.
+
+        Nunca lanza excepción: ante cualquier dato raro devuelve "".
+        """
+        if not isinstance(lst, list):
+            return ""
+        parts = []
+        for item in lst:
+            try:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    parts.append(str(item.get(key) or item.get("text") or ""))
+            except Exception:  # noqa: BLE001
+                pass
+        return " ".join(p for p in parts if p)
+
+    def _meeting_fts_fields(self, row: dict) -> tuple:
+        """Extrae los campos de texto plano para el índice FTS de una reunión.
+
+        row: dict con keys title, transcript, minutes_json, insights_json (str|None).
+        Devuelve: (title, transcript, resumen, temas, pendientes, decisiones, propuestas)
+        """
+        title = row.get("title") or ""
+        transcript = row.get("transcript") or ""
+
+        try:
+            minutes = json.loads(row.get("minutes_json") or "null") or {}
+        except Exception:  # noqa: BLE001
+            minutes = {}
+        try:
+            insights = json.loads(row.get("insights_json") or "null") or {}
+        except Exception:  # noqa: BLE001
+            insights = {}
+
+        resumen = minutes.get("resumen") or ""
+
+        # temas
+        if minutes.get("temas"):
+            temas = self._flatten_str_or_dict_list(minutes["temas"])
+        else:
+            temas = self._flatten_str_or_dict_list(insights.get("temas") or [], key="text")
+
+        # pendientes
+        if minutes.get("pendientes"):
+            pendientes = self._flatten_str_or_dict_list(minutes["pendientes"])
+        else:
+            pendientes = self._flatten_str_or_dict_list(insights.get("pendientes") or [])
+
+        decisiones = self._flatten_str_or_dict_list(minutes.get("decisiones") or [])
+        propuestas = self._flatten_str_or_dict_list(minutes.get("propuestas") or [])
+
+        return (str(title), str(transcript), str(resumen), temas, pendientes, decisiones, propuestas)
+
+    def _fts_index_meeting(self, conn, meeting_id: int, row: dict) -> None:
+        """Upsert de una reunión en el índice FTS. Usa la conexión abierta del llamante."""
+        if not self._fts_enabled:
+            return
+        try:
+            fields = self._meeting_fts_fields(row)
+            conn.execute("DELETE FROM meetings_fts WHERE rowid=?", (meeting_id,))
+            conn.execute(
+                "INSERT INTO meetings_fts(rowid, title, transcript, resumen, temas, "
+                "pendientes, decisiones, propuestas) VALUES (?,?,?,?,?,?,?,?)",
+                (meeting_id, *fields),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("FTS index error (meeting %s): %s", meeting_id, exc)
+
+    def _fts_backfill(self, conn) -> None:
+        """Reconstruye el índice FTS si está desincronizado con la tabla meetings."""
+        if not self._fts_enabled:
+            return
+        try:
+            # No basta comparar counts: una reunión presente en meetings pero ausente
+            # del índice (o una fila FTS huérfana) puede dejar counts iguales y aun así
+            # estar desincronizada. Detectamos por rowid faltante/huérfano (LEFT JOIN).
+            missing = conn.execute(
+                "SELECT count(*) FROM meetings m "
+                "LEFT JOIN meetings_fts f ON f.rowid = m.id WHERE f.rowid IS NULL"
+            ).fetchone()[0]
+            orphans = conn.execute(
+                "SELECT count(*) FROM meetings_fts f "
+                "LEFT JOIN meetings m ON m.id = f.rowid WHERE m.id IS NULL"
+            ).fetchone()[0]
+            if missing == 0 and orphans == 0:
+                return
+            logger.info("FTS backfill: faltantes=%d huérfanos=%d — reconstruyendo índice…", missing, orphans)
+            conn.execute("DELETE FROM meetings_fts")
+            rows = conn.execute(
+                "SELECT id, title, transcript, minutes_json, insights_json FROM meetings"
+            ).fetchall()
+            for row in rows:
+                self._fts_index_meeting(conn, row[0], {
+                    "title": row[1],
+                    "transcript": row[2],
+                    "minutes_json": row[3],
+                    "insights_json": row[4],
+                })
+            conn.commit()
+            logger.info("FTS backfill completado: %d reuniones indexadas", len(rows))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("FTS backfill error: %s", exc)
+
+    def meetings_index(self, limit: int = 200) -> list:
+        """Devuelve índice liviano de reuniones (id, title, started_at, resumen) para Potor."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, title, started_at, minutes_json FROM meetings ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        result = []
+        for row in rows:
+            try:
+                minutes = json.loads(row["minutes_json"] or "null") or {}
+            except Exception:  # noqa: BLE001
+                minutes = {}
+            result.append({
+                "id": row["id"],
+                "title": row["title"],
+                "started_at": row["started_at"],
+                "resumen": minutes.get("resumen") or "",
+            })
+        return result
+
+    def meetings_search(self, query: str, limit: int = 50) -> list:
+        """Busca reuniones por texto completo (FTS5) o LIKE si FTS no está disponible.
+
+        Devuelve lista de dicts con: id, title, started_at, duration_seconds, snippet.
+        """
+        query = (query or "").strip()
+        if not query:
+            return []
+
+        if self._fts_enabled:
+            # Sanitizar: dividir en tokens, escapar comillas, prefijo de término
+            tokens = [t for t in query.split() if t]
+            if not tokens:
+                return []
+            escaped_tokens = ['"' + t.replace('"', '""') + '"*' for t in tokens]
+            fts_query = " ".join(escaped_tokens)
+
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    rows = conn.execute(
+                        """
+                        SELECT f.rowid AS id,
+                               m.title AS title,
+                               m.started_at AS started_at,
+                               m.duration_seconds AS duration_seconds,
+                               snippet(meetings_fts, -1, char(2), char(3), '…', 12) AS snippet
+                        FROM meetings_fts f
+                        JOIN meetings m ON m.id = f.rowid
+                        WHERE meetings_fts MATCH ?
+                        ORDER BY bm25(meetings_fts, 8.0, 1.0, 6.0, 5.0, 3.0, 4.0, 2.0)
+                        LIMIT ?
+                        """,
+                        (fts_query, limit),
+                    ).fetchall()
+                    return [dict(row) for row in rows]
+            except sqlite3.OperationalError as exc:
+                logger.debug("FTS query error (query=%r): %s", query, exc)
+                return []
+        else:
+            # Fallback LIKE
+            like = f"%{query}%"
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT id, title, started_at, duration_seconds, "
+                    "substr(transcript,1,200) AS snippet "
+                    "FROM meetings WHERE title LIKE ? OR transcript LIKE ? "
+                    "ORDER BY id DESC LIMIT ?",
+                    (like, like, limit),
+                ).fetchall()
+                return [dict(row) for row in rows]
 
     def prune_older_than(self, days: int) -> int:
         """Elimina transcripciones más antiguas que *days* días.

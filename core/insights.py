@@ -16,6 +16,12 @@ Backend: por ahora Groq (``INSIGHTS_BACKEND=groq``, modelos Llama vía el SDK
 ``local`` (llama-cpp-python) y ``endpoint`` (servidor OpenAI-compatible on-prem)
 como siguiente paso — ver ``_chat``.
 
+Backends POR TAREA: ``INSIGHTS_BACKEND_LIVE`` (update_state, consolidate) y
+``INSIGHTS_BACKEND_BATCH`` (generate_minutes, chat_memory=Potor). Si no se
+setean, heredan ``INSIGHTS_BACKEND``; si tampoco, "groq". Esto permite, p. ej.,
+usar Groq para el análisis en vivo (velocidad) y OpenRouter para el acta/Potor
+(más inteligencia y contexto).
+
 Todo es fail-safe: si el LLM no está disponible o falla, las funciones devuelven
 el estado anterior / un acta vacía sin romper la reunión.
 """
@@ -75,30 +81,49 @@ def empty_state() -> dict:
     return {"temas": [], "pendientes": [], "propuestas": [], "citas": []}
 
 
-def is_available() -> bool:
-    """¿Se puede usar la capa de insights con la configuración actual?"""
+def _resolve_backend(task: str = "live") -> str:
+    """Resuelve el backend de insights para la tarea dada.
+
+    Cadena de fallback:
+      - task="batch" → INSIGHTS_BACKEND_BATCH || INSIGHTS_BACKEND || "groq"
+      - task="live"  → INSIGHTS_BACKEND_LIVE  || INSIGHTS_BACKEND || "groq"
+    """
+    global_fallback = os.getenv("INSIGHTS_BACKEND", "groq").strip().lower() or "groq"
+    if task == "batch":
+        per_task = os.getenv("INSIGHTS_BACKEND_BATCH", "").strip().lower()
+    else:
+        per_task = os.getenv("INSIGHTS_BACKEND_LIVE", "").strip().lower()
+    return per_task or global_fallback
+
+
+def is_available(task: str = "live") -> bool:
+    """¿Se puede usar la capa de insights con la configuración actual para la tarea dada?"""
     if os.getenv("INSIGHTS_ENABLED", "true").lower().strip() != "true":
         return False
-    backend = os.getenv("INSIGHTS_BACKEND", "groq").strip().lower()
+    backend = _resolve_backend(task)
     if backend == "groq":
         return bool(os.getenv("GROQ_API_KEY", "").strip())
     if backend == "endpoint":
         # Servidor OpenAI-compatible (LM Studio / on-prem). Disponible si hay URL
         # (siempre hay default). Si el servidor está caído, el fail-safe lo cubre.
         return bool(os.getenv("INSIGHTS_ENDPOINT_URL", "http://localhost:1234/v1").strip())
+    if backend == "openrouter":
+        return bool(os.getenv("OPENROUTER_API_KEY", "").strip())
     # local (llama-cpp embebido): camino A, siguiente fase
     return False
 
 
-def _model() -> str:
-    """Modelo LLM según el backend activo.
+def _model(task: str = "live") -> str:
+    """Modelo LLM según el backend activo para la tarea dada.
 
-    Groq y el endpoint (LM Studio) usan nombres distintos, así que cada uno tiene su
-    propia variable: conmutar nube↔local desde el dashboard no rompe la configuración.
+    Groq, el endpoint (LM Studio) y OpenRouter usan nombres distintos, así que cada uno
+    tiene su propia variable: conmutar nube↔local desde el dashboard no rompe la config.
     """
-    backend = os.getenv("INSIGHTS_BACKEND", "groq").strip().lower()
+    backend = _resolve_backend(task)
     if backend == "endpoint":
         return os.getenv("INSIGHTS_ENDPOINT_MODEL", "qwen/qwen2.5-vl-7b").strip()
+    if backend == "openrouter":
+        return os.getenv("OPENROUTER_MODEL", "google/gemini-3-flash").strip()
     return os.getenv("INSIGHTS_MODEL", "llama-3.3-70b-versatile").strip()
 
 
@@ -116,30 +141,38 @@ def _get_groq_client():
     return _client
 
 
-def _chat(messages: list, *, json_mode: bool = False, temperature: float = 0.2,
-          max_tokens: int = 1024) -> str:
+def _chat(messages: list, *, task: str = "live", json_mode: bool = False,
+          temperature: float = 0.2, max_tokens: int = 1024) -> str:
     """Llama al LLM de insights y devuelve el contenido de texto.
 
-    Dispatch por ``INSIGHTS_BACKEND``. Hoy solo 'groq'; 'local'/'endpoint' lanzan
-    InsightsUnavailable (siguiente fase). El endpoint OpenAI-compatible será casi
-    idéntico a esto cambiando base_url + api_key.
+    Dispatch por backend resuelto para la tarea: 'groq' (default), 'endpoint'
+    (LM Studio / on-prem OpenAI-compatible) u 'openrouter' (nube multi-modelo).
+    El parámetro ``task`` ("live" o "batch") determina qué variable de entorno
+    se usa para seleccionar el backend.
     """
-    backend = os.getenv("INSIGHTS_BACKEND", "groq").strip().lower()
+    backend = _resolve_backend(task)
 
     if backend == "endpoint":
-        return _chat_endpoint(messages, json_mode=json_mode, temperature=temperature, max_tokens=max_tokens)
+        return _chat_endpoint(messages, task=task, json_mode=json_mode,
+                              temperature=temperature, max_tokens=max_tokens)
+
+    if backend == "openrouter":
+        return _chat_openrouter(messages, task=task, json_mode=json_mode,
+                                temperature=temperature, max_tokens=max_tokens)
 
     if backend != "groq":
         raise InsightsUnavailable(f"Backend de insights '{backend}' aún no implementado")
 
-    kwargs = dict(model=_model(), messages=messages, temperature=temperature, max_tokens=max_tokens)
+    kwargs = dict(model=_model(task), messages=messages, temperature=temperature,
+                  max_tokens=max_tokens)
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
     resp = _get_groq_client().chat.completions.create(**kwargs)
     return (resp.choices[0].message.content or "").strip()
 
 
-def _chat_endpoint(messages: list, *, json_mode: bool, temperature: float, max_tokens: int) -> str:
+def _chat_endpoint(messages: list, *, task: str = "live", json_mode: bool,
+                   temperature: float, max_tokens: int) -> str:
     """Llamada a un servidor OpenAI-compatible (LM Studio en local, o on-prem).
 
     Camino B: probar modelos locales sin descargar nada (LM Studio ya los sirve).
@@ -152,7 +185,7 @@ def _chat_endpoint(messages: list, *, json_mode: bool, temperature: float, max_t
     # tokens "pensando" y devuelven vacío. Los no-razonadores paran antes igualmente.
     floor = int(os.getenv("INSIGHTS_ENDPOINT_MAX_TOKENS", "2500"))
     payload = {
-        "model": _model(),
+        "model": _model(task),
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max(max_tokens, floor),
@@ -172,6 +205,47 @@ def _chat_endpoint(messages: list, *, json_mode: bool, temperature: float, max_t
         resp.raise_for_status()
     except requests.RequestException as exc:
         raise InsightsUnavailable(f"Endpoint no disponible ({base}): {exc}") from exc
+    data = resp.json()
+    return (data["choices"][0]["message"]["content"] or "").strip()
+
+
+def _chat_openrouter(messages: list, *, task: str = "live", json_mode: bool,
+                     temperature: float, max_tokens: int) -> str:
+    """Llamada a OpenRouter (nube multi-modelo, API OpenAI-compatible).
+
+    Requiere OPENROUTER_API_KEY. Modelo configurable vía OPENROUTER_MODEL.
+    No envía response_format (misma razón que _chat_endpoint: compatibilidad máxima);
+    confía en el prompt + _extract_json para JSON mode.
+    Timeout (10, 120): conexión rápida, generación puede tardar con modelos grandes.
+    """
+    import requests  # noqa: PLC0415
+    key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    if not key:
+        raise InsightsUnavailable("Falta OPENROUTER_API_KEY para el backend OpenRouter")
+    base = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+    payload = {
+        "model": _model(task),
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    # json_mode: igual que _chat_endpoint, confiamos en prompt + _extract_json
+    _ = json_mode
+    try:
+        resp = requests.post(
+            f"{base}/chat/completions",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "http://localhost",
+                "X-Title": "Vflow",
+            },
+            timeout=(10, 120),
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        raise InsightsUnavailable(f"OpenRouter no disponible: {exc}") from exc
     data = resp.json()
     return (data["choices"][0]["message"]["content"] or "").strip()
 
@@ -217,7 +291,7 @@ def update_state(state: dict, delta_text: str) -> dict:
     disponible, falla, o devuelve JSON inválido.
     """
     global _last_error
-    if not delta_text.strip() or not is_available():
+    if not delta_text.strip() or not is_available(task="live"):
         return state
     prev = json.dumps(state, ensure_ascii=False)
     try:
@@ -226,6 +300,7 @@ def update_state(state: dict, delta_text: str) -> dict:
                 {"role": "system", "content": _INSIGHTS_SYSTEM},
                 {"role": "user", "content": f"ESTADO ACTUAL:\n{prev}\n\nTEXTO NUEVO:\n{delta_text}"},
             ],
+            task="live",
             json_mode=True,
             temperature=0.1,
             max_tokens=1200,
@@ -283,7 +358,7 @@ def consolidate(transcript: str, current: dict) -> dict:
     UNA sola llamada (no iterativa). Fail-safe: si el LLM no está disponible o falla,
     devuelve el estado actual sin cambios.
     """
-    if not transcript.strip() or not is_available():
+    if not transcript.strip() or not is_available(task="live"):
         return current
     try:
         content = _chat(
@@ -291,6 +366,7 @@ def consolidate(transcript: str, current: dict) -> dict:
                 {"role": "system", "content": _CONSOLIDATE_SYSTEM},
                 {"role": "user", "content": f"TRANSCRIPCIÓN COMPLETA:\n{transcript}\n\nBORRADOR ACTUAL:\n{json.dumps(current, ensure_ascii=False)}"},
             ],
+            task="live",
             json_mode=True,
             temperature=0.1,
             max_tokens=1500,
@@ -339,6 +415,12 @@ _MINUTES_SYSTEM = (
 )
 
 
+def chat_memory(messages: list, *, max_tokens: int = 1024, temperature: float = 0.3) -> str:
+    """Chat genérico multi-turno sobre la memoria de reuniones (Potor). Reusa el dispatch backend."""
+    return _chat(messages, task="batch", json_mode=False, temperature=temperature,
+                 max_tokens=max_tokens)
+
+
 def generate_minutes(transcript: str, insights: dict | None = None) -> dict:
     """Genera el acta de la reunión (una sola llamada LLM). Fail-safe.
 
@@ -347,7 +429,7 @@ def generate_minutes(transcript: str, insights: dict | None = None) -> dict:
     resumen/decisiones/temas/pendientes/propuestas, o un acta vacía si el LLM falla.
     """
     empty = {"resumen": "", "decisiones": [], "temas": [], "pendientes": [], "propuestas": [], "citas": []}
-    if not transcript.strip() or not is_available():
+    if not transcript.strip() or not is_available(task="batch"):
         return empty
     user = f"TRANSCRIPCIÓN:\n{transcript}"
     if insights:
@@ -358,6 +440,7 @@ def generate_minutes(transcript: str, insights: dict | None = None) -> dict:
                 {"role": "system", "content": _MINUTES_SYSTEM},
                 {"role": "user", "content": user},
             ],
+            task="batch",
             json_mode=True,
             temperature=0.2,
             max_tokens=1600,
