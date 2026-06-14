@@ -184,13 +184,17 @@ _INSIGHTS_SYSTEM = (
     "Eres un analista de reuniones. Recibes el ESTADO actual de la reunión (JSON con "
     "temas, pendientes y propuestas) y un fragmento NUEVO de la transcripción. "
     "Devuelve el estado ACTUALIZADO como objeto JSON con exactamente estas claves:\n"
-    '  "temas": lista de strings (asuntos tratados, concisos)\n'
-    '  "pendientes": lista de objetos {"texto": string, "responsable": string|null}\n'
+    '  "temas": lista de strings (asuntos tratados; AMPLIOS y no redundantes, fusiona '
+    "micro-temas relacionados; idealmente no más de ~8)\n"
+    '  "pendientes": lista de objetos {"texto": string, "responsable": string|null, '
+    '"fecha": string|null, "hora": string|null} — compromisos/tareas acordados; incluye '
+    'responsable, fecha y hora SOLO si se mencionan (p. ej. "viernes", "15:00")\n'
     '  "propuestas": lista de objetos {"texto": string, "confianza": "alta"|"media"}\n\n'
     "REGLAS ESTRICTAS:\n"
     "- Solo añade un pendiente o una propuesta si hay EVIDENCIA EXPLÍCITA en el texto nuevo. "
     "Es preferible OMITIR a inventar. No infieras intenciones no dichas.\n"
-    "- No inventes responsables: usa null si no se dijo quién.\n"
+    "- Un pendiente es un COMPROMISO/tarea (alguien hará algo), no un simple tema. "
+    "No inventes responsable, fecha ni hora: usa null si no se dijeron.\n"
     "- Mantén lo que ya estaba en el estado (no borres temas/pendientes previos salvo que se "
     "resuelvan explícitamente). Acumula, no reescribas.\n"
     "- Evita duplicados: si algo ya está, no lo repitas.\n"
@@ -249,12 +253,13 @@ _CONSOLIDATE_SYSTEM = (
     "ahora y un BORRADOR del análisis acumulado (construido de forma incremental, puede tener "
     "temas mal nombrados, duplicados o cosas que faltan). Devuelve el análisis CONSOLIDADO como "
     "objeto JSON con exactamente estas claves:\n"
-    '  "temas": lista de strings\n'
-    '  "pendientes": lista de objetos {"texto": string, "responsable": string|null}\n'
+    '  "temas": lista de strings (AMPLIOS y no redundantes; fusiona micro-temas; ~8 máx)\n'
+    '  "pendientes": lista de objetos {"texto": string, "responsable": string|null, '
+    '"fecha": string|null, "hora": string|null} — compromisos con responsable/fecha/hora si se dijeron\n'
     '  "propuestas": lista de objetos {"texto": string, "confianza": "alta"|"media"}\n\n'
     "REGLAS:\n"
-    "- Corrige y mejora con la visión completa: fusiona duplicados, renombra temas confusos, "
-    "añade lo importante que el borrador haya omitido.\n"
+    "- Corrige y mejora con la visión completa: fusiona duplicados y temas relacionados, "
+    "renombra temas confusos, añade lo importante que el borrador haya omitido.\n"
     "- Básate solo en la transcripción; no inventes. Conserva responsables ya identificados.\n"
     "- Es preferible omitir a inventar. Responde SOLO con el objeto JSON. Todo en español."
 )
@@ -304,8 +309,9 @@ _MINUTES_SYSTEM = (
     "guía e incorpóralo si sigue siendo válido. Devuelve un objeto JSON con exactamente estas claves:\n"
     '  "resumen": string (2-4 frases con lo esencial)\n'
     '  "decisiones": lista de strings (decisiones tomadas; [] si no hubo)\n'
-    '  "temas": lista de strings (asuntos tratados)\n'
-    '  "pendientes": lista de objetos {"texto": string, "responsable": string|null}\n'
+    '  "temas": lista de strings (asuntos tratados; amplios, no redundantes)\n'
+    '  "pendientes": lista de objetos {"texto": string, "responsable": string|null, '
+    '"fecha": string|null, "hora": string|null} — compromisos/tareas con responsable, fecha y hora si se mencionaron\n'
     '  "propuestas": lista de strings (sugerencias/ideas accionables planteadas)\n\n'
     "REGLAS:\n"
     "- Básate en la transcripción y el análisis en vivo; no inventes.\n"

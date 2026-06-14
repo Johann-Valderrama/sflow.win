@@ -104,6 +104,12 @@ class MeetingSession:
         self._started_at: str | None = None
         self._chunk_thread: threading.Thread | None = None
         self._stop_event: threading.Event | None = None
+        # Cola + worker de transcripción: el loop de chunking solo CORTA y encola; un
+        # único worker transcribe en background. Así la latencia de Groq no arrastra la
+        # cadencia del loop (cadencia más regular = menos jitter). Un solo worker preserva
+        # el orden de los segmentos y el carryover.
+        self._transcribe_q: queue.Queue | None = None
+        self._transcribe_thread: threading.Thread | None = None
         self._transcriber = Transcriber()
         self._sys_available = False        # ¿el loopback arrancó? (si no, reunión solo-mic)
         self._last_error: str | None = None
@@ -238,6 +244,9 @@ class MeetingSession:
 
         self._active = True
         self._stop_event = threading.Event()
+        self._transcribe_q = queue.Queue()
+        self._transcribe_thread = threading.Thread(target=self._transcribe_worker, daemon=True)
+        self._transcribe_thread.start()
         self._chunk_thread = threading.Thread(target=self._chunk_loop, daemon=True)
         self._chunk_thread.start()
         logger.info("Reunión iniciada (loopback=%s).", self._sys_available)
@@ -264,6 +273,14 @@ class MeetingSession:
             self._stop_event.set()
         if self._chunk_thread is not None:
             self._chunk_thread.join(timeout=120)
+
+        # Drenar la cola de transcripción pendiente ANTES del acta: el chunk loop hizo
+        # un último flush (encoló los frames restantes); el sentinela None cierra el worker
+        # tras procesar todo lo pendiente, dejando el transcript completo para el acta.
+        if self._transcribe_q is not None:
+            self._transcribe_q.put(None)
+        if self._transcribe_thread is not None:
+            self._transcribe_thread.join(timeout=120)
 
         self._mic = None
         self._sys = None
@@ -405,13 +422,33 @@ class MeetingSession:
         return self._tail_rms(mic) < MEETING_SILENCE_RMS and self._tail_rms(sys) < MEETING_SILENCE_RMS
 
     def _flush_window(self, window_start: float):
-        """Extrae los frames acumulados de cada canal, transcribe y añade segmentos."""
+        """Corta la ventana: extrae los frames acumulados y los ENCOLA para el worker.
+
+        No transcribe aquí (eso bloquearía el loop de chunking y arrastraría la cadencia);
+        el worker de transcripción lo hace en background.
+        """
         with self._lock:
             mic_frames = self._mic_frames
             sys_frames = self._sys_frames
             self._mic_frames = []
             self._sys_frames = []
+        if (mic_frames or sys_frames) and self._transcribe_q is not None:
+            self._transcribe_q.put((window_start, mic_frames, sys_frames))
 
+    def _transcribe_worker(self):
+        """Worker único: transcribe las ventanas encoladas en orden. None = sentinela de fin."""
+        while True:
+            item = self._transcribe_q.get()
+            if item is None:
+                break
+            window_start, mic_frames, sys_frames = item
+            try:
+                self._process_window(window_start, mic_frames, sys_frames)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Reunión: error procesando ventana: %s", exc)
+
+    def _process_window(self, window_start: float, mic_frames: list, sys_frames: list):
+        """Transcribe los frames de cada canal y añade los segmentos (corre en el worker)."""
         for frames, label in ((mic_frames, self.LABEL_MIC), (sys_frames, self.LABEL_SYS)):
             if not frames:
                 continue
@@ -548,7 +585,8 @@ class MeetingSession:
         """Convierte el store con IDs a texto plano. EL CALLER DEBE TENER EL LOCK."""
         return {
             "temas": [t["text"] for t in self._insights["temas"]],
-            "pendientes": [{"texto": p["texto"], "responsable": p.get("responsable")}
+            "pendientes": [{"texto": p["texto"], "responsable": p.get("responsable"),
+                            "fecha": p.get("fecha"), "hora": p.get("hora")}
                            for p in self._insights["pendientes"]],
             "propuestas": [{"texto": p["texto"], "confianza": p.get("confianza", "media")}
                            for p in self._insights["propuestas"]],
@@ -630,16 +668,17 @@ class MeetingSession:
                     if self._same_item(e[field], text):
                         match = e
                         break
+                # Campos opcionales que se conservan/actualizan (compromisos, propuestas)
+                optional = ("responsable", "confianza", "fecha", "hora")
                 if match is None:
                     new_item = {"id": self._new_insight_id()}
                     if text_key is None:
                         new_item["text"] = text
                     else:
                         new_item["texto"] = text
-                        if "responsable" in item:
-                            new_item["responsable"] = item.get("responsable")
-                        if "confianza" in item:
-                            new_item["confianza"] = item.get("confianza", "media")
+                        for k in optional:
+                            if item.get(k):
+                                new_item[k] = item.get(k)
                     store_list.append(new_item)
                     added += 1
                 else:
@@ -648,10 +687,9 @@ class MeetingSession:
                         match["text" if text_key is None else "texto"] = text
                         changed += 1
                     if text_key is not None:
-                        if item.get("responsable"):
-                            match["responsable"] = item.get("responsable")
-                        if item.get("confianza"):
-                            match["confianza"] = item.get("confianza")
+                        for k in optional:
+                            if item.get(k):
+                                match[k] = item.get(k)
 
         merge_list(self._insights["temas"], plain.get("temas", []), None)
         merge_list(self._insights["pendientes"], plain.get("pendientes", []), "texto")

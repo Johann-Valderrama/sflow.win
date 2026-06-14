@@ -1201,6 +1201,15 @@ HTML_TEMPLATE = """
             } catch(e) { return {}; }
         }
 
+        // Sufijo de un pendiente: responsable + fecha/hora si existen → "(María · 📅 viernes 15:00)"
+        function pendMeta(p) {
+            const parts = [];
+            if (p && p.responsable) parts.push(escapeHtml(String(p.responsable)));
+            const fh = [p && p.fecha, p && p.hora].filter(Boolean).map(x => escapeHtml(String(x))).join(' ');
+            if (fh) parts.push('📅 ' + fh);
+            return parts.length ? ' <span class="text-white/35">(' + parts.join(' · ') + ')</span>' : '';
+        }
+
         function renderInsights(ins) {
             const el = document.getElementById('mt-insights');
             if (!el) return;
@@ -1228,8 +1237,7 @@ HTML_TEMPLATE = """
                     + pend.length + ' pendientes · ' + prop.length + ' propuestas</div>';
                 if (pend.length) {
                     fhtml += pend.map(p => {
-                        const r = p.responsable ? ' <span class="text-white/35">(' + escapeHtml(String(p.responsable)) + ')</span>' : '';
-                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">☐ ' + escapeHtml(String(p.texto || '')) + r + '</div>';
+                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">☐ ' + escapeHtml(String(p.texto || '')) + pendMeta(p) + '</div>';
                     }).join('');
                 } else {
                     fhtml += '<div class="text-[11px] text-white/25">Sin pendientes detectados aún.</div>';
@@ -1246,8 +1254,7 @@ HTML_TEMPLATE = """
             if (pend.length) {
                 html += '<div><div class="text-[11px] uppercase tracking-wide text-amber-300/50 mb-1">Pendientes</div>'
                     + pend.map(p => {
-                        const r = p.responsable ? ' <span class="text-white/35">(' + escapeHtml(String(p.responsable)) + ')</span>' : '';
-                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">☐ ' + escapeHtml(String(p.texto || '')) + r + '</div>';
+                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">☐ ' + escapeHtml(String(p.texto || '')) + pendMeta(p) + '</div>';
                     }).join('') + '</div>';
             }
             if (prop.length) {
@@ -1272,8 +1279,7 @@ HTML_TEMPLATE = """
             if (dec.length) html += '<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'
                 + dec.map(d => '<div class="text-xs text-white/75">• ' + escapeHtml(String(d)) + '</div>').join('') + '</div>';
             if (pen.length) html += '<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'
-                + pen.map(p => { const r = p.responsable ? ' <span class="text-white/35">(' + escapeHtml(String(p.responsable)) + ')</span>' : '';
-                    return '<div class="text-xs text-white/75">☐ ' + escapeHtml(String(p.texto || p)) + r + '</div>'; }).join('') + '</div>';
+                + pen.map(p => '<div class="text-xs text-white/75">☐ ' + escapeHtml(String(p.texto || p)) + pendMeta(p) + '</div>').join('') + '</div>';
             if (prop.length) html += '<div><div class="text-xs text-sky-300/50 mt-2 mb-1">Propuestas</div>'
                 + prop.map(p => '<div class="text-xs text-white/75">💡 ' + escapeHtml(String(p.texto != null ? p.texto : p)) + '</div>').join('') + '</div>';
             if (tem.length) html += '<div><div class="text-xs text-white/40 mt-2 mb-1">Temas tratados</div>'
