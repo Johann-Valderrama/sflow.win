@@ -34,3 +34,6 @@ loopback_ellos.wav
 # Logs
 vflow.log
 vflow.log.*
+
+# Actas de reuniones exportadas (datos de usuario)
+meetings/

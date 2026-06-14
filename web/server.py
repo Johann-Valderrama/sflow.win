@@ -8,9 +8,10 @@ from urllib.parse import urlparse
 from flask import Flask, jsonify, render_template_string, request, send_file
 from dotenv import set_key
 from db.database import TranscriptionDB
-from config import APP_DATA_DIR
+from config import APP_DATA_DIR, MEETINGS_DIR
 from core import dictionary as _dictionary
 from core.meeting import MEETING
+from core import meeting_export as _meeting_export
 
 # ---------------------------------------------------------------------------
 # Estado de descarga del modelo local (compartido entre endpoints)
@@ -243,7 +244,7 @@ HTML_TEMPLATE = """
                 <button onclick="toggleDictionary()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Diccionario">&#128218;</button>
                 <button onclick="toggleShortcuts()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Atajos de teclado">&#9000;</button>
                 <button onclick="toggleUrlQueue()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Transcribir desde URL">&#9654;</button>
-                <button onclick="toggleMeeting()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Reunión en vivo (mic + sistema)">&#127908;</button>
+                <button onclick="window.open('/reunion','_blank')" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Abrir ventana de reunión (en vivo + historial)">&#127908;</button>
             </div>
         </div>
 
@@ -1893,10 +1894,158 @@ def _csrf_check():
             return jsonify({"error": "CSRF: referer not allowed"}), 403
 
 
+MEETING_PAGE = """<!DOCTYPE html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vflow — Reunión</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background:#0a0a0f; color:#e5e7eb; font-family:Inter,system-ui,sans-serif; }
+  .glass { background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); }
+  .mt-fade { animation:mtFade .25s ease-out; }
+  @keyframes mtFade { from{opacity:0;transform:translateY(3px);} to{opacity:1;transform:none;} }
+  .btn { font-size:.8rem; padding:.4rem .8rem; border-radius:.5rem; cursor:pointer; }
+</style></head>
+<body class="min-h-screen p-6">
+<div class="max-w-5xl mx-auto">
+  <div class="flex items-center justify-between mb-5">
+    <div class="text-2xl font-semibold">&#127908; Reunión</div>
+    <div class="flex items-center gap-2">
+      <button onclick="startMeeting()" id="mt-start" class="btn bg-purple-600/30 text-purple-200 hover:bg-purple-600/50">&#9654; Iniciar</button>
+      <button onclick="stopMeeting()" id="mt-stop" class="btn bg-red-600/30 text-red-300 hover:bg-red-600/50 hidden">&#9632; Terminar</button>
+      <button onclick="openFolder()" class="btn text-white/50 hover:text-white/80 hover:bg-white/5" title="Abrir la carpeta de actas (.md)">&#128193; Carpeta</button>
+      <a href="/" class="btn text-white/40 hover:text-white/70 hover:bg-white/5">Dashboard</a>
+    </div>
+  </div>
+  <div id="mt-status" class="text-xs text-white/40 mb-3"></div>
+
+  <div class="grid gap-3 mb-3" style="grid-template-columns:1.4fr 1fr;">
+    <div>
+      <div class="text-xs text-white/40 mb-1.5">Transcripción en vivo</div>
+      <div id="mt-transcript" class="space-y-1.5 max-h-[28rem] overflow-y-auto glass rounded-xl p-3">
+        <div class="text-xs text-white/20">Inicia una reunión para ver la transcripción (Yo / Ellos).</div>
+      </div>
+    </div>
+    <div>
+      <div class="text-xs text-white/40 mb-1.5">Análisis en vivo</div>
+      <div id="mt-insights" class="space-y-3 max-h-[28rem] overflow-y-auto glass rounded-xl p-3">
+        <div class="text-xs text-white/20">Temas, pendientes, propuestas y próximas reuniones.</div>
+      </div>
+    </div>
+  </div>
+  <div id="mt-acta" class="glass rounded-xl p-4 mb-8 hidden">
+    <div class="text-sm font-medium text-emerald-300/80 mb-2">Acta de la reunión</div>
+    <div id="mt-acta-body" class="space-y-2 text-sm text-white/80"></div>
+  </div>
+
+  <div class="flex items-center justify-between mb-2 mt-8">
+    <div class="text-sm font-medium text-white/60">Historial de reuniones</div>
+    <button onclick="exportAll()" class="btn text-white/40 hover:text-white/70 hover:bg-white/5" title="Exportar todas a Markdown">Exportar todas (.md)</button>
+  </div>
+  <div id="mt-history" class="space-y-1"></div>
+  <div id="mt-viewer" class="glass rounded-xl p-4 mt-3 hidden"></div>
+</div>
+<script>
+let _seen = new Set(), _segCount = 0, _actaShown = false, _poll = null;
+function esc(s){ const d=document.createElement('div'); d.textContent = (s==null?'':String(s)); return d.innerHTML; }
+function pendMeta(p){ const a=[]; if(p&&p.responsable)a.push(esc(p.responsable));
+  const fh=[p&&p.fecha,p&&p.hora].filter(Boolean).map(esc).join(' '); if(fh)a.push('\\uD83D\\uDCC5 '+fh);
+  return a.length?' <span class="text-white/35">('+a.join(' \\u00b7 ')+')</span>':''; }
+
+async function loadLive(){
+  try{
+    const r = await fetch('/api/meeting'); const d = await r.json(); const s = d.status||{};
+    const startB=document.getElementById('mt-start'), stopB=document.getElementById('mt-stop');
+    if(s.active){ startB.classList.add('hidden'); stopB.classList.remove('hidden');
+      let t='Grabando '+(s.elapsed_fmt||'00:00')+' \\u00b7 '+(s.segment_count||0)+' intervenciones';
+      if(s.sys_available===false)t+=' \\u00b7 solo micr\\u00f3fono';
+      if(s.insight_running)t+=' \\u00b7 analizando\\u2026'; if(s.error)t+=' \\u00b7 \\u26a0 '+s.error;
+      document.getElementById('mt-status').textContent=t; _actaShown=false;
+    } else { startB.classList.remove('hidden'); stopB.classList.add('hidden'); document.getElementById('mt-status').textContent='';
+      if(d.last_minutes && !_actaShown){ renderActa(d.last_minutes); _actaShown=true; loadHistory(); } }
+    renderTranscript(s, d.segments||[]); renderInsights(d.insights||{});
+  }catch(e){}
+}
+function renderTranscript(s, segs){
+  const c=document.getElementById('mt-transcript');
+  if(!segs.length){ if(_segCount!==0){_segCount=0;c.innerHTML='';} if(!c.innerHTML)c.innerHTML='<div class="text-xs text-white/20">Esperando voz\\u2026</div>'; return; }
+  if(segs.length<_segCount){ c.innerHTML=''; _segCount=0; }
+  if(_segCount===0)c.innerHTML='';
+  for(let i=_segCount;i<segs.length;i++){ const sg=segs[i]; const col=sg.speaker==='Yo'?'text-purple-300':'text-sky-300';
+    const div=document.createElement('div'); div.className='text-sm text-white/80 leading-snug mt-fade';
+    div.innerHTML='<span class="text-[10px] font-mono text-white/30 mr-1">'+esc(sg.time)+'</span><span class="text-xs font-medium '+col+' mr-1">'+esc(sg.speaker)+':</span>'+esc(sg.text);
+    c.appendChild(div); }
+  _segCount=segs.length; c.scrollTop=c.scrollHeight;
+}
+function fcl(id){ if(id==null)return''; if(_seen.has(id))return''; _seen.add(id); return ' mt-fade'; }
+function renderInsights(ins){
+  const el=document.getElementById('mt-insights');
+  const T=ins.temas||[],P=ins.pendientes||[],R=(ins.propuestas||[]).filter(p=>(p.confianza||'alta')==='alta'),C=ins.citas||[];
+  if(!T.length&&!P.length&&!R.length&&!C.length){ el.innerHTML='<div class="text-xs text-white/20">Temas, pendientes, propuestas y próximas reuniones.</div>'; return; }
+  let h='';
+  if(T.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-white/30 mb-1">Temas</div>'+T.map(t=>'<div class="text-xs text-white/75 mb-0.5'+fcl(t.id)+'">\\u2022 '+esc(t.text!=null?t.text:t)+'</div>').join('')+'</div>';
+  if(P.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-amber-300/50 mb-1">Pendientes</div>'+P.map(p=>'<div class="text-xs text-white/75 mb-0.5'+fcl(p.id)+'">\\u2610 '+esc(p.texto||'')+pendMeta(p)+'</div>').join('')+'</div>';
+  if(R.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-sky-300/50 mb-1">Propuestas</div>'+R.map(p=>'<div class="text-xs text-white/75 mb-0.5'+fcl(p.id)+'">\\uD83D\\uDCA1 '+esc(p.texto||'')+'</div>').join('')+'</div>';
+  if(C.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-emerald-300/50 mb-1">Próximas reuniones</div>'+C.map(c=>'<div class="text-xs text-white/75 mb-0.5'+fcl(c.id)+'">\\uD83D\\uDCC5 '+esc(c.texto||'')+pendMeta({fecha:c.fecha,hora:c.hora})+'</div>').join('')+'</div>';
+  el.innerHTML=h;
+}
+function actaHtml(m){
+  m=m||{}; const dec=m.decisiones||[],tem=m.temas||[],pen=m.pendientes||[],pro=m.propuestas||[],cit=m.citas||[]; let h='';
+  if(m.resumen)h+='<p class="text-white/80">'+esc(m.resumen)+'</p>';
+  if(dec.length)h+='<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'+dec.map(d=>'<div class="text-xs text-white/75">\\u2022 '+esc(d)+'</div>').join('')+'</div>';
+  if(pen.length)h+='<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'+pen.map(p=>'<div class="text-xs text-white/75">\\u2610 '+esc(p.texto||p)+pendMeta(p)+'</div>').join('')+'</div>';
+  if(pro.length)h+='<div><div class="text-xs text-sky-300/50 mt-2 mb-1">Propuestas</div>'+pro.map(p=>'<div class="text-xs text-white/75">\\uD83D\\uDCA1 '+esc(p.texto!=null?p.texto:p)+'</div>').join('')+'</div>';
+  if(cit.length)h+='<div><div class="text-xs text-emerald-300/50 mt-2 mb-1">Próximas reuniones</div>'+cit.map(c=>'<div class="text-xs text-white/75">\\uD83D\\uDCC5 '+esc(c.texto||c)+pendMeta({fecha:c.fecha,hora:c.hora})+'</div>').join('')+'</div>';
+  if(tem.length)h+='<div><div class="text-xs text-white/40 mt-2 mb-1">Temas tratados</div>'+tem.map(t=>'<div class="text-xs text-white/75">\\u2022 '+esc(t)+'</div>').join('')+'</div>';
+  return h||'<div class="text-xs text-white/30">Acta vacía.</div>';
+}
+function renderActa(m){ document.getElementById('mt-acta-body').innerHTML=actaHtml(m); document.getElementById('mt-acta').classList.remove('hidden'); }
+
+async function startMeeting(){ _seen=new Set(); _segCount=0; _actaShown=false;
+  document.getElementById('mt-acta').classList.add('hidden'); document.getElementById('mt-transcript').innerHTML='';
+  try{ const r=await fetch('/api/meeting/start',{method:'POST'}); const d=await r.json();
+    if(!d.ok){ document.getElementById('mt-status').textContent=d.error||'No se pudo iniciar.'; return; }
+    await loadLive(); startPoll(); }catch(e){} }
+async function stopMeeting(){ document.getElementById('mt-status').textContent='Terminando y generando el acta\\u2026';
+  try{ const r=await fetch('/api/meeting/stop',{method:'POST'}); const d=await r.json(); await loadLive();
+    renderActa(d.minutes); _actaShown=true; loadHistory(); }catch(e){} }
+function startPoll(){ if(_poll)return; _poll=setInterval(loadLive,1500); }
+
+async function loadHistory(){
+  try{ const r=await fetch('/api/meetings'); const d=await r.json(); const el=document.getElementById('mt-history');
+    const ms=d.meetings||[]; if(!ms.length){ el.innerHTML='<div class="text-xs text-white/20">Aún no hay reuniones guardadas.</div>'; return; }
+    el.innerHTML=ms.map(m=>{ const dur=Math.round((m.duration_seconds||0)/60);
+      return '<div class="glass rounded-lg px-3 py-2 flex items-center justify-between hover:bg-white/[0.04] cursor-pointer" onclick="openMeeting('+m.id+')">'
+        +'<span class="text-xs text-white/70">'+esc(m.started_at||m.created_at||'')+'</span>'
+        +'<span class="text-[11px] text-white/30">'+dur+' min</span></div>'; }).join('');
+  }catch(e){} }
+async function openMeeting(id){
+  const v=document.getElementById('mt-viewer'); v.classList.remove('hidden'); v.innerHTML='<div class="text-xs text-white/30">Cargando\\u2026</div>';
+  try{ const r=await fetch('/api/meetings/'+id); const m=await r.json();
+    v.innerHTML='<div class="flex items-center justify-between mb-2"><div class="text-sm font-medium text-white/60">Reunión '+esc(m.started_at||'')+'</div>'
+      +'<button onclick="document.getElementById(\\'mt-viewer\\').classList.add(\\'hidden\\')" class="btn text-white/30 hover:text-white/60">Cerrar</button></div>'
+      +'<div class="text-xs font-medium text-emerald-300/70 mb-1">Acta</div><div class="space-y-2 mb-3">'+actaHtml(m.minutes)+'</div>'
+      +'<div class="text-xs font-medium text-white/40 mb-1">Transcripción</div><pre class="text-xs text-white/60 whitespace-pre-wrap max-h-80 overflow-y-auto">'+esc(m.transcript||'')+'</pre>';
+  }catch(e){ v.innerHTML='<div class="text-xs text-red-300">No se pudo cargar.</div>'; } }
+async function openFolder(){ try{ const r=await fetch('/api/meetings/open-folder',{method:'POST'}); const d=await r.json();
+  if(!d.ok) alert('No se pudo abrir la carpeta: '+(d.error||'')+'\\n'+(d.path||'')); }catch(e){} }
+async function exportAll(){ try{ const r=await fetch('/api/meetings/export',{method:'POST'}); const d=await r.json();
+  alert(d.ok?('Exportadas '+d.exported+' reuniones a:\\n'+d.path):'Error al exportar'); }catch(e){} }
+
+loadLive(); startPoll(); loadHistory();
+</script></body></html>"""
+
+
 @app.route("/")
 def index():
     """Sirve la página principal del dashboard de transcripciones."""
     return render_template_string(HTML_TEMPLATE)
+
+
+@app.route("/reunion")
+def reunion():
+    """Ventana dedicada al modo reunión: en vivo (transcript + análisis + acta) + historial."""
+    return render_template_string(MEETING_PAGE)
 
 
 @app.route("/logo")
@@ -2421,6 +2570,48 @@ def meeting_stop():
     """Detiene la reunión, persiste el acta y devuelve el transcript final."""
     res = MEETING.stop()
     return jsonify(res)
+
+
+@app.route("/api/meetings", methods=["GET"])
+def meetings_list():
+    """Lista de reuniones pasadas (sin transcript completo) para el historial."""
+    return jsonify({"meetings": _db.meetings_recent(limit=200)})
+
+
+@app.route("/api/meetings/<int:meeting_id>", methods=["GET"])
+def meeting_detail(meeting_id):
+    """Devuelve una reunión completa (transcript + acta + insights) para el visor."""
+    m = _db.meeting_get(meeting_id)
+    if not m:
+        return jsonify({"error": "not found"}), 404
+    import json as _json
+    for k in ("minutes_json", "insights_json", "segments_json"):
+        try:
+            m[k.replace("_json", "")] = _json.loads(m.get(k) or "null")
+        except Exception:  # noqa: BLE001
+            m[k.replace("_json", "")] = None
+    return jsonify(m)
+
+
+@app.route("/api/meetings/open-folder", methods=["POST"])
+def meetings_open_folder():
+    """Abre en el Explorador la carpeta donde se guardan los .md de reuniones."""
+    try:
+        os.makedirs(MEETINGS_DIR, exist_ok=True)
+        os.startfile(MEETINGS_DIR)  # noqa: S606 — Windows; abre el Explorador
+        return jsonify({"ok": True, "path": MEETINGS_DIR})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc), "path": MEETINGS_DIR}), 500
+
+
+@app.route("/api/meetings/export", methods=["POST"])
+def meetings_export():
+    """Backfill: exporta todas las reuniones de la DB a Markdown."""
+    try:
+        n = _meeting_export.export_all(_db, MEETINGS_DIR)
+        return jsonify({"ok": True, "exported": n, "path": MEETINGS_DIR})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.route("/api/instagram-cookies/sync", methods=["POST"])

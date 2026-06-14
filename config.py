@@ -128,6 +128,9 @@ MEETING_CHUNK_MAX_SECONDS = int(os.getenv("MEETING_CHUNK_MAX_SECONDS", "22"))  #
 MEETING_POLL_SECONDS = float(os.getenv("MEETING_POLL_SECONDS", "1.0"))     # cada cuánto revisa el loop
 MEETING_SILENCE_MS = int(os.getenv("MEETING_SILENCE_MS", "400"))           # ventana de cola para medir silencio
 MEETING_SILENCE_RMS = float(os.getenv("MEETING_SILENCE_RMS", "0.012"))     # RMS (0-1) por debajo = silencio
+# Carpeta donde se exporta un .md por reunión (acta + transcript + frontmatter), legible
+# por humanos y por agentes (tu OPS puede indexarla). Default: subcarpeta del data dir.
+MEETINGS_DIR = os.getenv("MEETINGS_DIR", os.path.join(_DATA_DIR, "meetings"))
 
 # Capa inteligente del modo reunión (Insight Stream + acta LLM)
 # INSIGHTS_ENABLED: activa/desactiva temas-pendientes-propuestas en vivo + acta final.

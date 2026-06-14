@@ -43,10 +43,12 @@ from config import (
     INSIGHTS_INTERVAL_SECONDS,
     INSIGHTS_CONSOLIDATE_SECONDS,
     INSIGHTS_CONSOLIDATE_COOLDOWN,
+    MEETINGS_DIR,
 )
 from core.recorder import MicSource, LoopbackSource
 from core.transcriber import Transcriber
 from core import insights as _insights
+from core import meeting_export as _export
 from db.database import TranscriptionDB
 
 logger = logging.getLogger(__name__)
@@ -319,6 +321,21 @@ class MeetingSession:
                 saved = True
             except Exception as exc:  # noqa: BLE001
                 logger.error("No se pudo guardar la reunión en la DB: %s", exc)
+
+        # Export a Markdown (contrato OPS), best-effort. Se hace al terminar para que la
+        # carpeta esté siempre al día sin necesidad de un programador de tareas.
+        if saved and meeting_id is not None:
+            try:
+                _export.export_meeting({
+                    "id": meeting_id,
+                    "started_at": self._started_at,
+                    "duration_seconds": duration,
+                    "transcript": transcript,
+                    "minutes_json": json.dumps(minutes, ensure_ascii=False),
+                    "insights_json": json.dumps(insights, ensure_ascii=False),
+                }, MEETINGS_DIR)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Export a markdown falló: %s", exc)
 
         metrics = self._fluidity_metrics()
         logger.info("Reunión detenida: %.0fs, %d segmentos (guardada=%s).", duration, len(segments), saved)

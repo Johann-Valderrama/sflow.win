@@ -303,6 +303,10 @@ def _setup_tray(app: QApplication, port: int, vflow: "VflowApp") -> QSystemTrayI
     dashboard = QAction(f"Abrir Dashboard (:{port})", menu)
     dashboard.triggered.connect(lambda: subprocess.run(["cmd", "/c", "start", f"http://localhost:{port}"], capture_output=True))
     menu.addAction(dashboard)
+
+    meeting_window = QAction("Abrir ventana de reunión", menu)
+    meeting_window.triggered.connect(lambda: subprocess.run(["cmd", "/c", "start", f"http://localhost:{port}/reunion"], capture_output=True))
+    menu.addAction(meeting_window)
     menu.addSeparator()
 
     login_action = QAction("Iniciar con Windows", menu)
