@@ -120,9 +120,14 @@ CHUNK_SECONDS = 60        # Transcribe every 60s during recording
 CHUNK_OVERLAP_SECONDS = 1 # Overlap between chunks to avoid cutting words
 
 # Modo reunión (captura dual mic + loopback)
-# Cada cuántos segundos se cierra una ventana por canal y se transcribe en vivo.
-# Más corto = transcript más "en vivo" pero más llamadas; ~20s es buen balance para actas.
-MEETING_CHUNK_SECONDS = int(os.getenv("MEETING_CHUNK_SECONDS", "20"))
+# La ventana se cierra en una PAUSA de silencio cerca del objetivo (no en el tiempo exacto),
+# para no cortar a mitad de palabra. Con corte por silencio + carryover de prompt se puede
+# usar un objetivo más corto (transcript más "en vivo") sin perder calidad.
+MEETING_CHUNK_SECONDS = int(os.getenv("MEETING_CHUNK_SECONDS", "12"))      # objetivo mínimo de ventana
+MEETING_CHUNK_MAX_SECONDS = int(os.getenv("MEETING_CHUNK_MAX_SECONDS", "22"))  # tope: corta aunque no haya pausa
+MEETING_POLL_SECONDS = float(os.getenv("MEETING_POLL_SECONDS", "1.0"))     # cada cuánto revisa el loop
+MEETING_SILENCE_MS = int(os.getenv("MEETING_SILENCE_MS", "400"))           # ventana de cola para medir silencio
+MEETING_SILENCE_RMS = float(os.getenv("MEETING_SILENCE_RMS", "0.012"))     # RMS (0-1) por debajo = silencio
 
 # Capa inteligente del modo reunión (Insight Stream + acta LLM)
 # INSIGHTS_ENABLED: activa/desactiva temas-pendientes-propuestas en vivo + acta final.

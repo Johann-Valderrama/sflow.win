@@ -34,6 +34,10 @@ import numpy as np
 from config import (
     SAMPLE_RATE,
     MEETING_CHUNK_SECONDS,
+    MEETING_CHUNK_MAX_SECONDS,
+    MEETING_POLL_SECONDS,
+    MEETING_SILENCE_MS,
+    MEETING_SILENCE_RMS,
     INSIGHTS_MIN_WORDS,
     INSIGHTS_FIRST_WORDS,
     INSIGHTS_INTERVAL_SECONDS,
@@ -92,6 +96,10 @@ class MeetingSession:
         self._segments: list = []          # [{"t": float, "speaker": str, "text": str}]
         self._mic: MicSource | None = None
         self._sys: LoopbackSource | None = None
+        # Carryover de prompt por canal: la cola del último texto da contexto al
+        # siguiente chunk para no perder palabras en la frontera (como url_transcribe).
+        self._carry = {self.LABEL_MIC: "", self.LABEL_SYS: ""}
+        self._window_start = 0.0
         self._t0 = 0.0
         self._started_at: str | None = None
         self._chunk_thread: threading.Thread | None = None
@@ -186,6 +194,8 @@ class MeetingSession:
             self._sys_frames = []
             self._segments = []
             self._last_error = None
+            self._carry = {self.LABEL_MIC: "", self.LABEL_SYS: ""}
+            self._window_start = 0.0
             self._drain_viz_queue()
             self._insights = {"temas": [], "pendientes": [], "propuestas": []}
             self._next_insight_id = 1
@@ -349,16 +359,50 @@ class MeetingSession:
                 break
 
     def _chunk_loop(self):
-        """Cada MEETING_CHUNK_SECONDS cierra una ventana por canal y la transcribe.
+        """Cierra cada ventana en una PAUSA de silencio cerca del objetivo.
 
-        Al recibir la señal de stop hace un último flush de lo que quede y sale.
+        Revisa cada MEETING_POLL_SECONDS: hace flush cuando la ventana llegó al
+        objetivo Y ambos canales están en silencio (pausa natural), o cuando se
+        alcanza el tope (corte forzado aunque nadie pare de hablar). Al recibir
+        stop, hace un último flush y sale.
         """
+        self._window_start = self._elapsed()
         while True:
-            window_start = self._elapsed()
-            fired = self._stop_event.wait(MEETING_CHUNK_SECONDS)
-            self._flush_window(window_start)
+            fired = self._stop_event.wait(MEETING_POLL_SECONDS)
             if fired:
+                self._flush_window(self._window_start)
                 break
+            dur = self._elapsed() - self._window_start
+            if dur >= MEETING_CHUNK_MAX_SECONDS or (dur >= MEETING_CHUNK_SECONDS and self._both_quiet()):
+                self._flush_window(self._window_start)
+                self._window_start = self._elapsed()
+
+    @staticmethod
+    def _tail_rms(frames: list) -> float:
+        """RMS (0-1) de los últimos MEETING_SILENCE_MS de audio de una lista de frames."""
+        if not frames:
+            return 0.0
+        needed = int(SAMPLE_RATE * MEETING_SILENCE_MS / 1000)
+        tail, total = [], 0
+        for f in reversed(frames):
+            tail.append(f)
+            total += f.shape[0]
+            if total >= needed:
+                break
+        arr = np.concatenate(list(reversed(tail)), axis=0).astype(np.float32) / 32768.0
+        if arr.size == 0:
+            return 0.0
+        return float(np.sqrt(np.mean(arr ** 2)))
+
+    def _both_quiet(self) -> bool:
+        """True si ambos canales están en silencio al final de la ventana (pausa natural).
+
+        Un canal sin frames recientes cuenta como silencioso (p. ej. el loopback no
+        entrega buffers en silencio total)."""
+        with self._lock:
+            mic = list(self._mic_frames)
+            sys = list(self._sys_frames)
+        return self._tail_rms(mic) < MEETING_SILENCE_RMS and self._tail_rms(sys) < MEETING_SILENCE_RMS
 
     def _flush_window(self, window_start: float):
         """Extrae los frames acumulados de cada canal, transcribe y añade segmentos."""
@@ -371,11 +415,13 @@ class MeetingSession:
         for frames, label in ((mic_frames, self.LABEL_MIC), (sys_frames, self.LABEL_SYS)):
             if not frames:
                 continue
+            carry = self._carry.get(label, "")  # contexto del chunk anterior de ESTE canal
             try:
                 wav = _frames_to_wav(frames)
                 # El Transcriber aplica VAD (Groq) + filtro de alucinaciones + diccionario.
-                # En silencio devuelve "" → no se añade segmento.
-                text = self._transcriber.transcribe(wav)
+                # En silencio devuelve "" → no se añade segmento. El carryover (prompt) da
+                # contexto para no perder palabras en la frontera entre chunks.
+                text = self._transcriber.transcribe(wav, prompt=carry or None)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Reunión: error transcribiendo ventana de '%s': %s", label, exc)
                 with self._lock:
@@ -384,6 +430,7 @@ class MeetingSession:
             text = (text or "").strip()
             if not text:
                 continue
+            self._carry[label] = text[-200:]  # cola para el contexto del próximo chunk
             with self._lock:
                 self._segments.append({"t": window_start, "speaker": label, "text": text})
                 self._insight_buffer.append(f"{label}: {text}")
