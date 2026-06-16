@@ -231,6 +231,10 @@ HTML_TEMPLATE = """
         .dict-budget-bar-fill { height: 100%; border-radius: 2px; background: rgba(140,80,220,0.6); transition: width 0.3s; }
         .dict-add-from-history { position: fixed; background: #1a1a1a; border: 1px solid rgba(140,80,220,0.5); border-radius: 8px; padding: 6px 12px; font-size: 12px; color: #c4b5fd; cursor: pointer; z-index: 200; box-shadow: 0 4px 16px rgba(0,0,0,0.4); display: none; }
         .dict-add-from-history:hover { background: rgba(140,80,220,0.2); }
+        /* Checkbox de pendientes dibujado con CSS (evita el tofu de U+2610 ausente en Inter) */
+        .chk { display: inline-block; width: .72em; height: .72em; border: 1.5px solid currentColor; border-radius: 3px; vertical-align: -1px; margin-right: .15em; opacity: .7; }
+        /* Iconos SVG inline: tamaño/alineación uniforme, heredan color del texto */
+        svg.ic { width: 1em; height: 1em; display: inline-block; vertical-align: -0.125em; flex-shrink: 0; }
     </style>
 </head>
 <body class="min-h-screen p-6">
@@ -249,7 +253,7 @@ HTML_TEMPLATE = """
                 <div class="dropdown" id="cleanup-dropdown">
                     <button onclick="document.getElementById('cleanup-dropdown').classList.toggle('open')"
                         class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5">
-                        Limpiar &#9662;
+                        Limpiar <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
                     </button>
                     <div class="dropdown-menu">
                         <div class="dropdown-item" onclick="bulkDelete('day','hoy')">Eliminar de hoy</div>
@@ -264,11 +268,11 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
                 <button onclick="loadData()" class="text-white/40 hover:text-white/70 text-sm">Actualizar</button>
-                <button onclick="toggleSettings()" aria-label="Configuración" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Configuración">&#9881;</button>
-                <button onclick="toggleDictionary()" aria-label="Diccionario" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Diccionario">&#128218;</button>
-                <button onclick="toggleShortcuts()" aria-label="Atajos de teclado" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Atajos de teclado">&#9000;</button>
-                <button onclick="toggleUrlQueue()" aria-label="Transcribir desde URL" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Transcribir desde URL">&#9654;</button>
-                <button onclick="window.open('/reunion','_blank')" aria-label="Abrir ventana de reunión" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Abrir ventana de reunión (en vivo + historial)">&#127908;</button>
+                <button onclick="toggleSettings()" aria-label="Configuración" data-icon="settings" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Configuración"></button>
+                <button onclick="toggleDictionary()" aria-label="Diccionario" data-icon="book" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Diccionario"></button>
+                <button onclick="toggleShortcuts()" aria-label="Atajos de teclado" data-icon="keyboard" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Atajos de teclado"></button>
+                <button onclick="toggleUrlQueue()" aria-label="Transcribir desde URL" data-icon="play" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Transcribir desde URL"></button>
+                <button onclick="window.open('/reunion','_blank')" aria-label="Abrir ventana de reunión" data-icon="mic" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Abrir ventana de reunión (en vivo + historial)"></button>
             </div>
         </header>
 
@@ -387,13 +391,13 @@ HTML_TEMPLATE = """
             <p class="text-xs text-white/45 mb-3">Captura tu micrófono («Yo») y el audio del sistema («Ellos») a la vez y transcribe en vivo. Inicia/termina también con <kbd class="px-1.5 py-0.5 text-[10px] font-mono rounded border border-white/45 bg-white/[0.07]">AltGr</kbd>+<kbd class="px-1.5 py-0.5 text-[10px] font-mono rounded border border-white/45 bg-white/[0.07]">R</kbd> o desde la bandeja. Para mejor diarización usa auriculares.</p>
 
             <div class="flex items-center gap-3 mb-3">
-                <button onclick="startMeeting()" id="mt-start"
+                <button onclick="startMeeting()" id="mt-start" data-icon="play"
                     class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 whitespace-nowrap">
-                    &#9654; Iniciar reunión
+                    Iniciar reunión
                 </button>
-                <button onclick="stopMeeting()" id="mt-stop"
+                <button onclick="stopMeeting()" id="mt-stop" data-icon="stop"
                     class="text-xs px-3 py-1.5 rounded bg-red-600/30 text-red-300 hover:bg-red-600/50 whitespace-nowrap hidden">
-                    &#9632; Terminar reunión
+                    Terminar reunión
                 </button>
                 <span id="mt-status" class="text-xs text-white/45"></span>
             </div>
@@ -602,8 +606,8 @@ HTML_TEMPLATE = """
             <div class="flex items-center justify-between mb-1">
                 <div class="text-sm font-medium text-white/60">Diccionario personal</div>
                 <div class="flex items-center gap-2">
-                    <a href="/api/dictionary/export" class="text-xs px-2 py-1 rounded bg-white/5 text-white/40 hover:text-white/70 hover:bg-white/10" title="Exportar CSV">&#11015; CSV</a>
-                    <label class="text-xs px-2 py-1 rounded bg-white/5 text-white/40 hover:text-white/70 hover:bg-white/10 cursor-pointer" title="Importar CSV">&#11014; CSV
+                    <a href="/api/dictionary/export" data-icon="download" class="text-xs px-2 py-1 rounded bg-white/5 text-white/40 hover:text-white/70 hover:bg-white/10" title="Exportar CSV">CSV</a>
+                    <label data-icon="upload" class="text-xs px-2 py-1 rounded bg-white/5 text-white/40 hover:text-white/70 hover:bg-white/10 cursor-pointer" title="Importar CSV">CSV
                         <input type="file" accept=".csv,text/csv" class="hidden" onchange="importDictCSV(this)">
                     </label>
                 </div>
@@ -693,6 +697,34 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+        // --- Iconos SVG inline (sin dependencia de fuentes; idénticos en Win/Mac/Linux, sin tofu) ---
+        function _ic(p){return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>';}
+        const ICONS = {
+            settings: _ic('<circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>'),
+            book: _ic('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>'),
+            keyboard: _ic('<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M7 13h10"/>'),
+            play: _ic('<polygon points="6 4 20 12 6 20 6 4" fill="currentColor" stroke="none"/>'),
+            mic: _ic('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>'),
+            chevronDown: _ic('<polyline points="6 9 12 15 18 9"/>'),
+            download: _ic('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'),
+            upload: _ic('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>'),
+            stop: _ic('<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>'),
+            pencil: _ic('<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>'),
+            close: _ic('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'),
+            star: _ic('<polygon points="12 2 15.1 8.3 22 9.3 17 14.1 18.2 21 12 17.8 5.8 21 7 14.1 2 9.3 8.9 8.3 12 2"/>'),
+            starOn: _ic('<polygon points="12 2 15.1 8.3 22 9.3 17 14.1 18.2 21 12 17.8 5.8 21 7 14.1 2 9.3 8.9 8.3 12 2" fill="currentColor"/>'),
+            copy: _ic('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
+            music: _ic('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>'),
+            camera: _ic('<rect x="2" y="2" width="20" height="20" rx="5"/><circle cx="12" cy="12" r="4"/><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>'),
+            link: _ic('<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>'),
+            bulb: _ic('<path d="M9 18h6M10 22h4M15 14c.2-1 .7-1.7 1.4-2.5A4.6 4.6 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.8.8 1.2 1.5 1.4 2.5"/>'),
+            calendar: _ic('<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'),
+            speaker: _ic('<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M19 5a10 10 0 0 1 0 14M15.5 8.5a5 5 0 0 1 0 7"/>'),
+            youtube: _ic('<rect x="2" y="5" width="20" height="14" rx="4"/><polygon points="10 9 16 12 10 15 10 9" fill="currentColor" stroke="none"/>'),
+        };
+        // Rellena los iconos de los elementos estáticos con data-icon="nombre".
+        function _fillIcons(root){(root||document).querySelectorAll('[data-icon]').forEach(el=>{const i=ICONS[el.dataset.icon];if(i&&!el.querySelector('svg.ic')){const hasText=el.textContent.trim().length>0;el.insertAdjacentHTML('afterbegin', i+(hasText?' ':''));}});}
+
         let allData = [];
         let renderedData = [];
         let editingId = null;
@@ -742,9 +774,9 @@ HTML_TEMPLATE = """
                 });
                 const dur = t.duration_seconds ? t.duration_seconds.toFixed(1) + 's' : '-';
                 const srcBadge = t.source === 'youtube'
-                    ? '<span class="text-white/50 text-xs ml-1" title="YouTube">▶</span>'
+                    ? '<span class="text-white/50 text-xs ml-1" title="YouTube">'+ICONS.youtube+'</span>'
                     : t.source === 'system'
-                        ? '<span class="text-white/50 text-xs ml-1" title="Audio del sistema">🔊</span>'
+                        ? '<span class="text-white/50 text-xs ml-1" title="Audio del sistema">'+ICONS.speaker+'</span>'
                         : '';
                 const isEditing = editingId === t.id;
                 const checked = selectedIds.has(t.id) ? 'checked' : '';
@@ -773,10 +805,10 @@ HTML_TEMPLATE = """
                             title="Copiar" aria-label="Copiar texto">Copiar</button>
                         <button onclick="event.stopPropagation(); startEdit(${t.id})"
                             class="text-white/45 hover:text-white/70 text-xs p-2 rounded hover:bg-white/5 ml-0.5"
-                            title="Editar" aria-label="Editar">&#9998;</button>
+                            title="Editar" aria-label="Editar">${ICONS.pencil}</button>
                         <button onclick="event.stopPropagation(); deleteSingle(${t.id}, this)"
                             class="text-white/45 hover:text-red-400 text-xs p-2 rounded hover:bg-red-500/10 ml-0.5"
-                            title="Eliminar" aria-label="Eliminar">&#10005;</button>
+                            title="Eliminar" aria-label="Eliminar">${ICONS.close}</button>
                     </td>
                 </tr>`;
             }).join('');
@@ -1041,6 +1073,8 @@ HTML_TEMPLATE = """
                 closeOtherPanels(null);
             }
         });
+
+        _fillIcons();  // rellena los iconos SVG de los elementos estáticos (data-icon)
 
         // Auto-refresh every 5 seconds (pausado cuando la pestaña está oculta)
         loadData();
@@ -1349,12 +1383,12 @@ HTML_TEMPLATE = """
             }
         }
 
-        // Sufijo de un pendiente: responsable + fecha/hora si existen → "(María · 📅 viernes 15:00)"
+        // Sufijo de un pendiente: responsable + fecha/hora si existen → "(María · viernes 15:00)"
         function pendMeta(p) {
             const parts = [];
             if (p && p.responsable) parts.push(escapeHtml(String(p.responsable)));
             const fh = [p && p.fecha, p && p.hora].filter(Boolean).map(x => escapeHtml(String(x))).join(' ');
-            if (fh) parts.push('📅 ' + fh);
+            if (fh) parts.push(ICONS.calendar+' ' + fh);
             return parts.length ? ' <span class="text-white/50">(' + parts.join(' · ') + ')</span>' : '';
         }
 
@@ -1385,7 +1419,7 @@ HTML_TEMPLATE = """
                     + pend.length + ' pendientes · ' + prop.length + ' propuestas</div>';
                 if (pend.length) {
                     fhtml += pend.map(p => {
-                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">☐ ' + escapeHtml(String(p.texto || '')) + pendMeta(p) + '</div>';
+                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '"><span class="chk"></span> ' + escapeHtml(String(p.texto || '')) + pendMeta(p) + '</div>';
                     }).join('');
                 } else {
                     fhtml += '<div class="text-[11px] text-white/50">Sin pendientes detectados aún.</div>';
@@ -1402,17 +1436,17 @@ HTML_TEMPLATE = """
             if (pend.length) {
                 html += '<div><div class="text-[11px] uppercase tracking-wide text-amber-300/50 mb-1">Pendientes</div>'
                     + pend.map(p => {
-                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">☐ ' + escapeHtml(String(p.texto || '')) + pendMeta(p) + '</div>';
+                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '"><span class="chk"></span> ' + escapeHtml(String(p.texto || '')) + pendMeta(p) + '</div>';
                     }).join('') + '</div>';
             }
             if (prop.length) {
                 html += '<div><div class="text-[11px] uppercase tracking-wide text-sky-300/50 mb-1">Propuestas</div>'
-                    + prop.map(p => '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">💡 ' + escapeHtml(String(p.texto || '')) + '</div>').join('') + '</div>';
+                    + prop.map(p => '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">'+ICONS.bulb+' ' + escapeHtml(String(p.texto || '')) + '</div>').join('') + '</div>';
             }
             const citas = ins.citas || [];
             if (citas.length) {
                 html += '<div><div class="text-[11px] uppercase tracking-wide text-emerald-300/50 mb-1">Próximas reuniones</div>'
-                    + citas.map(c => '<div class="text-xs text-white/75 mb-0.5' + fadeCls(c.id) + '">📅 ' + escapeHtml(String(c.texto || '')) + pendMeta({fecha: c.fecha, hora: c.hora}) + '</div>').join('') + '</div>';
+                    + citas.map(c => '<div class="text-xs text-white/75 mb-0.5' + fadeCls(c.id) + '">'+ICONS.calendar+' ' + escapeHtml(String(c.texto || '')) + pendMeta({fecha: c.fecha, hora: c.hora}) + '</div>').join('') + '</div>';
             }
             el.innerHTML = html;
         }
@@ -1432,11 +1466,11 @@ HTML_TEMPLATE = """
             if (dec.length) html += '<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'
                 + dec.map(d => '<div class="text-xs text-white/75">• ' + escapeHtml(String(d)) + '</div>').join('') + '</div>';
             if (pen.length) html += '<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'
-                + pen.map(p => '<div class="text-xs text-white/75">☐ ' + escapeHtml(String(p.texto || p)) + pendMeta(p) + '</div>').join('') + '</div>';
+                + pen.map(p => '<div class="text-xs text-white/75"><span class="chk"></span> ' + escapeHtml(String(p.texto || p)) + pendMeta(p) + '</div>').join('') + '</div>';
             if (prop.length) html += '<div><div class="text-xs text-sky-300/50 mt-2 mb-1">Propuestas</div>'
-                + prop.map(p => '<div class="text-xs text-white/75">💡 ' + escapeHtml(String(p.texto != null ? p.texto : p)) + '</div>').join('') + '</div>';
+                + prop.map(p => '<div class="text-xs text-white/75">'+ICONS.bulb+' ' + escapeHtml(String(p.texto != null ? p.texto : p)) + '</div>').join('') + '</div>';
             if (cit.length) html += '<div><div class="text-xs text-emerald-300/50 mt-2 mb-1">Próximas reuniones</div>'
-                + cit.map(c => '<div class="text-xs text-white/75">📅 ' + escapeHtml(String(c.texto || c)) + pendMeta({fecha: c.fecha, hora: c.hora}) + '</div>').join('') + '</div>';
+                + cit.map(c => '<div class="text-xs text-white/75">'+ICONS.calendar+' ' + escapeHtml(String(c.texto || c)) + pendMeta({fecha: c.fecha, hora: c.hora}) + '</div>').join('') + '</div>';
             if (tem.length) html += '<div><div class="text-xs text-white/40 mt-2 mb-1">Temas tratados</div>'
                 + tem.map(t => '<div class="text-xs text-white/75">• ' + escapeHtml(String(t)) + '</div>').join('') + '</div>';
             body.innerHTML = html;
@@ -1620,7 +1654,7 @@ HTML_TEMPLATE = """
                 const checked = e.enabled ? 'checked' : '';
                 const pinned = e.pinned ? 'pinned' : '';
                 const pinTitle = e.pinned ? 'Desfijado del prompt' : 'Fijar en el prompt (prioridad)';
-                const pinIcon = e.pinned ? '★' : '☆';
+                const pinIcon = e.pinned ? ICONS.starOn : ICONS.star;
                 const inBudget = includedSet.has(e.id);
                 const dimmed = !inBudget ? 'dict-entry-dimmed' : '';
                 const outOfPromptStyle = !inBudget ? ' style="opacity:0.7"' : '';
@@ -1640,7 +1674,7 @@ HTML_TEMPLATE = """
                     </label>
                     <span class="text-sm flex-1">${label}${hitBadge}${outBudgetBadge}</span>
                     <button onclick="deleteDictEntry(${e.id})" aria-label="Eliminar"
-                        class="text-white/55 hover:text-red-400 text-xs p-2 rounded hover:bg-red-500/10">&#10005;</button>
+                        class="text-white/55 hover:text-red-400 text-xs p-2 rounded hover:bg-red-500/10">${ICONS.close}</button>
                 </div>`;
             }).join('');
         }
@@ -1882,7 +1916,7 @@ HTML_TEMPLATE = """
             } catch(e) { return {}; }
         }
 
-        const _platformIcons = { youtube: '▶', tiktok: '♪', instagram: '◎', other: '🔗' };
+        const _platformIcons = { youtube: ICONS.youtube, tiktok: ICONS.music, instagram: ICONS.camera, other: ICONS.link };
         const _statusLabels = {
             pending: '<span class="text-white/55">Pendiente</span>',
             processing: '<span class="text-yellow-400/80">Procesando…</span>',
@@ -1906,7 +1940,7 @@ HTML_TEMPLATE = """
                 return;
             }
             container.innerHTML = items.map(item => {
-                const icon = _platformIcons[item.platform] || '🔗';
+                const icon = _platformIcons[item.platform] || ICONS.link;
                 const statusHtml = _statusLabels[item.status] || item.status;
                 const stageHtml = item.stage && item.status === 'processing'
                     ? '<span class="text-white/55 ml-1">(' + escapeHtml(item.stage) + ')</span>' : '';
@@ -2092,17 +2126,19 @@ MEETING_PAGE = """<!DOCTYPE html>
   #asst-messages .md-h{font-weight:600;margin:.3rem 0 .15rem;}
   #asst-messages .md-p{margin:.15rem 0;}
   #asst-messages .md-cite{color:#c4b5fd;text-decoration:underline;cursor:pointer;font-size:.92em;}
+  .chk{display:inline-block;width:.72em;height:.72em;border:1.5px solid currentColor;border-radius:3px;vertical-align:-1px;margin-right:.15em;opacity:.7}
+  svg.ic{width:1em;height:1em;display:inline-block;vertical-align:-0.125em;flex-shrink:0}
   @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important;}}
 </style></head>
 <body class="min-h-screen p-6">
 <div class="max-w-5xl mx-auto">
   <main>
   <div class="flex items-center justify-between mb-5">
-    <h1 class="text-2xl font-semibold">&#127908; Reunión</h1>
+    <h1 class="text-2xl font-semibold" data-icon="mic">Reunión</h1>
     <div class="flex items-center gap-2">
-      <button onclick="startMeeting()" id="mt-start" class="btn bg-purple-600/30 text-purple-200 hover:bg-purple-600/50">&#9654; Iniciar</button>
-      <button onclick="stopMeeting()" id="mt-stop" class="btn bg-red-600/30 text-red-300 hover:bg-red-600/50 hidden">&#9632; Terminar</button>
-      <button onclick="openFolder()" class="btn text-white/55 hover:text-white/80 hover:bg-white/5" title="Abrir la carpeta de actas (.md)">&#128193; Carpeta</button>
+      <button onclick="startMeeting()" id="mt-start" data-icon="play" class="btn bg-purple-600/30 text-purple-200 hover:bg-purple-600/50">Iniciar</button>
+      <button onclick="stopMeeting()" id="mt-stop" data-icon="stop" class="btn bg-red-600/30 text-red-300 hover:bg-red-600/50 hidden">Terminar</button>
+      <button onclick="openFolder()" data-icon="folder" class="btn text-white/55 hover:text-white/80 hover:bg-white/5" title="Abrir la carpeta de actas (.md)">Carpeta</button>
       <a href="/" class="btn text-white/45 hover:text-white/70 hover:bg-white/5">Dashboard</a>
     </div>
   </div>
@@ -2144,7 +2180,7 @@ MEETING_PAGE = """<!DOCTYPE html>
   <!-- Asistente de reuniones — chat de memoria -->
   <div class="glass rounded-xl p-4 mt-6">
     <div class="flex items-center justify-between mb-2">
-      <div class="text-sm font-medium text-violet-300/80">&#128172; Asistente de reuniones &mdash; pregúntale a tus reuniones</div>
+      <div class="text-sm font-medium text-violet-300/80" data-icon="chat">Asistente de reuniones &mdash; pregúntale a tus reuniones</div>
       <div class="flex items-center gap-1">
         <button id="asst-scope-global" class="text-[11px] px-2 py-0.5 rounded-full border transition-colors">Global</button>
         <button id="asst-scope-meeting" disabled class="text-[11px] px-2 py-0.5 rounded-full border transition-colors" title="Selecciona una reunión del historial para preguntar solo sobre ella">Esta reunión</button>
@@ -2161,8 +2197,8 @@ MEETING_PAGE = """<!DOCTYPE html>
     </div>
     <div class="flex items-center gap-1.5 mt-1.5">
       <input type="checkbox" id="asst-reason" style="accent-color:#7c3aed;cursor:pointer;">
-      <label for="asst-reason" class="text-[11px] text-white/35 cursor-pointer select-none"
-        title="Activa razonamiento para preguntas analíticas (más lento/caro)">&#129504; Pensar más</label>
+      <label for="asst-reason" data-icon="spark" class="text-[11px] text-white/35 cursor-pointer select-none"
+        title="Activa razonamiento para preguntas analíticas (más lento/caro)">Pensar más</label>
     </div>
   </div>
   </main>
@@ -2171,6 +2207,20 @@ MEETING_PAGE = """<!DOCTYPE html>
 let _seen = new Set(), _segCount = 0, _actaShown = false, _poll = null;
 function mtoast(msg,type){const c=document.body;const t=document.createElement('div');t.style.cssText='position:fixed;top:16px;right:16px;z-index:60;background:rgba(20,20,24,.96);border:1px solid '+(type==='err'?'rgba(239,68,68,.55)':'rgba(255,255,255,.12)')+';color:#eaeaea;padding:10px 14px;border-radius:10px;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.45)';t.textContent=msg;c.appendChild(t);setTimeout(()=>t.remove(),4000);}
 let _meetingIds = new Set();
+// --- Iconos SVG inline (sin dependencia de fuentes; idénticos en Win/Mac/Linux, sin tofu) ---
+function _ic(p){return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>';}
+const ICONS = {
+  mic: _ic('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>'),
+  play: _ic('<polygon points="6 4 20 12 6 20 6 4" fill="currentColor" stroke="none"/>'),
+  stop: _ic('<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>'),
+  folder: _ic('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'),
+  chat: _ic('<path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.5 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8A8.5 8.5 0 0 1 12.5 3 8.5 8.5 0 0 1 21 11.5z"/>'),
+  spark: _ic('<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" fill="currentColor"/>'),
+  bulb: _ic('<path d="M9 18h6M10 22h4M15 14c.2-1 .7-1.7 1.4-2.5A4.6 4.6 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.8.8 1.2 1.5 1.4 2.5"/>'),
+  calendar: _ic('<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'),
+  trash: _ic('<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
+};
+function _fillIcons(root){(root||document).querySelectorAll('[data-icon]').forEach(el=>{const i=ICONS[el.dataset.icon];if(i&&!el.querySelector('svg.ic')){const hasText=el.textContent.trim().length>0;el.insertAdjacentHTML('afterbegin', i+(hasText?' ':''));}});}
 function esc(s){ const d=document.createElement('div'); d.textContent = (s==null?'':String(s)); return d.innerHTML; }
 function mdInline(x){
   x=esc(x);
@@ -2206,7 +2256,7 @@ function mdToHtml(t){
   return html;
 }
 function pendMeta(p){ const a=[]; if(p&&p.responsable)a.push(esc(p.responsable));
-  const fh=[p&&p.fecha,p&&p.hora].filter(Boolean).map(esc).join(' '); if(fh)a.push('\\uD83D\\uDCC5 '+fh);
+  const fh=[p&&p.fecha,p&&p.hora].filter(Boolean).map(esc).join(' '); if(fh)a.push(ICONS.calendar+' '+fh);
   return a.length?' <span class="text-white/35">('+a.join(' \\u00b7 ')+')</span>':''; }
 
 async function loadLive(){
@@ -2241,18 +2291,18 @@ function renderInsights(ins){
   if(!T.length&&!P.length&&!R.length&&!C.length){ el.innerHTML='<div class="text-xs text-white/45">Temas, pendientes, propuestas y próximas reuniones.</div>'; return; }
   let h='';
   if(T.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-white/30 mb-1">Temas</div>'+T.map(t=>'<div class="text-xs text-white/75 mb-0.5'+fcl(t.id)+'">\\u2022 '+esc(t.text!=null?t.text:t)+'</div>').join('')+'</div>';
-  if(P.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-amber-300/50 mb-1">Pendientes</div>'+P.map(p=>'<div class="text-xs text-white/75 mb-0.5'+fcl(p.id)+'">\\u2610 '+esc(p.texto||'')+pendMeta(p)+'</div>').join('')+'</div>';
-  if(R.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-sky-300/50 mb-1">Propuestas</div>'+R.map(p=>'<div class="text-xs text-white/75 mb-0.5'+fcl(p.id)+'">\\uD83D\\uDCA1 '+esc(p.texto||'')+'</div>').join('')+'</div>';
-  if(C.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-emerald-300/50 mb-1">Próximas reuniones</div>'+C.map(c=>'<div class="text-xs text-white/75 mb-0.5'+fcl(c.id)+'">\\uD83D\\uDCC5 '+esc(c.texto||'')+pendMeta({fecha:c.fecha,hora:c.hora})+'</div>').join('')+'</div>';
+  if(P.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-amber-300/50 mb-1">Pendientes</div>'+P.map(p=>'<div class="text-xs text-white/75 mb-0.5'+fcl(p.id)+'"><span class="chk"></span> '+esc(p.texto||'')+pendMeta(p)+'</div>').join('')+'</div>';
+  if(R.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-sky-300/50 mb-1">Propuestas</div>'+R.map(p=>'<div class="text-xs text-white/75 mb-0.5'+fcl(p.id)+'">'+ICONS.bulb+' '+esc(p.texto||'')+'</div>').join('')+'</div>';
+  if(C.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-emerald-300/50 mb-1">Próximas reuniones</div>'+C.map(c=>'<div class="text-xs text-white/75 mb-0.5'+fcl(c.id)+'">'+ICONS.calendar+' '+esc(c.texto||'')+pendMeta({fecha:c.fecha,hora:c.hora})+'</div>').join('')+'</div>';
   el.innerHTML=h;
 }
 function actaHtml(m){
   m=m||{}; const dec=m.decisiones||[],tem=m.temas||[],pen=m.pendientes||[],pro=m.propuestas||[],cit=m.citas||[]; let h='';
   if(m.resumen)h+='<p class="text-white/80">'+esc(m.resumen)+'</p>';
   if(dec.length)h+='<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'+dec.map(d=>'<div class="text-xs text-white/75">\\u2022 '+esc(d)+'</div>').join('')+'</div>';
-  if(pen.length)h+='<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'+pen.map(p=>'<div class="text-xs text-white/75">\\u2610 '+esc(p.texto||p)+pendMeta(p)+'</div>').join('')+'</div>';
-  if(pro.length)h+='<div><div class="text-xs text-sky-300/50 mt-2 mb-1">Propuestas</div>'+pro.map(p=>'<div class="text-xs text-white/75">\\uD83D\\uDCA1 '+esc(p.texto!=null?p.texto:p)+'</div>').join('')+'</div>';
-  if(cit.length)h+='<div><div class="text-xs text-emerald-300/50 mt-2 mb-1">Próximas reuniones</div>'+cit.map(c=>'<div class="text-xs text-white/75">\\uD83D\\uDCC5 '+esc(c.texto||c)+pendMeta({fecha:c.fecha,hora:c.hora})+'</div>').join('')+'</div>';
+  if(pen.length)h+='<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'+pen.map(p=>'<div class="text-xs text-white/75"><span class="chk"></span> '+esc(p.texto||p)+pendMeta(p)+'</div>').join('')+'</div>';
+  if(pro.length)h+='<div><div class="text-xs text-sky-300/50 mt-2 mb-1">Propuestas</div>'+pro.map(p=>'<div class="text-xs text-white/75">'+ICONS.bulb+' '+esc(p.texto!=null?p.texto:p)+'</div>').join('')+'</div>';
+  if(cit.length)h+='<div><div class="text-xs text-emerald-300/50 mt-2 mb-1">Próximas reuniones</div>'+cit.map(c=>'<div class="text-xs text-white/75">'+ICONS.calendar+' '+esc(c.texto||c)+pendMeta({fecha:c.fecha,hora:c.hora})+'</div>').join('')+'</div>';
   if(tem.length)h+='<div><div class="text-xs text-white/40 mt-2 mb-1">Temas tratados</div>'+tem.map(t=>'<div class="text-xs text-white/75">\\u2022 '+esc(t)+'</div>').join('')+'</div>';
   return h||'<div class="text-xs text-white/30">Acta vacía.</div>';
 }
@@ -2277,7 +2327,7 @@ async function loadHistory(){
       return '<div class="glass rounded-lg px-3 py-2 flex items-center gap-2 hover:bg-white/[0.04]">'
         +'<span class="text-xs text-white/70 flex-1 cursor-pointer" onclick="openMeeting('+m.id+')">'+esc(m.started_at||m.created_at||'')+'</span>'
         +'<span class="text-[11px] text-white/30">'+dur+' min</span>'
-        +'<button onclick="delMeeting('+m.id+')" class="text-white/25 hover:text-red-300 text-sm px-1" title="Eliminar esta reunión">\\uD83D\\uDDD1</button>'
+        +'<button onclick="delMeeting('+m.id+')" class="text-white/25 hover:text-red-300 text-sm px-1" title="Eliminar esta reunión">'+ICONS.trash+'</button>'
         +'</div>'; }).join('');
   }catch(e){} }
 function jumpToMoment(t, segs){
@@ -2498,7 +2548,7 @@ async function asstSend(text){
         +esc(d.error||'Error al consultar el asistente.')+'</span>';
     } else {
       const ans=d.answer||'';
-      const badge=d.reasoned?'<span title="Respuesta con razonamiento extendido" style="font-size:.9em;opacity:.7;margin-right:.25rem;">&#129504;</span>':'';
+      const badge=d.reasoned?'<span title="Respuesta con razonamiento extendido" style="font-size:.9em;opacity:.7;margin-right:.25rem;">'+ICONS.spark+'</span>':'';
       placeholder.innerHTML='<span class="text-violet-300/60 mr-1">Asistente:</span>'
         +badge+mdToHtml(ans);
       asstHistory.push({role:'assistant',content:ans});
@@ -2536,6 +2586,7 @@ async function asstSend(text){
   });
 })();
 
+_fillIcons();  // iconos SVG estáticos (data-icon)
 loadLive(); startPoll(); loadHistory();
 </script></body></html>"""
 
