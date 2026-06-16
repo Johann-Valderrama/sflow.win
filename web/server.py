@@ -192,6 +192,7 @@ HTML_TEMPLATE = """
         .toggle-switch input:checked + .toggle-slider { background: rgba(140,80,220,0.6); }
         .toggle-switch input:checked + .toggle-slider:before { transform: translateX(16px); }
         .selection-bar { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+            max-width: calc(100vw - 32px);
             background: #1a1a1a; border: 1px solid rgba(140,80,220,0.4); border-radius: 12px;
             padding: 10px 20px; display: none; align-items: center; gap: 14px; z-index: 100;
             box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
@@ -202,6 +203,23 @@ HTML_TEMPLATE = """
         .selection-bar .del-btn:hover { background: rgba(239,68,68,0.35); }
         .selection-bar .cancel-btn { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.5); }
         .selection-bar .cancel-btn:hover { background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.8); }
+        /* [A11Y-1] Foco global accesible */
+        *:focus-visible { outline: 2px solid rgba(140,80,220,.75); outline-offset: 2px; }
+        /* [MOTION-1] Respeta prefers-reduced-motion */
+        @media (prefers-reduced-motion: reduce){ *,*::before,*::after{ animation-duration:.001ms!important; transition-duration:.001ms!important; } }
+        /* Utilidad accesible solo-lector */
+        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+        /* [NET-1/TOAST] Avisos y banner offline */
+        #toast-container { position: fixed; top: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 60; }
+        .toast { background: rgba(20,20,24,.96); border: 1px solid rgba(255,255,255,.12); color: #eaeaea; padding: 10px 14px; border-radius: 10px; font-size: 13px; box-shadow: 0 8px 24px rgba(0,0,0,.45); animation: toastIn .18s ease; }
+        .toast.err { border-color: rgba(239,68,68,.55); }
+        .toast.ok { border-color: rgba(34,197,94,.5); }
+        @keyframes toastIn { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
+        #offline-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 70; background: rgba(239,68,68,.95); color: #fff; text-align: center; font-size: 13px; padding: 6px; display: none; }
+        #offline-banner.show { display: block; }
+        /* [LOAD-1] Skeleton de carga */
+        .skel { background: linear-gradient(90deg, rgba(255,255,255,.04), rgba(255,255,255,.1), rgba(255,255,255,.04)); background-size: 200% 100%; animation: skel 1.2s infinite; border-radius: 6px; }
+        @keyframes skel { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
         tr.selected-row { background: rgba(140,80,220,0.08); }
         tr.row-hover { user-select: text; }
         tr.row-hover td:not(.text-cell) { user-select: none; -webkit-user-select: none; }
@@ -218,16 +236,16 @@ HTML_TEMPLATE = """
 <body class="min-h-screen p-6">
     <div class="max-w-4xl mx-auto">
         <!-- Header -->
-        <div class="flex items-center justify-between mb-8">
+        <header role="banner" class="flex items-center justify-between mb-8 flex-wrap gap-3">
             <div class="flex items-center gap-3">
                 <img src="/logo" class="brand-logo" alt="Vflow">
-                <div class="text-2xl font-semibold text-white">Vflow</div>
-                <span class="text-xs text-white/30 bg-white/5 px-2 py-1 rounded-full" id="count-badge">-</span>
+                <h1 class="text-2xl font-semibold text-white">Vflow</h1>
+                <span class="text-xs text-white/40 bg-white/5 px-2 py-1 rounded-full" id="count-badge">-</span>
             </div>
-            <div class="flex items-center gap-3">
-                <input type="text" id="search" placeholder="Buscar..."
+            <div class="flex items-center gap-3 flex-wrap">
+                <input type="text" id="search" placeholder="Buscar en recientes…" title="Filtra solo las transcripciones cargadas"
                     class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80
-                    placeholder-white/30 focus:outline-none focus:border-white/20 w-48">
+                    placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/20 w-48">
                 <div class="dropdown" id="cleanup-dropdown">
                     <button onclick="document.getElementById('cleanup-dropdown').classList.toggle('open')"
                         class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5">
@@ -235,89 +253,94 @@ HTML_TEMPLATE = """
                     </button>
                     <div class="dropdown-menu">
                         <div class="dropdown-item" onclick="bulkDelete('day','hoy')">Eliminar de hoy</div>
-                        <div class="dropdown-item" onclick="bulkDelete('week')">Eliminar ultima semana</div>
-                        <div class="dropdown-item" onclick="bulkDelete('month')">Eliminar ultimo mes</div>
-                        <div class="dropdown-item" onclick="deleteByDate()">Elegir fecha especifica...</div>
+                        <div class="dropdown-item" onclick="bulkDelete('week')">Eliminar última semana</div>
+                        <div class="dropdown-item" onclick="bulkDelete('month')">Eliminar último mes</div>
+                        <div class="dropdown-item" onclick="event.stopPropagation()" style="display:flex;align-items:center;gap:8px;justify-content:space-between;">
+                            <span>Eliminar por fecha</span>
+                            <input type="date" id="cleanup-date" onchange="deleteByDate(this.value)" style="color-scheme:dark"
+                                class="bg-white/5 border border-white/10 rounded px-2 py-0.5 text-xs text-white/80 focus:outline-none focus:ring-2 focus:ring-purple-500/60">
+                        </div>
                         <div class="dropdown-item danger" onclick="bulkDelete('all')">Eliminar todo</div>
                     </div>
                 </div>
                 <button onclick="loadData()" class="text-white/40 hover:text-white/70 text-sm">Actualizar</button>
-                <button onclick="toggleSettings()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Configuración">&#9881;</button>
-                <button onclick="toggleDictionary()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Diccionario">&#128218;</button>
-                <button onclick="toggleShortcuts()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Atajos de teclado">&#9000;</button>
-                <button onclick="toggleUrlQueue()" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Transcribir desde URL">&#9654;</button>
-                <button onclick="window.open('/reunion','_blank')" class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5" title="Abrir ventana de reunión (en vivo + historial)">&#127908;</button>
+                <button onclick="toggleSettings()" aria-label="Configuración" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Configuración">&#9881;</button>
+                <button onclick="toggleDictionary()" aria-label="Diccionario" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Diccionario">&#128218;</button>
+                <button onclick="toggleShortcuts()" aria-label="Atajos de teclado" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Atajos de teclado">&#9000;</button>
+                <button onclick="toggleUrlQueue()" aria-label="Transcribir desde URL" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Transcribir desde URL">&#9654;</button>
+                <button onclick="window.open('/reunion','_blank')" aria-label="Abrir ventana de reunión" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Abrir ventana de reunión (en vivo + historial)">&#127908;</button>
             </div>
-        </div>
+        </header>
 
+        <main>
         <!-- Shortcuts panel -->
         <div id="shortcuts-panel" class="glass rounded-xl p-5 mb-6 hidden">
             <div class="text-sm font-medium text-white/60 mb-4">Atajos de teclado</div>
             <div class="grid gap-3" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr))">
                 <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
                     <div class="flex items-center gap-2 mb-1.5">
-                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">Ctrl</kbd>
-                        <span class="text-white/30 text-xs">+</span>
-                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">Alt</kbd>
-                        <span class="text-white/30 text-xs ml-1">— mantener</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">Ctrl</kbd>
+                        <span class="text-white/45 text-xs">+</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">Alt</kbd>
+                        <span class="text-white/45 text-xs ml-1">— mantener</span>
                     </div>
                     <p class="text-xs text-white/70 font-medium">Transcribir (mantenido)</p>
-                    <p class="text-xs text-white/35 mt-0.5">Mantén la combinación un instante para que empiece a grabar; suelta para pegar el texto transcrito.</p>
+                    <p class="text-xs text-white/55 mt-0.5">Mantén la combinación un instante para que empiece a grabar; suelta para pegar el texto transcrito.</p>
                 </div>
                 <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
                     <div class="flex items-center gap-2 mb-1.5">
-                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">Shift</kbd>
-                        <span class="text-white/30 text-xs">×3 rápido</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">Shift</kbd>
+                        <span class="text-white/45 text-xs">×3 rápido</span>
                     </div>
                     <p class="text-xs text-white/70 font-medium">Transcribir — manos libres</p>
-                    <p class="text-xs text-white/35 mt-0.5">Pulsa Shift tres veces en ~400&nbsp;ms para iniciar. Pulsa Shift una vez más para parar y pegar.</p>
+                    <p class="text-xs text-white/55 mt-0.5">Pulsa Shift tres veces en ~400&nbsp;ms para iniciar. Pulsa Shift una vez más para parar y pegar.</p>
                 </div>
                 <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
                     <div class="flex items-center gap-2 mb-1.5">
-                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">Ctrl</kbd>
-                        <span class="text-white/30 text-xs">+</span>
-                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">Shift</kbd>
-                        <span class="text-white/30 text-xs">+</span>
-                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">Alt</kbd>
-                        <span class="text-white/30 text-xs ml-1">— mantener</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">Ctrl</kbd>
+                        <span class="text-white/45 text-xs">+</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">Shift</kbd>
+                        <span class="text-white/45 text-xs">+</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">Alt</kbd>
+                        <span class="text-white/45 text-xs ml-1">— mantener</span>
                     </div>
                     <p class="text-xs text-white/70 font-medium">Traducir (mantenido)</p>
-                    <p class="text-xs text-white/25 mt-0.5">(con backend local: solo →inglés)</p>
-                    <p class="text-xs text-white/35 mt-0.5">Presiona Shift antes de Alt, mantén la combinación un instante para grabar; suelta para pegar la traducción al idioma destino.</p>
+                    <p class="text-xs text-white/45 mt-0.5">(con backend local: solo →inglés)</p>
+                    <p class="text-xs text-white/55 mt-0.5">Presiona Shift antes de Alt, mantén la combinación un instante para grabar; suelta para pegar la traducción al idioma destino.</p>
                 </div>
                 <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
                     <div class="flex items-center gap-2 mb-1.5">
-                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">AltGr</kbd>
-                        <span class="text-white/30 text-xs">+</span>
-                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">T</kbd>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">AltGr</kbd>
+                        <span class="text-white/45 text-xs">+</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">T</kbd>
                     </div>
                     <p class="text-xs text-white/70 font-medium">Traducir — manos libres (toggle)</p>
-                    <p class="text-xs text-white/35 mt-0.5">Primera pulsación inicia la grabación; segunda pulsación la detiene y pega la traducción.</p>
-                    <p class="text-xs text-white/25 mt-0.5">(con backend local: solo →inglés)</p>
+                    <p class="text-xs text-white/55 mt-0.5">Primera pulsación inicia la grabación; segunda pulsación la detiene y pega la traducción.</p>
+                    <p class="text-xs text-white/45 mt-0.5">(con backend local: solo →inglés)</p>
                 </div>
                 <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
                     <div class="flex items-center gap-2 mb-1.5">
-                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">AltGr</kbd>
-                        <span class="text-white/30 text-xs">+</span>
-                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/20 bg-white/[0.07] text-white/80">R</kbd>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">AltGr</kbd>
+                        <span class="text-white/45 text-xs">+</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">R</kbd>
                     </div>
                     <p class="text-xs text-white/70 font-medium">Reunión — captura dual (toggle)</p>
-                    <p class="text-xs text-white/35 mt-0.5">Inicia/termina una reunión capturando tu micrófono («Yo») y el audio del sistema («Ellos») a la vez. El transcript en vivo aparece en el panel 🎙.</p>
+                    <p class="text-xs text-white/55 mt-0.5">Inicia/termina una reunión capturando tu micrófono («Yo») y el audio del sistema («Ellos») a la vez. El transcript en vivo aparece en el panel 🎙.</p>
                 </div>
             </div>
-            <p class="text-xs text-white/25 mt-4">El idioma de transcripción y el idioma de destino (traducción) se configuran en el panel de Configuración.</p>
+            <p class="text-xs text-white/45 mt-4">El idioma de transcripción y el idioma de destino (traducción) se configuran en el panel de Configuración.</p>
         </div>
 
         <!-- URL Queue panel -->
         <div id="url-queue-panel" class="glass rounded-xl p-5 mb-6 hidden">
             <div class="text-sm font-medium text-white/60 mb-1">Transcribir desde URL</div>
-            <p class="text-xs text-white/30 mb-3">Pega una o varias URLs de YouTube, TikTok u otras plataformas (una por línea) para transcribirlas en cola.</p>
+            <p class="text-xs text-white/45 mb-3">Pega una o varias URLs de YouTube, TikTok u otras plataformas (una por línea) para transcribirlas en cola.</p>
 
             <!-- URL única -->
             <div class="flex gap-2 mb-2">
-                <input type="text" id="uq-url" placeholder="https://www.youtube.com/watch?v=..."
+                <input type="url" id="uq-url" placeholder="https://www.youtube.com/watch?v=..."
                     class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80
-                    placeholder-white/30 focus:outline-none focus:border-white/20 flex-1">
+                    placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/20 flex-1">
                 <button onclick="enqueueUrls()"
                     class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 whitespace-nowrap" id="uq-btn">
                     Añadir a la cola
@@ -327,11 +350,11 @@ HTML_TEMPLATE = """
             <!-- Bulk textarea -->
             <textarea id="uq-bulk" rows="3" placeholder="Una URL por línea para añadir varias a la vez…"
                 class="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80
-                placeholder-white/30 focus:outline-none focus:border-white/20 w-full resize-y mb-2"></textarea>
+                placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/20 w-full resize-y mb-2"></textarea>
 
             <!-- Opciones -->
             <div class="flex items-center gap-4 mb-2 flex-wrap">
-                <label class="flex items-center gap-2 text-xs text-white/40 cursor-pointer select-none">
+                <label class="flex items-center gap-2 text-xs text-white/45 cursor-pointer select-none">
                     <input type="checkbox" id="uq-instagram" class="accent-purple-500">
                     Instagram (experimental, requiere sesión en el navegador)
                 </label>
@@ -340,28 +363,28 @@ HTML_TEMPLATE = """
                     title="Guarda tus cookies de Instagram cifradas (DPAPI) para usarlas aunque cierres el navegador">
                     Sincronizar cookies de Instagram</button>
             </div>
-            <p class="text-xs text-white/20 mb-3">La cola usa el backend de transcripción actual. Para que sea gratis, usa el backend local (Configuración). Las cookies de Instagram se guardan cifradas con DPAPI; inicia sesión en Instagram (Opera recomendado) antes de sincronizar.</p>
+            <p class="text-xs text-white/45 mb-3">La cola usa el backend de transcripción actual. Para que sea gratis, usa el backend local (Configuración). Las cookies de Instagram se guardan cifradas con DPAPI; inicia sesión en Instagram (Opera recomendado) antes de sincronizar.</p>
 
-            <div id="uq-ig-feedback" class="text-xs mb-2 hidden"></div>
-            <div id="uq-feedback" class="text-xs mb-3 hidden"></div>
+            <div id="uq-ig-feedback" class="text-xs mb-2 hidden" aria-live="polite"></div>
+            <div id="uq-feedback" class="text-xs mb-3 hidden" aria-live="assertive"></div>
 
             <!-- Lista de progreso -->
             <div class="flex items-center justify-between mb-2">
-                <span class="text-xs text-white/40">Cola de transcripción</span>
+                <span class="text-xs text-white/45">Cola de transcripción</span>
                 <div class="flex gap-2">
-                    <button onclick="cancelPendingUrls()" class="text-xs px-2 py-1 rounded text-white/30 hover:text-white/60 hover:bg-white/5">Cancelar pendientes</button>
-                    <button onclick="clearQueueFinished()" class="text-xs px-2 py-1 rounded text-white/30 hover:text-white/60 hover:bg-white/5">Limpiar terminadas</button>
+                    <button onclick="cancelPendingUrls()" class="text-xs px-2 py-1 rounded text-white/55 hover:text-white/60 hover:bg-white/5">Cancelar pendientes</button>
+                    <button onclick="clearQueueFinished()" class="text-xs px-2 py-1 rounded text-white/55 hover:text-white/60 hover:bg-white/5">Limpiar terminadas</button>
                 </div>
             </div>
             <div id="uq-list" class="space-y-1 max-h-64 overflow-y-auto">
-                <div class="text-xs text-white/20">Sin items en la cola.</div>
+                <div class="text-xs text-white/45">Sin items en la cola.</div>
             </div>
         </div>
 
         <!-- Meeting panel (reunión en vivo) -->
         <div id="meeting-panel" class="glass rounded-xl p-5 mb-6 hidden">
             <div class="text-sm font-medium text-white/60 mb-1">Reunión en vivo</div>
-            <p class="text-xs text-white/30 mb-3">Captura tu micrófono («Yo») y el audio del sistema («Ellos») a la vez y transcribe en vivo. Inicia/termina también con <kbd class="px-1.5 py-0.5 text-[10px] font-mono rounded border border-white/20 bg-white/[0.07]">AltGr</kbd>+<kbd class="px-1.5 py-0.5 text-[10px] font-mono rounded border border-white/20 bg-white/[0.07]">R</kbd> o desde la bandeja. Para mejor diarización usa auriculares.</p>
+            <p class="text-xs text-white/45 mb-3">Captura tu micrófono («Yo») y el audio del sistema («Ellos») a la vez y transcribe en vivo. Inicia/termina también con <kbd class="px-1.5 py-0.5 text-[10px] font-mono rounded border border-white/45 bg-white/[0.07]">AltGr</kbd>+<kbd class="px-1.5 py-0.5 text-[10px] font-mono rounded border border-white/45 bg-white/[0.07]">R</kbd> o desde la bandeja. Para mejor diarización usa auriculares.</p>
 
             <div class="flex items-center gap-3 mb-3">
                 <button onclick="startMeeting()" id="mt-start"
@@ -372,30 +395,30 @@ HTML_TEMPLATE = """
                     class="text-xs px-3 py-1.5 rounded bg-red-600/30 text-red-300 hover:bg-red-600/50 whitespace-nowrap hidden">
                     &#9632; Terminar reunión
                 </button>
-                <span id="mt-status" class="text-xs text-white/40"></span>
+                <span id="mt-status" class="text-xs text-white/45"></span>
             </div>
 
-            <div id="mt-feedback" class="text-xs mb-2 hidden"></div>
+            <div id="mt-feedback" class="text-xs mb-2 hidden" aria-live="polite"></div>
 
-            <div class="grid gap-3" style="grid-template-columns: 1.4fr 1fr;">
+            <div class="grid grid-cols-1 md:grid-cols-[1.4fr_1fr] gap-3">
                 <!-- Transcript en vivo -->
                 <div>
-                    <div class="text-xs text-white/40 mb-1.5">Transcript en vivo</div>
+                    <div class="text-xs text-white/45 mb-1.5">Transcript en vivo</div>
                     <div id="mt-transcript" class="space-y-1.5 max-h-96 overflow-y-auto rounded-lg bg-white/[0.02] border border-white/[0.06] p-3">
-                        <div class="text-xs text-white/20">El transcript en vivo aparecerá aquí cuando inicies una reunión.</div>
+                        <div class="text-xs text-white/45">El transcript en vivo aparecerá aquí cuando inicies una reunión.</div>
                     </div>
                 </div>
                 <!-- Insight Stream (temas / pendientes / propuestas) -->
                 <div>
                     <div class="flex items-center justify-between mb-1.5">
-                        <span class="text-xs text-white/40">Análisis en vivo</span>
+                        <span class="text-xs text-white/45">Análisis en vivo</span>
                         <div class="flex gap-1 text-[10px]">
-                            <button id="mt-view-foco" onclick="setMeetingView('foco')" class="px-2 py-0.5 rounded text-white/40 hover:text-white/70" title="Solo lo accionable (menos distracción en reunión)">Foco</button>
+                            <button id="mt-view-foco" onclick="setMeetingView('foco')" class="px-2 py-0.5 rounded text-white/55 hover:text-white/70" title="Solo lo accionable (menos distracción en reunión)">Foco</button>
                             <button id="mt-view-revision" onclick="setMeetingView('revision')" class="px-2 py-0.5 rounded bg-purple-600/40 text-purple-200" title="Panel completo: temas, pendientes y propuestas">Revisión</button>
                         </div>
                     </div>
                     <div id="mt-insights" class="space-y-3 max-h-96 overflow-y-auto rounded-lg bg-white/[0.02] border border-white/[0.06] p-3">
-                        <div class="text-xs text-white/20">Temas, pendientes y propuestas aparecerán aquí a medida que avance la reunión.</div>
+                        <div class="text-xs text-white/45">Temas, pendientes y propuestas aparecerán aquí a medida que avance la reunión.</div>
                     </div>
                 </div>
             </div>
@@ -412,7 +435,7 @@ HTML_TEMPLATE = """
             <div class="text-sm font-medium text-white/60 mb-4">Configuración</div>
             <div class="grid gap-4" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))">
                 <div>
-                    <label class="text-xs text-white/40 block mb-1">Idioma de transcripción</label>
+                    <label for="cfg-language" class="text-xs text-white/55 block mb-1">Idioma de transcripción</label>
                     <select id="cfg-language" class="cfg-select">
                         <option value="es">Español</option>
                         <option value="en">English</option>
@@ -426,13 +449,13 @@ HTML_TEMPLATE = """
                     </select>
                 </div>
                 <div>
-                    <label class="text-xs text-white/40 block mb-1">Micrófono</label>
+                    <label for="cfg-microphone" class="text-xs text-white/55 block mb-1">Micrófono</label>
                     <select id="cfg-microphone" class="cfg-select">
                         <option value="">Sistema por defecto</option>
                     </select>
                 </div>
                 <div>
-                    <label class="text-xs text-white/40 block mb-1">Idioma de salida (traducción)</label>
+                    <label for="cfg-translate-target" class="text-xs text-white/55 block mb-1">Idioma de salida (traducción)</label>
                     <select id="cfg-translate-target" class="cfg-select" onchange="updateLocalTranslationNote()">
                         <option value="en">English</option>
                         <option value="es">Español</option>
@@ -447,33 +470,33 @@ HTML_TEMPLATE = """
                     </select>
                 </div>
                 <div>
-                    <label class="text-xs text-white/40 block mb-1">Sonidos</label>
+                    <label for="cfg-sounds" class="text-xs text-white/55 block mb-1">Sonidos</label>
                     <div class="flex items-center gap-2" style="height:32px">
                         <label class="toggle-switch">
                             <input type="checkbox" id="cfg-sounds">
                             <span class="toggle-slider"></span>
                         </label>
-                        <span class="text-xs text-white/40">Beep al iniciar/terminar</span>
+                        <span class="text-xs text-white/55">Beep al iniciar/terminar</span>
                     </div>
                     <div class="flex items-center gap-2 mt-2">
                         <input type="range" id="cfg-beep-volume" min="1" max="10" step="1"
                                class="accent-purple-500" style="width:90px"
                                oninput="document.getElementById('cfg-beep-volume-label').textContent=this.value">
-                        <span class="text-xs text-white/40">Volumen: <span id="cfg-beep-volume-label">2</span></span>
+                        <label for="cfg-beep-volume" class="text-xs text-white/55">Volumen: <span id="cfg-beep-volume-label">2</span></label>
                     </div>
                 </div>
                 <div>
-                    <label class="text-xs text-white/40 block mb-1">Guardar historial</label>
+                    <label for="cfg-save-history" class="text-xs text-white/55 block mb-1">Guardar historial</label>
                     <div class="flex items-center gap-2" style="height:32px">
                         <label class="toggle-switch">
                             <input type="checkbox" id="cfg-save-history">
                             <span class="toggle-slider"></span>
                         </label>
-                        <span class="text-xs text-white/40">Guardar transcripciones</span>
+                        <span class="text-xs text-white/55">Guardar transcripciones</span>
                     </div>
                 </div>
                 <div>
-                    <label class="text-xs text-white/40 block mb-1">Eliminar transcripciones después de (días)</label>
+                    <label for="cfg-retention-days" class="text-xs text-white/55 block mb-1">Eliminar transcripciones después de (días)</label>
                     <select id="cfg-retention-days" class="cfg-select">
                         <option value="0">Nunca</option>
                         <option value="7">7 días</option>
@@ -482,21 +505,21 @@ HTML_TEMPLATE = """
                     </select>
                 </div>
                 <div>
-                    <label class="text-xs text-white/40 block mb-1">Fuente de audio</label>
+                    <label for="cfg-audio-source" class="text-xs text-white/55 block mb-1">Fuente de audio</label>
                     <select id="cfg-audio-source" class="cfg-select">
                         <option value="mic">Micrófono</option>
                         <option value="system">Audio del sistema (loopback)</option>
                     </select>
                 </div>
                 <div>
-                    <label class="text-xs text-white/40 block mb-1">Backend de transcripción</label>
+                    <label for="cfg-backend" class="text-xs text-white/55 block mb-1">Backend de transcripción</label>
                     <select id="cfg-backend" class="cfg-select" onchange="onBackendChange()">
                         <option value="groq">Groq API (nube)</option>
                         <option value="local">Local sin internet</option>
                     </select>
                 </div>
                 <div>
-                    <label class="text-xs text-white/40 block mb-1">Modelo local</label>
+                    <label for="cfg-local-model" class="text-xs text-white/55 block mb-1">Modelo local</label>
                     <select id="cfg-local-model" class="cfg-select">
                         <option value="small">small — rápido (~466 MB)</option>
                         <option value="medium">medium — más preciso (~1.5 GB)</option>
@@ -508,7 +531,7 @@ HTML_TEMPLATE = """
                 <div class="flex items-center justify-between mb-2">
                     <span class="text-xs text-white/50" id="local-model-status-text">Verificando...</span>
                     <button onclick="downloadModel()" id="btn-download-model"
-                        class="text-xs px-3 py-1 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 disabled:opacity-40 disabled:cursor-not-allowed">
+                        class="text-xs px-3 p-2.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-purple-500/60">
                         Descargar modelo
                     </button>
                 </div>
@@ -531,17 +554,17 @@ HTML_TEMPLATE = """
                     </label>
                     <div>
                         <span class="text-xs text-white/50">Permitir Groq como respaldo si el modo local falla</span>
-                        <p class="text-xs text-white/25 mt-0.5">Si se activa, el audio se enviará a Groq cuando el modo local falle.</p>
+                        <p class="text-xs text-white/55 mt-0.5">Si se activa, el audio se enviará a Groq cuando el modo local falle.</p>
                     </div>
                 </div>
             </div>
 
             <!-- Backend de análisis de reuniones (insights + acta) — POR TAREA -->
             <div class="mt-4 pt-4 border-t border-white/[0.06]">
-                <p class="text-xs text-white/30 mb-3">El análisis en vivo necesita velocidad (Groq recomendado); acta y Asistente de reuniones admiten modelos más potentes (OpenRouter, contexto 1 M).</p>
+                <p class="text-xs text-white/55 mb-3">El análisis en vivo necesita velocidad (Groq recomendado); acta y Asistente de reuniones admiten modelos más potentes (OpenRouter, contexto 1 M).</p>
                 <div class="flex flex-col gap-3">
                     <div>
-                        <label class="text-xs text-white/40 block mb-1">Análisis en vivo</label>
+                        <label for="cfg-insights-backend-live" class="text-xs text-white/55 block mb-1">Análisis en vivo</label>
                         <select id="cfg-insights-backend-live" class="cfg-select" onchange="onInsightsBackendChange()">
                             <option value="groq">Groq API (nube) — instantáneo, requiere internet</option>
                             <option value="openrouter">OpenRouter (nube) — multi-modelo, requiere internet</option>
@@ -549,7 +572,7 @@ HTML_TEMPLATE = """
                         </select>
                     </div>
                     <div>
-                        <label class="text-xs text-white/40 block mb-1">Acta + Asistente de reuniones</label>
+                        <label for="cfg-insights-backend-batch" class="text-xs text-white/55 block mb-1">Acta + Asistente de reuniones</label>
                         <select id="cfg-insights-backend-batch" class="cfg-select" onchange="onInsightsBackendChange()">
                             <option value="groq">Groq API (nube) — instantáneo, requiere internet</option>
                             <option value="openrouter">OpenRouter (nube) — multi-modelo, requiere internet</option>
@@ -558,10 +581,10 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
                 <div id="cfg-insights-endpoint-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
-                    <label class="text-xs text-white/40 block mb-1">Modelo local (id en LM Studio)</label>
+                    <label for="cfg-insights-model" class="text-xs text-white/55 block mb-1">Modelo local (id en LM Studio)</label>
                     <input type="text" id="cfg-insights-model" placeholder="qwen/qwen2.5-vl-7b"
-                        class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 focus:outline-none focus:border-white/20 w-full">
-                    <p class="text-xs text-white/25 mt-1">Requiere LM Studio abierto con el servidor local activo (localhost:1234). Probados: <span class="text-white/40">qwen/qwen2.5-vl-7b</span> (calidad, ~40s) · <span class="text-white/40">llama-3.2-3b-instruct</span> (rápido, ~15s). Si LM Studio está cerrado, la reunión sigue transcribiendo pero sin análisis.</p>
+                        class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/45 w-full">
+                    <p class="text-xs text-white/55 mt-1">Requiere LM Studio abierto con el servidor local activo (localhost:1234). Probados: <span class="text-white/55">qwen/qwen2.5-vl-7b</span> (calidad, ~40s) · <span class="text-white/55">llama-3.2-3b-instruct</span> (rápido, ~15s). Si LM Studio está cerrado, la reunión sigue transcribiendo pero sin análisis.</p>
                 </div>
                 <div id="cfg-insights-openrouter-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
                     <p class="text-xs text-white/40">La key va en <code class="text-white/60">.env</code> como <code class="text-white/60">OPENROUTER_API_KEY</code>. Consíguela en <span class="text-white/50">openrouter.ai/keys</span>. Modelo configurable con <code class="text-white/60">OPENROUTER_MODEL</code> (default: <span class="text-white/50">google/gemini-3-flash</span>).</p>
@@ -569,8 +592,8 @@ HTML_TEMPLATE = """
             </div>
 
             <div class="flex justify-end items-center mt-4 gap-3">
-                <span id="cfg-saved" class="text-xs text-green-400" style="opacity:0;transition:opacity 0.3s">Guardado ✓</span>
-                <button onclick="saveSettings()" class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50">Guardar</button>
+                <span id="cfg-saved" role="status" aria-live="polite" class="text-xs text-green-400" style="opacity:0;transition:opacity 0.3s">Guardado ✓</span>
+                <button onclick="saveSettings()" class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 focus:outline-none focus:ring-2 focus:ring-purple-500/60">Guardar</button>
             </div>
         </div>
 
@@ -585,36 +608,38 @@ HTML_TEMPLATE = """
                     </label>
                 </div>
             </div>
-            <p class="text-xs text-white/30 mb-2">Las palabras se usan para que el modelo las reconozca; los pares corrigen la transcripción (ej. Johan → Johann).</p>
+            <p class="text-xs text-white/55 mb-2">Las palabras se usan para que el modelo las reconozca; los pares corrigen la transcripción (ej. Johan → Johann).</p>
+            <p class="text-xs text-white/55 mb-2">Se corrige así: cuando escuche «X» se escribe «Y». Rellena «Cuando escuche…» con lo mal reconocido y «Palabra» con la forma correcta.</p>
             <!-- Budget bar -->
             <div class="mb-3">
                 <div class="text-xs text-white/30" id="dict-budget-label">Vocabulario en prompt: — de —</div>
                 <div class="dict-budget-bar mt-1"><div class="dict-budget-bar-fill" id="dict-budget-fill" style="width:0%"></div></div>
             </div>
             <!-- Search -->
-            <input type="text" id="dict-search" placeholder="Buscar en el diccionario…"
+            <label for="dict-search" class="sr-only">Buscar en el diccionario</label>
+            <input type="text" id="dict-search" placeholder="Buscar en el diccionario…" aria-label="Buscar en el diccionario"
                 class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80
-                placeholder-white/30 focus:outline-none focus:border-white/20 w-full mb-3"
+                placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/45 w-full mb-3"
                 oninput="filterDictList()">
             <form onsubmit="addDictEntry(event)" class="flex flex-wrap gap-2 mb-4 items-end">
                 <div>
-                    <label class="text-xs text-white/40 block mb-1">Palabra / forma canónica <span class="text-red-400">*</span></label>
+                    <label for="dict-replace-to" class="text-xs text-white/55 block mb-1">Palabra / forma canónica <span class="text-red-400">*</span></label>
                     <input type="text" id="dict-replace-to" placeholder="Johann"
                         class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80
-                        placeholder-white/30 focus:outline-none focus:border-white/20 w-40" required>
+                        placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/45 w-40" required>
                 </div>
                 <div>
-                    <label class="text-xs text-white/40 block mb-1">Cuando escuche… (opcional)</label>
+                    <label for="dict-replace-from" class="text-xs text-white/55 block mb-1">Cuando escuche… (opcional)</label>
                     <input type="text" id="dict-replace-from" placeholder="Johan"
                         class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80
-                        placeholder-white/30 focus:outline-none focus:border-white/20 w-40">
+                        placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/45 w-40">
                 </div>
                 <button type="submit"
-                    class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50">
+                    class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 focus:outline-none focus:ring-2 focus:ring-purple-500/60">
                     Añadir
                 </button>
             </form>
-            <div id="dict-import-result" class="text-xs mb-2 hidden"></div>
+            <div id="dict-import-result" role="status" aria-live="assertive" class="text-xs mb-2 hidden"></div>
             <div id="dict-list" class="space-y-1">
                 <div class="text-xs text-white/20">Cargando...</div>
             </div>
@@ -622,35 +647,43 @@ HTML_TEMPLATE = """
 
         <!-- Table -->
         <div class="glass rounded-xl overflow-hidden">
+            <div class="overflow-x-auto">
             <table class="w-full">
+                <caption class="sr-only">Historial de transcripciones</caption>
                 <thead>
-                    <tr class="text-white/40 text-xs uppercase tracking-wider border-b border-white/5">
+                    <tr class="text-white/45 text-xs uppercase tracking-wider border-b border-white/5">
                         <th class="py-3 px-2 text-center w-10">
                             <input type="checkbox" id="select-all" onclick="toggleSelectAll(this)" class="accent-purple-500 cursor-pointer">
                         </th>
                         <th class="py-3 px-4 text-left w-36">Hora</th>
-                        <th class="py-3 px-4 text-left">Transcripcion</th>
+                        <th class="py-3 px-4 text-left">Transcripción</th>
                         <th class="py-3 px-4 text-right w-20">Dur.</th>
                         <th class="py-3 px-4 text-center w-32"></th>
                     </tr>
                 </thead>
                 <tbody id="tbody"></tbody>
             </table>
-            <div id="empty" class="hidden text-center py-12 text-white/20 text-sm">
-                No hay transcripciones aun
+            </div>
+            <div id="empty" class="hidden text-center py-12 text-white/45 text-sm">
+                No hay transcripciones aún
             </div>
         </div>
 
         <!-- Footer -->
-        <div class="mt-4 text-center text-white/15 text-xs">
+        <div class="mt-4 text-center text-white/45 text-xs">
             Vflow &middot; Ctrl+Shift para grabar &middot; Groq Whisper
         </div>
+        </main>
     </div>
 
     <!-- Add to dictionary floating button (appears on text selection in transcription table) -->
     <button class="dict-add-from-history" id="dict-from-history-btn" onclick="addSelectedTextToDict()">
         📖 Añadir al diccionario
     </button>
+
+    <!-- Network / toast containers -->
+    <div id="offline-banner">Sin conexión con el servidor — reintentando…</div>
+    <div id="toast-container" aria-live="polite"></div>
 
     <!-- Selection bar -->
     <div class="selection-bar" id="selection-bar">
@@ -667,13 +700,23 @@ HTML_TEMPLATE = """
         let expandedIds = new Set();
         let anchorIndex = null;
 
+        function toast(msg,type){let c=document.getElementById('toast-container');if(!c)return;const t=document.createElement('div');t.className='toast'+(type==='err'?' err':type==='ok'?' ok':'');t.textContent=msg;c.appendChild(t);setTimeout(()=>t.remove(),4000);}
+        function showOffline(on){const b=document.getElementById('offline-banner');if(b)b.classList.toggle('show',!!on);}
+
         async function loadData() {
-            const res = await fetch('/api/transcriptions');
-            allData = await res.json();
-            // Remove selected IDs that no longer exist
-            const existingIds = new Set(allData.map(t => t.id));
-            selectedIds = new Set([...selectedIds].filter(id => existingIds.has(id)));
-            renderTable(allData);
+            try {
+                const res = await fetch('/api/transcriptions');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                allData = await res.json();
+                // Remove selected IDs that no longer exist
+                const existingIds = new Set(allData.map(t => t.id));
+                selectedIds = new Set([...selectedIds].filter(id => existingIds.has(id)));
+                renderTable(allData);
+                showOffline(false);
+            } catch (err) {
+                // No relanzar: el setInterval debe seguir vivo.
+                showOffline(true);
+            }
         }
 
         function renderTable(data) {
@@ -699,15 +742,15 @@ HTML_TEMPLATE = """
                 });
                 const dur = t.duration_seconds ? t.duration_seconds.toFixed(1) + 's' : '-';
                 const srcBadge = t.source === 'youtube'
-                    ? '<span class="text-white/25 text-xs ml-1" title="YouTube">▶</span>'
+                    ? '<span class="text-white/50 text-xs ml-1" title="YouTube">▶</span>'
                     : t.source === 'system'
-                        ? '<span class="text-white/25 text-xs ml-1" title="Audio del sistema">🔊</span>'
+                        ? '<span class="text-white/50 text-xs ml-1" title="Audio del sistema">🔊</span>'
                         : '';
                 const isEditing = editingId === t.id;
                 const checked = selectedIds.has(t.id) ? 'checked' : '';
                 const rowClass = selectedIds.has(t.id) ? 'selected-row' : '';
                 const textCell = isEditing
-                    ? `<textarea class="edit-area" id="edit-${t.id}">${escapeHtml(t.text)}</textarea>
+                    ? `<textarea class="edit-area" id="edit-${t.id}" onkeydown="if(event.key==='Escape'){event.preventDefault();cancelEdit()}else if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();saveEdit(${t.id})}">${escapeHtml(t.text)}</textarea>
                        <div class="flex gap-2 mt-1">
                            <button onclick="event.stopPropagation(); saveEdit(${t.id})"
                                class="text-xs px-2 py-1 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50">Guardar</button>
@@ -726,14 +769,14 @@ HTML_TEMPLATE = """
                     <td class="py-3 px-4 text-white/20 text-xs text-right align-top">${dur}</td>
                     <td class="py-3 px-4 text-center align-top whitespace-nowrap">
                         <button onclick="event.stopPropagation(); copyText(${i}, this)"
-                            class="text-white/20 hover:text-white/60 text-xs px-1.5 py-1 rounded hover:bg-white/5"
-                            title="Copiar">Copiar</button>
+                            class="text-white/45 hover:text-white/70 text-xs p-2 rounded hover:bg-white/5"
+                            title="Copiar" aria-label="Copiar texto">Copiar</button>
                         <button onclick="event.stopPropagation(); startEdit(${t.id})"
-                            class="text-white/20 hover:text-white/60 text-xs px-1.5 py-1 rounded hover:bg-white/5 ml-0.5"
-                            title="Editar">&#9998;</button>
+                            class="text-white/45 hover:text-white/70 text-xs p-2 rounded hover:bg-white/5 ml-0.5"
+                            title="Editar" aria-label="Editar">&#9998;</button>
                         <button onclick="event.stopPropagation(); deleteSingle(${t.id}, this)"
-                            class="text-white/20 hover:text-red-400 text-xs px-1.5 py-1 rounded hover:bg-red-500/10 ml-0.5"
-                            title="Eliminar">&#10005;</button>
+                            class="text-white/45 hover:text-red-400 text-xs p-2 rounded hover:bg-red-500/10 ml-0.5"
+                            title="Eliminar" aria-label="Eliminar">&#10005;</button>
                     </td>
                 </tr>`;
             }).join('');
@@ -796,36 +839,54 @@ HTML_TEMPLATE = """
             const ta = document.getElementById('edit-' + id);
             if (!ta) return;
             const newText = ta.value.trim();
-            if (!newText) return;
-            await fetch('/api/transcriptions/' + id, {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({text: newText})
-            });
-            editingId = null;
-            loadData();
+            if (!newText) { toast('No se puede guardar vacío', 'err'); ta.focus(); return; }
+            const btn = document.querySelector('button[onclick*="saveEdit(' + id + ')"]');
+            if (btn) btn.disabled = true;
+            try {
+                const res = await fetch('/api/transcriptions/' + id, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({text: newText})
+                });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                editingId = null;
+                showOffline(false);
+                loadData();
+            } catch (err) {
+                showOffline(true);
+                toast('No se pudo guardar el cambio', 'err');
+                if (btn) btn.disabled = false;
+            }
         }
 
         // --- Delete single ---
         async function deleteSingle(id, btn) {
-            if (!confirm('¿Eliminar esta transcripcion?')) return;
-            if (!confirm('¿Estas seguro? Esta accion no se puede deshacer.')) return;
+            if (!confirm('¿Eliminar esta transcripción? Esta acción no se puede deshacer.')) return;
+            btn.disabled = true;
             const row = btn.closest('tr');
             row.classList.add('deleted');
             setTimeout(async () => {
-                await fetch('/api/transcriptions/' + id, {method: 'DELETE'});
-                loadData();
+                try {
+                    const res = await fetch('/api/transcriptions/' + id, {method: 'DELETE'});
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    showOffline(false);
+                    loadData();
+                } catch (err) {
+                    showOffline(true);
+                    toast('No se pudo eliminar la transcripción', 'err');
+                    row.classList.remove('deleted');
+                    btn.disabled = false;
+                }
             }, 350);
         }
 
         // --- Bulk delete ---
         async function bulkDelete(range, label) {
             document.getElementById('cleanup-dropdown').classList.remove('open');
-            const labels = {day: 'las transcripciones de hoy', week: 'las transcripciones de la ultima semana',
-                month: 'las transcripciones del ultimo mes', all: 'TODAS las transcripciones'};
+            const labels = {day: 'las transcripciones de hoy', week: 'las transcripciones de la última semana',
+                month: 'las transcripciones del último mes', all: 'TODAS las transcripciones'};
             const desc = labels[range] || range;
-            if (!confirm('¿Eliminar ' + desc + '?')) return;
-            if (!confirm('¿Estas seguro? Esta accion no se puede deshacer.')) return;
+            if (!confirm('¿Eliminar ' + desc + '? Esta acción no se puede deshacer.')) return;
             let url = '/api/transcriptions?range=' + range;
             if (range === 'day' && label === 'hoy') {
                 url += '&date=' + new Date().toISOString().slice(0,10);
@@ -834,13 +895,14 @@ HTML_TEMPLATE = """
             loadData();
         }
 
-        async function deleteByDate() {
-            document.getElementById('cleanup-dropdown').classList.remove('open');
-            const dateStr = prompt('Ingresa la fecha (YYYY-MM-DD):');
+        async function deleteByDate(dateStr) {
+            const picker = document.getElementById('cleanup-date');
+            if (!dateStr) dateStr = picker ? picker.value : '';
             if (!dateStr || !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(dateStr)) return;
-            if (!confirm('¿Eliminar las transcripciones del ' + dateStr + '?')) return;
-            if (!confirm('¿Estas seguro? Esta accion no se puede deshacer.')) return;
+            document.getElementById('cleanup-dropdown').classList.remove('open');
+            if (!confirm('¿Eliminar las transcripciones del ' + dateStr + '? Esta acción no se puede deshacer.')) { if (picker) picker.value = ''; return; }
             await fetch('/api/transcriptions?range=day&date=' + dateStr, {method: 'DELETE'});
+            if (picker) picker.value = '';
             loadData();
         }
 
@@ -935,15 +997,25 @@ HTML_TEMPLATE = """
 
         async function deleteSelected() {
             const n = selectedIds.size;
-            if (!confirm('¿Eliminar ' + n + ' transcripcion' + (n > 1 ? 'es' : '') + ' seleccionada' + (n > 1 ? 's' : '') + '?')) return;
-            if (!confirm('¿Estas seguro? Esta accion no se puede deshacer.')) return;
-            await fetch('/api/transcriptions/delete-batch', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ids: [...selectedIds]})
-            });
-            selectedIds.clear();
-            loadData();
+            if (!confirm('¿Eliminar ' + n + ' transcripción' + (n > 1 ? 'es' : '') + ' seleccionada' + (n > 1 ? 's' : '') + '? Esta acción no se puede deshacer.')) return;
+            const btn = document.querySelector('#selection-bar button[onclick*="deleteSelected"]');
+            if (btn) btn.disabled = true;
+            try {
+                const res = await fetch('/api/transcriptions/delete-batch', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ids: [...selectedIds]})
+                });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                selectedIds.clear();
+                showOffline(false);
+                loadData();
+            } catch (err) {
+                showOffline(true);
+                toast('No se pudieron eliminar las transcripciones', 'err');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
         }
 
         // Close dropdown on outside click
@@ -959,25 +1031,65 @@ HTML_TEMPLATE = """
             renderTable(allData.filter(t => t.text.toLowerCase().includes(q)));
         });
 
-        // Collapse all expanded rows on Escape
+        // Collapse all expanded rows on Escape (and close any open panel)
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 expandedIds.clear();
                 document.querySelectorAll('.text-preview.expanded').forEach(el => {
                     el.classList.remove('expanded');
                 });
+                closeOtherPanels(null);
             }
         });
 
-        // Auto-refresh every 5 seconds
+        // Auto-refresh every 5 seconds (pausado cuando la pestaña está oculta)
         loadData();
-        setInterval(loadData, 5000);
+        setInterval(() => {
+            if (document.hidden) return;
+            // No refrescar si el usuario está editando: destruiría el textarea.
+            if (editingId !== null) return;
+            // No refrescar si hay una selección de texto activa dentro de la tabla.
+            const s = window.getSelection();
+            if (s && !s.isCollapsed && s.toString().trim()) {
+                const tb = document.getElementById('tbody');
+                if (tb && s.anchorNode && tb.contains(s.anchorNode)) return;
+            }
+            loadData();
+        }, 5000);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) loadData();
+        });
+
+        // --- Panel accordion: solo un panel abierto a la vez ---
+        const _PANEL_IDS = ['settings-panel', 'dictionary-panel', 'shortcuts-panel', 'meeting-panel', 'url-queue-panel'];
+
+        // Oculta todos los paneles excepto keepId (pasa null para cerrar todos) y
+        // detiene los polls de los paneles que se cierran. Reusa _stopMtPoll/_stopUqPoll.
+        function closeOtherPanels(keepId) {
+            _PANEL_IDS.forEach(id => {
+                if (id === keepId) return;
+                const p = document.getElementById(id);
+                if (!p || p.classList.contains('hidden')) return;
+                p.classList.add('hidden');
+                if (id === 'meeting-panel') _stopMtPoll();
+                if (id === 'url-queue-panel') _stopUqPoll();
+            });
+        }
+
+        // Enfoca el primer control del panel tras hacerlo visible.
+        function _focusPanel(panel) {
+            setTimeout(() => {
+                panel.querySelector('input,select,textarea')?.focus();
+            }, 0);
+        }
 
         // --- Settings panel ---
         async function toggleSettings() {
             const panel = document.getElementById('settings-panel');
             if (panel.classList.contains('hidden')) {
+                closeOtherPanels('settings-panel');
                 panel.classList.remove('hidden');
+                _focusPanel(panel);
                 await loadSettings();
             } else {
                 panel.classList.add('hidden');
@@ -1156,7 +1268,9 @@ HTML_TEMPLATE = """
         async function toggleDictionary() {
             const panel = document.getElementById('dictionary-panel');
             if (panel.classList.contains('hidden')) {
+                closeOtherPanels('dictionary-panel');
                 panel.classList.remove('hidden');
+                _focusPanel(panel);
                 await loadDictionary();
             } else {
                 panel.classList.add('hidden');
@@ -1165,7 +1279,10 @@ HTML_TEMPLATE = """
 
         function toggleShortcuts() {
             const panel = document.getElementById('shortcuts-panel');
+            const willOpen = panel.classList.contains('hidden');
+            if (willOpen) closeOtherPanels('shortcuts-panel');
             panel.classList.toggle('hidden');
+            if (willOpen) _focusPanel(panel);
         }
 
         // ---- Modo reunión (captura dual mic + sistema) ----
@@ -1191,8 +1308,10 @@ HTML_TEMPLATE = """
         function toggleMeeting() {
             const panel = document.getElementById('meeting-panel');
             const isHidden = panel.classList.contains('hidden');
+            if (isHidden) closeOtherPanels('meeting-panel');
             panel.classList.toggle('hidden');
             if (isHidden) {
+                _focusPanel(panel);
                 loadMeeting().then(st => { if (st && st.active) _startMtPoll(); });
             } else {
                 _stopMtPoll();
@@ -1223,7 +1342,11 @@ HTML_TEMPLATE = """
                     _mtMinutesShown = true;
                 }
                 return st;
-            } catch(e) { return {}; }
+            } catch(e) {
+                // No matamos el intervalo: el polling sigue vivo para reintentar.
+                toast('No se pudo actualizar la reunión', 'err');
+                return {};
+            }
         }
 
         // Sufijo de un pendiente: responsable + fecha/hora si existen → "(María · 📅 viernes 15:00)"
@@ -1232,7 +1355,7 @@ HTML_TEMPLATE = """
             if (p && p.responsable) parts.push(escapeHtml(String(p.responsable)));
             const fh = [p && p.fecha, p && p.hora].filter(Boolean).map(x => escapeHtml(String(x))).join(' ');
             if (fh) parts.push('📅 ' + fh);
-            return parts.length ? ' <span class="text-white/35">(' + parts.join(' · ') + ')</span>' : '';
+            return parts.length ? ' <span class="text-white/50">(' + parts.join(' · ') + ')</span>' : '';
         }
 
         function renderInsights(ins) {
@@ -1247,7 +1370,7 @@ HTML_TEMPLATE = """
             const pend = ins.pendientes || [];
             const prop = (ins.propuestas || []).filter(p => (p.confianza || 'alta') === 'alta');
             if (!temas.length && !pend.length && !prop.length) {
-                el.innerHTML = '<div class="text-xs text-white/20">Temas, pendientes y propuestas aparecerán aquí a medida que avance la reunión.</div>';
+                el.innerHTML = '<div class="text-xs text-white/45">Temas, pendientes y propuestas aparecerán aquí a medida que avance la reunión.</div>';
                 return;
             }
             // fade solo para ids no vistos antes (los ya mostrados no re-animan)
@@ -1265,15 +1388,15 @@ HTML_TEMPLATE = """
                         return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">☐ ' + escapeHtml(String(p.texto || '')) + pendMeta(p) + '</div>';
                     }).join('');
                 } else {
-                    fhtml += '<div class="text-[11px] text-white/25">Sin pendientes detectados aún.</div>';
+                    fhtml += '<div class="text-[11px] text-white/50">Sin pendientes detectados aún.</div>';
                 }
-                fhtml += '<div class="text-[10px] text-white/20 mt-2">Modo Foco: solo lo accionable. Cambia a Revisión para ver todo.</div>';
+                fhtml += '<div class="text-[10px] text-white/45 mt-2">Modo Foco: solo lo accionable. Cambia a Revisión para ver todo.</div>';
                 el.innerHTML = fhtml;
                 return;
             }
             let html = '';
             if (temas.length) {
-                html += '<div><div class="text-[11px] uppercase tracking-wide text-white/30 mb-1">Temas</div>'
+                html += '<div><div class="text-[11px] uppercase tracking-wide text-white/55 mb-1">Temas</div>'
                     + temas.map(t => '<div class="text-xs text-white/75 mb-0.5' + fadeCls(t.id) + '">• ' + escapeHtml(String(t.text != null ? t.text : t)) + '</div>').join('') + '</div>';
             }
             if (pend.length) {
@@ -1355,8 +1478,8 @@ HTML_TEMPLATE = """
 
             if (!segments.length) {
                 container.innerHTML = status.active
-                    ? '<div class="text-xs text-white/20">Escuchando… el texto aparecerá cada ~20s.</div>'
-                    : '<div class="text-xs text-white/20">El transcript en vivo aparecerá aquí cuando inicies una reunión.</div>';
+                    ? '<div class="text-xs text-white/45">Escuchando… el texto aparecerá cada ~20s.</div>'
+                    : '<div class="text-xs text-white/45">El transcript en vivo aparecerá aquí cuando inicies una reunión.</div>';
                 container.dataset.count = '0';
                 return;
             }
@@ -1371,7 +1494,7 @@ HTML_TEMPLATE = """
                 const color = (s.speaker === 'Yo') ? 'text-purple-300' : 'text-sky-300';
                 const div = document.createElement('div');
                 div.className = 'text-sm text-white/80 leading-snug mt-fade';
-                div.innerHTML = '<span class="text-[10px] font-mono text-white/30 mr-1">' + s.time + '</span>'
+                div.innerHTML = '<span class="text-[10px] font-mono text-white/55 mr-1">' + s.time + '</span>'
                     + '<span class="text-xs font-medium ' + color + ' mr-1">' + s.speaker + ':</span>'
                     + escapeHtml(s.text);
                 container.appendChild(div);
@@ -1381,6 +1504,7 @@ HTML_TEMPLATE = """
         }
 
         async function startMeeting() {
+            const btn = document.getElementById('mt-start');
             const fb = document.getElementById('mt-feedback');
             fb.classList.add('hidden');
             document.getElementById('mt-minutes').classList.add('hidden');  // limpiar acta previa
@@ -1388,6 +1512,7 @@ HTML_TEMPLATE = """
             _mtSeenInsightIds = new Set();
             _mtMinutesShown = false;
             document.getElementById('mt-transcript').dataset.count = '0';
+            if (btn) btn.disabled = true;
             try {
                 const res = await fetch('/api/meeting/start', {method:'POST'});
                 const data = await res.json();
@@ -1408,13 +1533,17 @@ HTML_TEMPLATE = """
                 fb.textContent = 'Error de red al iniciar la reunión.';
                 fb.className = 'text-xs mb-2 text-red-300';
                 fb.classList.remove('hidden');
+            } finally {
+                if (btn) btn.disabled = false;
             }
         }
 
         async function stopMeeting() {
+            const btn = document.getElementById('mt-stop');
             const statusEl = document.getElementById('mt-status');
             statusEl.textContent = 'Terminando, transcribiendo lo último y generando el acta…';
             statusEl.className = 'text-xs text-white/40';
+            if (btn) btn.disabled = true;
             try {
                 const res = await fetch('/api/meeting/stop', {method:'POST'});
                 const data = await res.json();
@@ -1437,6 +1566,11 @@ HTML_TEMPLATE = """
                 fb.classList.remove('hidden');
             } catch(e) {
                 _stopMtPoll();
+                statusEl.textContent = 'No se pudo terminar la reunión. Reintenta.';
+                statusEl.className = 'text-xs text-red-300';
+                toast('No se pudo terminar la reunión', 'err');
+            } finally {
+                if (btn) btn.disabled = false;
             }
         }
 
@@ -1475,13 +1609,13 @@ HTML_TEMPLATE = """
         function renderDictList(entries) {
             const container = document.getElementById('dict-list');
             if (!entries.length) {
-                container.innerHTML = '<div class="text-xs text-white/20">No hay entradas aún. Añade palabras o pares de corrección.</div>';
+                container.innerHTML = '<div class="text-xs text-white/55 py-2">Aún no hay entradas. Escribe una palabra en el campo de arriba (o un par «escucho X → escribo Y») y pulsa Añadir para que Whisper la reconozca.</div>';
                 return;
             }
             const includedSet = new Set(_dictBudget.included_ids || []);
             container.innerHTML = entries.map(e => {
                 const label = e.replace_from
-                    ? `<span class="text-white/50">${escapeHtml(e.replace_from)}</span> <span class="text-white/25 mx-1">→</span> <span class="text-white/80">${escapeHtml(e.replace_to)}</span>`
+                    ? `<span class="text-white/50">${escapeHtml(e.replace_from)}</span> <span class="text-white/50 mx-1">→</span> <span class="text-white/80">${escapeHtml(e.replace_to)}</span>`
                     : `<span class="text-white/80">${escapeHtml(e.replace_to)}</span>`;
                 const checked = e.enabled ? 'checked' : '';
                 const pinned = e.pinned ? 'pinned' : '';
@@ -1489,20 +1623,24 @@ HTML_TEMPLATE = """
                 const pinIcon = e.pinned ? '★' : '☆';
                 const inBudget = includedSet.has(e.id);
                 const dimmed = !inBudget ? 'dict-entry-dimmed' : '';
-                const outOfPromptTitle = !inBudget ? ' title="Fuera del prompt por límite; el reemplazo sigue activo"' : '';
+                const outOfPromptStyle = !inBudget ? ' style="opacity:0.7"' : '';
+                const outOfPromptTitle = !inBudget ? ' title="Fuera del prompt por límite de espacio; el reemplazo de corrección sigue activo"' : '';
+                const outBudgetBadge = !inBudget
+                    ? `<span class="text-amber-300/90 text-xs ml-1 px-1 py-0.5 rounded bg-amber-400/10 whitespace-nowrap" title="Este término no cabe en el prompt de vocabulario, pero su corrección sigue funcionando">fuera del prompt</span>`
+                    : '';
                 const hitBadge = (e.hit_count > 0)
-                    ? `<span class="text-white/20 text-xs ml-1" title="Correcciones aplicadas">×${e.hit_count}</span>`
+                    ? `<span class="text-white/55 text-xs ml-1" title="Correcciones aplicadas">×${e.hit_count}</span>`
                     : '';
                 return `
-                <div class="flex items-center gap-3 py-1.5 border-b border-white/[0.04] ${dimmed}" data-dict-id="${e.id}"${outOfPromptTitle}>
-                    <button class="dict-pin-btn ${pinned}" title="${pinTitle}" onclick="pinDictEntry(${e.id}, ${e.pinned ? 0 : 1})">${pinIcon}</button>
+                <div class="flex items-center gap-3 py-1.5 border-b border-white/[0.04] ${dimmed}" data-dict-id="${e.id}"${outOfPromptStyle}${outOfPromptTitle}>
+                    <button class="dict-pin-btn ${pinned} p-2" title="${pinTitle}" aria-label="${e.pinned ? 'Desfijar término del prompt' : 'Fijar término'}" aria-pressed="${e.pinned ? 'true' : 'false'}" onclick="pinDictEntry(${e.id}, ${e.pinned ? 0 : 1})">${pinIcon}</button>
                     <label class="toggle-switch flex-shrink-0">
-                        <input type="checkbox" ${checked} onchange="toggleDictEntry(${e.id}, this.checked)">
+                        <input type="checkbox" ${checked} aria-label="Activar o desactivar este término" onchange="toggleDictEntry(${e.id}, this.checked)">
                         <span class="toggle-slider"></span>
                     </label>
-                    <span class="text-sm flex-1">${label}${hitBadge}</span>
-                    <button onclick="deleteDictEntry(${e.id})"
-                        class="text-white/20 hover:text-red-400 text-xs px-1.5 py-1 rounded hover:bg-red-500/10">&#10005;</button>
+                    <span class="text-sm flex-1">${label}${hitBadge}${outBudgetBadge}</span>
+                    <button onclick="deleteDictEntry(${e.id})" aria-label="Eliminar"
+                        class="text-white/55 hover:text-red-400 text-xs p-2 rounded hover:bg-red-500/10">&#10005;</button>
                 </div>`;
             }).join('');
         }
@@ -1586,9 +1724,17 @@ HTML_TEMPLATE = """
         async function importDictCSV(input) {
             const file = input.files[0];
             if (!file) return;
+            const resultEl = document.getElementById('dict-import-result');
+            if (file.size > 2 * 1024 * 1024) {
+                resultEl.classList.remove('hidden');
+                resultEl.textContent = 'El archivo es demasiado grande (máx. 2 MB). Reduce el CSV e inténtalo de nuevo.';
+                resultEl.style.color = '#f87171';
+                input.value = '';
+                setTimeout(() => resultEl.classList.add('hidden'), 5000);
+                return;
+            }
             const fd = new FormData();
             fd.append('file', file);
-            const resultEl = document.getElementById('dict-import-result');
             resultEl.classList.remove('hidden');
             resultEl.textContent = 'Importando…';
             resultEl.style.color = 'rgba(255,255,255,0.4)';
@@ -1700,8 +1846,10 @@ HTML_TEMPLATE = """
         function toggleUrlQueue() {
             const panel = document.getElementById('url-queue-panel');
             const isHidden = panel.classList.contains('hidden');
+            if (isHidden) closeOtherPanels('url-queue-panel');
             panel.classList.toggle('hidden');
             if (isHidden) {
+                _focusPanel(panel);
                 loadUrlQueue().then(summary => {
                     if (summary && (summary.pending > 0 || summary.processing > 0)) _startUqPoll();
                 });
@@ -1736,7 +1884,7 @@ HTML_TEMPLATE = """
 
         const _platformIcons = { youtube: '▶', tiktok: '♪', instagram: '◎', other: '🔗' };
         const _statusLabels = {
-            pending: '<span class="text-white/30">Pendiente</span>',
+            pending: '<span class="text-white/55">Pendiente</span>',
             processing: '<span class="text-yellow-400/80">Procesando…</span>',
             done: '<span class="text-green-400/80">Listo ✓</span>',
             error: '<span class="text-red-400/80">Error</span>',
@@ -1752,30 +1900,32 @@ HTML_TEMPLATE = """
 
         function renderUqList(items) {
             const container = document.getElementById('uq-list');
+            const prevScroll = container ? container.scrollTop : 0;
             if (!items.length) {
-                container.innerHTML = '<div class="text-xs text-white/20 py-2">Sin items en la cola.</div>';
+                container.innerHTML = '<div class="text-xs text-white/55 py-2">La cola está vacía. Pega una URL de YouTube, TikTok o Instagram arriba y pulsa Añadir para transcribirla sin grabar audio.</div>';
                 return;
             }
             container.innerHTML = items.map(item => {
                 const icon = _platformIcons[item.platform] || '🔗';
                 const statusHtml = _statusLabels[item.status] || item.status;
                 const stageHtml = item.stage && item.status === 'processing'
-                    ? '<span class="text-white/25 ml-1">(' + escapeHtml(item.stage) + ')</span>' : '';
+                    ? '<span class="text-white/55 ml-1">(' + escapeHtml(item.stage) + ')</span>' : '';
                 const titleHtml = item.title
-                    ? '<span class="text-white/40 ml-1 truncate" style="max-width:200px" title="' + escapeHtml(item.title) + '">' + escapeHtml(item.title) + '</span>'
+                    ? '<span class="text-white/55 ml-1 truncate" style="max-width:200px" title="' + escapeHtml(item.title) + '">' + escapeHtml(item.title) + '</span>'
                     : '';
                 const errorHtml = item.error && item.status === 'error'
                     ? '<div class="text-xs text-red-400/60 mt-0.5 truncate" title="' + escapeHtml(item.error) + '">' + escapeHtml(item.error) + '</div>'
                     : '';
                 return '<div class="flex items-start gap-2 py-1.5 border-b border-white/[0.04]">' +
-                    '<span class="text-white/30 text-xs mt-0.5 flex-shrink-0">' + icon + '</span>' +
+                    '<span class="text-white/55 text-xs mt-0.5 flex-shrink-0">' + icon + '</span>' +
                     '<div class="flex-1 min-w-0">' +
                     '<div class="flex items-center gap-2 flex-wrap">' +
-                    '<span class="text-xs text-white/50 truncate" title="' + escapeHtml(item.url) + '">' + escapeHtml(_shortUrl(item.url)) + '</span>' +
+                    '<span class="text-xs text-white/55 truncate" title="' + escapeHtml(item.url) + '">' + escapeHtml(_shortUrl(item.url)) + '</span>' +
                     '<span class="text-xs">' + statusHtml + stageHtml + '</span>' +
                     titleHtml +
                     '</div>' + errorHtml + '</div></div>';
             }).join('');
+            if (container) container.scrollTop = prevScroll;
         }
 
         async function enqueueUrls() {
@@ -1787,6 +1937,9 @@ HTML_TEMPLATE = """
             const combined = [singleUrl, bulkText].filter(Boolean).join('\\n');
             if (!combined.trim()) return;
 
+            const enqueueBtn = document.getElementById('uq-btn');
+            let _enqOld = '';
+            if (enqueueBtn) { enqueueBtn.disabled = true; _enqOld = enqueueBtn.textContent; enqueueBtn.textContent = 'Añadiendo…'; }
             try {
                 const res = await fetch('/api/url-queue', {
                     method: 'POST',
@@ -1816,6 +1969,8 @@ HTML_TEMPLATE = """
                 feedback.classList.remove('hidden');
                 feedback.style.color = '#f87171';
                 feedback.textContent = 'Error de red: ' + ex;
+            } finally {
+                if (enqueueBtn) { enqueueBtn.disabled = false; enqueueBtn.textContent = _enqOld; }
             }
         }
 
@@ -1937,31 +2092,33 @@ MEETING_PAGE = """<!DOCTYPE html>
   #asst-messages .md-h{font-weight:600;margin:.3rem 0 .15rem;}
   #asst-messages .md-p{margin:.15rem 0;}
   #asst-messages .md-cite{color:#c4b5fd;text-decoration:underline;cursor:pointer;font-size:.92em;}
+  @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important;}}
 </style></head>
 <body class="min-h-screen p-6">
 <div class="max-w-5xl mx-auto">
+  <main>
   <div class="flex items-center justify-between mb-5">
-    <div class="text-2xl font-semibold">&#127908; Reunión</div>
+    <h1 class="text-2xl font-semibold">&#127908; Reunión</h1>
     <div class="flex items-center gap-2">
       <button onclick="startMeeting()" id="mt-start" class="btn bg-purple-600/30 text-purple-200 hover:bg-purple-600/50">&#9654; Iniciar</button>
       <button onclick="stopMeeting()" id="mt-stop" class="btn bg-red-600/30 text-red-300 hover:bg-red-600/50 hidden">&#9632; Terminar</button>
-      <button onclick="openFolder()" class="btn text-white/50 hover:text-white/80 hover:bg-white/5" title="Abrir la carpeta de actas (.md)">&#128193; Carpeta</button>
-      <a href="/" class="btn text-white/40 hover:text-white/70 hover:bg-white/5">Dashboard</a>
+      <button onclick="openFolder()" class="btn text-white/55 hover:text-white/80 hover:bg-white/5" title="Abrir la carpeta de actas (.md)">&#128193; Carpeta</button>
+      <a href="/" class="btn text-white/45 hover:text-white/70 hover:bg-white/5">Dashboard</a>
     </div>
   </div>
-  <div id="mt-status" class="text-xs text-white/40 mb-3"></div>
+  <div id="mt-status" class="text-xs text-white/55 mb-3" aria-live="polite"></div>
 
-  <div class="grid gap-3 mb-3" style="grid-template-columns:1.4fr 1fr;">
+  <div class="grid gap-3 mb-3 grid-cols-1 md:grid-cols-[1.4fr_1fr]">
     <div>
-      <div class="text-xs text-white/40 mb-1.5">Transcripción en vivo</div>
+      <div class="text-xs text-white/55 mb-1.5">Transcripción en vivo</div>
       <div id="mt-transcript" class="space-y-1.5 max-h-[28rem] overflow-y-auto glass rounded-xl p-3">
-        <div class="text-xs text-white/20">Inicia una reunión para ver la transcripción (Yo / Ellos).</div>
+        <div class="text-xs text-white/45">Inicia una reunión para ver la transcripción (Yo / Ellos).</div>
       </div>
     </div>
     <div>
-      <div class="text-xs text-white/40 mb-1.5">Análisis en vivo</div>
+      <div class="text-xs text-white/55 mb-1.5">Análisis en vivo</div>
       <div id="mt-insights" class="space-y-3 max-h-[28rem] overflow-y-auto glass rounded-xl p-3">
-        <div class="text-xs text-white/20">Temas, pendientes, propuestas y próximas reuniones.</div>
+        <div class="text-xs text-white/45">Temas, pendientes, propuestas y próximas reuniones.</div>
       </div>
     </div>
   </div>
@@ -1973,12 +2130,13 @@ MEETING_PAGE = """<!DOCTYPE html>
   <div class="flex items-center justify-between mb-2 mt-8">
     <div class="text-sm font-medium text-white/60">Historial de reuniones</div>
     <div class="flex gap-2">
-      <button onclick="exportAll()" class="btn text-white/40 hover:text-white/70 hover:bg-white/5" title="Exportar todas a Markdown">Exportar todas (.md)</button>
-      <button onclick="clearAll()" class="btn text-white/30 hover:text-red-300 hover:bg-white/5" title="Eliminar todas las reuniones">Limpiar todo</button>
+      <button onclick="exportAll()" class="btn text-white/45 hover:text-white/70 hover:bg-white/5" title="Exportar todas a Markdown">Exportar todas (.md)</button>
+      <button onclick="clearAll()" class="btn text-white/55 hover:text-red-300 hover:bg-white/5" title="Eliminar todas las reuniones">Limpiar todo</button>
     </div>
   </div>
-  <input id="meetingSearch" type="search" placeholder="Buscar en reuniones…"
-    style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.4rem .75rem;font-size:.8rem;margin-bottom:.5rem;outline:none;"
+  <input id="meetingSearch" type="search" placeholder="Buscar en reuniones…" aria-label="Buscar en reuniones"
+    class="focus:outline-none focus:ring-2 focus:ring-violet-500/60"
+    style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.4rem .75rem;font-size:.8rem;margin-bottom:.5rem;"
     oninput="onSearchInput(this.value)">
   <div id="mt-history" class="space-y-1"></div>
   <div id="mt-viewer" class="glass rounded-xl p-4 mt-3 hidden"></div>
@@ -1992,11 +2150,12 @@ MEETING_PAGE = """<!DOCTYPE html>
         <button id="asst-scope-meeting" disabled class="text-[11px] px-2 py-0.5 rounded-full border transition-colors" title="Selecciona una reunión del historial para preguntar solo sobre ella">Esta reunión</button>
       </div>
     </div>
-    <div id="asst-messages" class="space-y-2 overflow-y-auto mb-2" style="min-height:60px;max-height:280px;"></div>
+    <div id="asst-messages" class="space-y-2 overflow-y-auto mb-2" aria-live="polite" style="min-height:60px;max-height:280px;"></div>
     <div id="asst-chips" class="flex flex-wrap gap-1.5 mb-2"></div>
     <div class="flex gap-2">
-      <input id="asst-input" type="text" placeholder="Pregunta sobre tus reuniones…"
-        style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.35rem .7rem;font-size:.8rem;outline:none;"
+      <input id="asst-input" type="text" placeholder="Pregunta sobre tus reuniones…" aria-label="Pregunta sobre tus reuniones"
+        class="focus:outline-none focus:ring-2 focus:ring-violet-500/60"
+        style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.35rem .7rem;font-size:.8rem;"
         onkeydown="if(event.key==='Enter')asstSend()">
       <button id="asst-send" onclick="asstSend()" class="btn bg-violet-600/30 text-violet-200 hover:bg-violet-600/50">Enviar</button>
     </div>
@@ -2006,9 +2165,12 @@ MEETING_PAGE = """<!DOCTYPE html>
         title="Activa razonamiento para preguntas analíticas (más lento/caro)">&#129504; Pensar más</label>
     </div>
   </div>
+  </main>
 </div>
 <script>
 let _seen = new Set(), _segCount = 0, _actaShown = false, _poll = null;
+function mtoast(msg,type){const c=document.body;const t=document.createElement('div');t.style.cssText='position:fixed;top:16px;right:16px;z-index:60;background:rgba(20,20,24,.96);border:1px solid '+(type==='err'?'rgba(239,68,68,.55)':'rgba(255,255,255,.12)')+';color:#eaeaea;padding:10px 14px;border-radius:10px;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.45)';t.textContent=msg;c.appendChild(t);setTimeout(()=>t.remove(),4000);}
+let _meetingIds = new Set();
 function esc(s){ const d=document.createElement('div'); d.textContent = (s==null?'':String(s)); return d.innerHTML; }
 function mdInline(x){
   x=esc(x);
@@ -2016,7 +2178,7 @@ function mdInline(x){
   x=x.replace(/\\*\\*([^*]+?)\\*\\*/g,'<strong>$1</strong>');
   x=x.replace(/__([^_]+?)__/g,'<strong>$1</strong>');
   x=x.replace(/(^|[^*\\w])\\*([^*\\n]+?)\\*(?=[^*\\w]|$)/g,'$1<em>$2</em>');
-  x=x.replace(/\\[(\\d+)\\]/g,'<a href="#" class="md-cite" data-mid="$1">[$1]</a>');
+  x=x.replace(/\\[(\\d+)\\]/g,function(_,n){ return _meetingIds.has(parseInt(n,10))?'<a href="#" class="md-cite" data-mid="'+n+'">['+n+']</a>':'['+n+']'; });
   return x;
 }
 function mdToHtml(t){
@@ -2063,7 +2225,7 @@ async function loadLive(){
 }
 function renderTranscript(s, segs){
   const c=document.getElementById('mt-transcript');
-  if(!segs.length){ if(_segCount!==0){_segCount=0;c.innerHTML='';} if(!c.innerHTML)c.innerHTML='<div class="text-xs text-white/20">Esperando voz\\u2026</div>'; return; }
+  if(!segs.length){ if(_segCount!==0){_segCount=0;c.innerHTML='';} if(!c.innerHTML)c.innerHTML='<div class="text-xs text-white/45">Esperando voz\\u2026</div>'; return; }
   if(segs.length<_segCount){ c.innerHTML=''; _segCount=0; }
   if(_segCount===0)c.innerHTML='';
   for(let i=_segCount;i<segs.length;i++){ const sg=segs[i]; const col=sg.speaker==='Yo'?'text-purple-300':'text-sky-300';
@@ -2076,7 +2238,7 @@ function fcl(id){ if(id==null)return''; if(_seen.has(id))return''; _seen.add(id)
 function renderInsights(ins){
   const el=document.getElementById('mt-insights');
   const T=ins.temas||[],P=ins.pendientes||[],R=(ins.propuestas||[]).filter(p=>(p.confianza||'alta')==='alta'),C=ins.citas||[];
-  if(!T.length&&!P.length&&!R.length&&!C.length){ el.innerHTML='<div class="text-xs text-white/20">Temas, pendientes, propuestas y próximas reuniones.</div>'; return; }
+  if(!T.length&&!P.length&&!R.length&&!C.length){ el.innerHTML='<div class="text-xs text-white/45">Temas, pendientes, propuestas y próximas reuniones.</div>'; return; }
   let h='';
   if(T.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-white/30 mb-1">Temas</div>'+T.map(t=>'<div class="text-xs text-white/75 mb-0.5'+fcl(t.id)+'">\\u2022 '+esc(t.text!=null?t.text:t)+'</div>').join('')+'</div>';
   if(P.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-amber-300/50 mb-1">Pendientes</div>'+P.map(p=>'<div class="text-xs text-white/75 mb-0.5'+fcl(p.id)+'">\\u2610 '+esc(p.texto||'')+pendMeta(p)+'</div>').join('')+'</div>';
@@ -2098,17 +2260,19 @@ function renderActa(m){ document.getElementById('mt-acta-body').innerHTML=actaHt
 
 async function startMeeting(){ _seen=new Set(); _segCount=0; _actaShown=false;
   document.getElementById('mt-acta').classList.add('hidden'); document.getElementById('mt-transcript').innerHTML='';
+  const btn=document.getElementById('mt-start'); btn.disabled=true;
   try{ const r=await fetch('/api/meeting/start',{method:'POST'}); const d=await r.json();
-    if(!d.ok){ document.getElementById('mt-status').textContent=d.error||'No se pudo iniciar.'; return; }
-    await loadLive(); startPoll(); }catch(e){} }
+    if(!d.ok){ document.getElementById('mt-status').textContent=d.error||'No se pudo iniciar.'; mtoast(d.error||'No se pudo iniciar.','err'); return; }
+    await loadLive(); startPoll(); }catch(e){ mtoast('Error de red al iniciar.','err'); }finally{ btn.disabled=false; } }
 async function stopMeeting(){ document.getElementById('mt-status').textContent='Terminando y generando el acta\\u2026';
+  const btn=document.getElementById('mt-stop'); btn.disabled=true;
   try{ const r=await fetch('/api/meeting/stop',{method:'POST'}); const d=await r.json(); await loadLive();
-    renderActa(d.minutes); _actaShown=true; loadHistory(); }catch(e){} }
+    renderActa(d.minutes); _actaShown=true; loadHistory(); }catch(e){ mtoast('Error de red al terminar.','err'); }finally{ btn.disabled=false; } }
 function startPoll(){ if(_poll)return; _poll=setInterval(loadLive,1500); }
 
 async function loadHistory(){
   try{ const r=await fetch('/api/meetings'); const d=await r.json(); const el=document.getElementById('mt-history');
-    const ms=d.meetings||[]; if(!ms.length){ el.innerHTML='<div class="text-xs text-white/20">Aún no hay reuniones guardadas.</div>'; return; }
+    const ms=d.meetings||[]; _meetingIds=new Set(ms.map(m=>m.id)); if(!ms.length){ el.innerHTML='<div class="text-xs text-white/45">Aún no hay reuniones guardadas.</div>'; return; }
     el.innerHTML=ms.map(m=>{ const dur=Math.round((m.duration_seconds||0)/60);
       return '<div class="glass rounded-lg px-3 py-2 flex items-center gap-2 hover:bg-white/[0.04]">'
         +'<span class="text-xs text-white/70 flex-1 cursor-pointer" onclick="openMeeting('+m.id+')">'+esc(m.started_at||m.created_at||'')+'</span>'
@@ -2207,15 +2371,15 @@ async function openMeeting(id){
     _renderTimeline(m.chapters||[], id, v);
   }catch(e){ v.innerHTML='<div class="text-xs text-red-300">No se pudo cargar.</div>'; } }
 async function openFolder(){ try{ const r=await fetch('/api/meetings/open-folder',{method:'POST'}); const d=await r.json();
-  if(!d.ok) alert('No se pudo abrir la carpeta: '+(d.error||'')+'\\n'+(d.path||'')); }catch(e){} }
+  if(!d.ok) mtoast('No se pudo abrir la carpeta: '+(d.error||d.path||''),'err'); }catch(e){ mtoast('No se pudo abrir la carpeta.','err'); } }
 async function exportAll(){ try{ const r=await fetch('/api/meetings/export',{method:'POST'}); const d=await r.json();
-  alert(d.ok?('Exportadas '+d.exported+' reuniones a:\\n'+d.path):'Error al exportar'); }catch(e){} }
+  mtoast(d.ok?('Exportadas '+d.exported+' reuniones a: '+d.path):'Error al exportar', d.ok?'ok':'err'); }catch(e){ mtoast('Error al exportar.','err'); } }
 async function delMeeting(id){ if(!confirm('¿Eliminar esta reunión? No se puede deshacer.'))return;
   try{ await fetch('/api/meetings/'+id+'/delete',{method:'POST'});
     document.getElementById('mt-viewer').classList.add('hidden'); loadHistory(); }catch(e){} }
 async function clearAll(){ if(!confirm('¿Eliminar TODAS las reuniones del historial? No se puede deshacer.'))return;
   try{ const r=await fetch('/api/meetings/clear',{method:'POST'}); const d=await r.json();
-    document.getElementById('mt-viewer').classList.add('hidden'); loadHistory(); alert('Eliminadas '+(d.deleted||0)+' reuniones.'); }catch(e){} }
+    document.getElementById('mt-viewer').classList.add('hidden'); loadHistory(); mtoast('Eliminadas '+(d.deleted||0)+' reuniones.','ok'); }catch(e){ mtoast('Error al limpiar el historial.','err'); } }
 
 // Búsqueda FTS
 let _searchTimer=null;
@@ -2232,7 +2396,7 @@ async function runSearch(q){
   try{
     const r=await fetch('/api/meetings/search?q='+encodeURIComponent(q));
     const d=await r.json(); const res=d.results||[];
-    if(!res.length){ el.innerHTML='<div class="text-xs text-white/20">Sin resultados para \\u201c'+esc(q)+'\\u201d.</div>'; return; }
+    if(!res.length){ el.innerHTML='<div class="text-xs text-white/45">Sin resultados para \\u201c'+esc(q)+'\\u201d.</div>'; return; }
     el.innerHTML=res.map(m=>{
       const dateStr=document.createElement('div'); dateStr.textContent=m.started_at||'';
       return '<div class="glass rounded-lg px-3 py-2 hover:bg-white/[0.04] cursor-pointer" onclick="openMeeting('+m.id+')">'
@@ -2320,8 +2484,8 @@ async function asstSend(text){
   asstHistory.push({role:'user',content:msg});
   const reasonChk=document.getElementById('asst-reason');
   const reasoningVal=reasonChk&&reasonChk.checked?true:'auto';
-  const placeholder=asstAddMsg('assistant','<span class="text-white/30 italic">El asistente est\\u00e1 pensando\\u2026</span>');
-  document.getElementById('asst-send').disabled=true;
+  const placeholder=asstAddMsg('assistant','<span class="text-white/45 italic">El asistente est\\u00e1 pensando\\u2026</span>');
+  const sendBtn=document.getElementById('asst-send'); sendBtn.disabled=true;
   try{
     const res=await fetch('/api/meetings/chat',{
       method:'POST',
@@ -2364,7 +2528,7 @@ async function asstSend(text){
     if(!a) return;
     e.preventDefault();
     const mid=parseInt(a.dataset.mid,10);
-    if(!isNaN(mid)){
+    if(!isNaN(mid) && _meetingIds.has(mid)){
       openMeeting(mid);
       const v=document.getElementById('mt-viewer');
       if(v) v.scrollIntoView({behavior:'smooth',block:'start'});
