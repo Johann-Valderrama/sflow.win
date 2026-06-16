@@ -237,8 +237,6 @@ HTML_TEMPLATE = """
         .dict-budget-bar-fill { height: 100%; border-radius: 2px; background: rgba(140,80,220,0.6); transition: width 0.3s; }
         .dict-add-from-history { position: fixed; background: #1a1a1a; border: 1px solid rgba(140,80,220,0.5); border-radius: 8px; padding: 6px 12px; font-size: 12px; color: #c4b5fd; cursor: pointer; z-index: 200; box-shadow: 0 4px 16px rgba(0,0,0,0.4); display: none; }
         .dict-add-from-history:hover { background: rgba(140,80,220,0.2); }
-        /* Checkbox de pendientes dibujado con CSS (evita el tofu de U+2610 ausente en Inter) */
-        .chk { display: inline-block; width: .72em; height: .72em; border: 1.5px solid currentColor; border-radius: 3px; vertical-align: -1px; margin-right: .15em; opacity: .7; }
         /* Iconos SVG inline: tamaño/alineación uniforme, heredan color del texto */
         svg.ic { width: 1em; height: 1em; display: inline-block; vertical-align: -0.125em; flex-shrink: 0; }
     </style>
@@ -712,6 +710,7 @@ HTML_TEMPLATE = """
             play: _ic('<polygon points="6 4 20 12 6 20 6 4" fill="currentColor" stroke="none"/>'),
             mic: _ic('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>'),
             chevronDown: _ic('<polyline points="6 9 12 15 18 9"/>'),
+            arrow: _ic('<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>'),
             download: _ic('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'),
             upload: _ic('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>'),
             stop: _ic('<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>'),
@@ -1425,7 +1424,7 @@ HTML_TEMPLATE = """
                     + pend.length + ' pendientes · ' + prop.length + ' propuestas</div>';
                 if (pend.length) {
                     fhtml += pend.map(p => {
-                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '"><span class="chk"></span> ' + escapeHtml(String(p.texto || '')) + pendMeta(p) + '</div>';
+                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">'+ICONS.arrow+' ' + escapeHtml(String(p.texto || '')) + pendMeta(p) + '</div>';
                     }).join('');
                 } else {
                     fhtml += '<div class="text-[11px] text-white/50">Sin pendientes detectados aún.</div>';
@@ -1442,7 +1441,7 @@ HTML_TEMPLATE = """
             if (pend.length) {
                 html += '<div><div class="text-[11px] uppercase tracking-wide text-amber-300/50 mb-1">Pendientes</div>'
                     + pend.map(p => {
-                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '"><span class="chk"></span> ' + escapeHtml(String(p.texto || '')) + pendMeta(p) + '</div>';
+                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">'+ICONS.arrow+' ' + escapeHtml(String(p.texto || '')) + pendMeta(p) + '</div>';
                     }).join('') + '</div>';
             }
             if (prop.length) {
@@ -1472,7 +1471,7 @@ HTML_TEMPLATE = """
             if (dec.length) html += '<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'
                 + dec.map(d => '<div class="text-xs text-white/75">• ' + escapeHtml(String(d)) + '</div>').join('') + '</div>';
             if (pen.length) html += '<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'
-                + pen.map(p => '<div class="text-xs text-white/75"><span class="chk"></span> ' + escapeHtml(String(p.texto || p)) + pendMeta(p) + '</div>').join('') + '</div>';
+                + pen.map(p => '<div class="text-xs text-white/75">'+ICONS.arrow+' ' + escapeHtml(String(p.texto || p)) + pendMeta(p) + '</div>').join('') + '</div>';
             if (prop.length) html += '<div><div class="text-xs text-sky-300/50 mt-2 mb-1">Propuestas</div>'
                 + prop.map(p => '<div class="text-xs text-white/75">'+ICONS.bulb+' ' + escapeHtml(String(p.texto != null ? p.texto : p)) + '</div>').join('') + '</div>';
             if (cit.length) html += '<div><div class="text-xs text-emerald-300/50 mt-2 mb-1">Próximas reuniones</div>'
@@ -2133,7 +2132,6 @@ MEETING_PAGE = """<!DOCTYPE html>
   #asst-messages .md-h{font-weight:600;margin:.3rem 0 .15rem;}
   #asst-messages .md-p{margin:.15rem 0;}
   #asst-messages .md-cite{color:#c4b5fd;text-decoration:underline;cursor:pointer;font-size:.92em;}
-  .chk{display:inline-block;width:.72em;height:.72em;border:1.5px solid currentColor;border-radius:3px;vertical-align:-1px;margin-right:.15em;opacity:.7}
   svg.ic{width:1em;height:1em;display:inline-block;vertical-align:-0.125em;flex-shrink:0}
   @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important;}}
 </style></head>
@@ -2226,6 +2224,7 @@ const ICONS = {
   bulb: _ic('<path d="M9 18h6M10 22h4M15 14c.2-1 .7-1.7 1.4-2.5A4.6 4.6 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.8.8 1.2 1.5 1.4 2.5"/>'),
   calendar: _ic('<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'),
   trash: _ic('<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
+  arrow: _ic('<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>'),
 };
 function _fillIcons(root){(root||document).querySelectorAll('[data-icon]').forEach(el=>{const i=ICONS[el.dataset.icon];if(i&&!el.querySelector('svg.ic')){const hasText=el.textContent.trim().length>0;el.insertAdjacentHTML('afterbegin', i+(hasText?' ':''));}});}
 function esc(s){ const d=document.createElement('div'); d.textContent = (s==null?'':String(s)); return d.innerHTML; }
@@ -2298,7 +2297,7 @@ function renderInsights(ins){
   if(!T.length&&!P.length&&!R.length&&!C.length){ el.innerHTML='<div class="text-xs text-white/45">Temas, pendientes, propuestas y próximas reuniones.</div>'; return; }
   let h='';
   if(T.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-white/30 mb-1">Temas</div>'+T.map(t=>'<div class="text-xs text-white/75 mb-0.5'+fcl(t.id)+'">\\u2022 '+esc(t.text!=null?t.text:t)+'</div>').join('')+'</div>';
-  if(P.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-amber-300/50 mb-1">Pendientes</div>'+P.map(p=>'<div class="text-xs text-white/75 mb-0.5'+fcl(p.id)+'"><span class="chk"></span> '+esc(p.texto||'')+pendMeta(p)+'</div>').join('')+'</div>';
+  if(P.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-amber-300/50 mb-1">Pendientes</div>'+P.map(p=>'<div class="text-xs text-white/75 mb-0.5'+fcl(p.id)+'">'+ICONS.arrow+' '+esc(p.texto||'')+pendMeta(p)+'</div>').join('')+'</div>';
   if(R.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-sky-300/50 mb-1">Propuestas</div>'+R.map(p=>'<div class="text-xs text-white/75 mb-0.5'+fcl(p.id)+'">'+ICONS.bulb+' '+esc(p.texto||'')+'</div>').join('')+'</div>';
   if(C.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-emerald-300/50 mb-1">Próximas reuniones</div>'+C.map(c=>'<div class="text-xs text-white/75 mb-0.5'+fcl(c.id)+'">'+ICONS.calendar+' '+esc(c.texto||'')+pendMeta({fecha:c.fecha,hora:c.hora})+'</div>').join('')+'</div>';
   el.innerHTML=h;
@@ -2307,7 +2306,7 @@ function actaHtml(m){
   m=m||{}; const dec=m.decisiones||[],tem=m.temas||[],pen=m.pendientes||[],pro=m.propuestas||[],cit=m.citas||[]; let h='';
   if(m.resumen)h+='<p class="text-white/80">'+esc(m.resumen)+'</p>';
   if(dec.length)h+='<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'+dec.map(d=>'<div class="text-xs text-white/75">\\u2022 '+esc(d)+'</div>').join('')+'</div>';
-  if(pen.length)h+='<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'+pen.map(p=>'<div class="text-xs text-white/75"><span class="chk"></span> '+esc(p.texto||p)+pendMeta(p)+'</div>').join('')+'</div>';
+  if(pen.length)h+='<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'+pen.map(p=>'<div class="text-xs text-white/75">'+ICONS.arrow+' '+esc(p.texto||p)+pendMeta(p)+'</div>').join('')+'</div>';
   if(pro.length)h+='<div><div class="text-xs text-sky-300/50 mt-2 mb-1">Propuestas</div>'+pro.map(p=>'<div class="text-xs text-white/75">'+ICONS.bulb+' '+esc(p.texto!=null?p.texto:p)+'</div>').join('')+'</div>';
   if(cit.length)h+='<div><div class="text-xs text-emerald-300/50 mt-2 mb-1">Próximas reuniones</div>'+cit.map(c=>'<div class="text-xs text-white/75">'+ICONS.calendar+' '+esc(c.texto||c)+pendMeta({fecha:c.fecha,hora:c.hora})+'</div>').join('')+'</div>';
   if(tem.length)h+='<div><div class="text-xs text-white/40 mt-2 mb-1">Temas tratados</div>'+tem.map(t=>'<div class="text-xs text-white/75">\\u2022 '+esc(t)+'</div>').join('')+'</div>';
