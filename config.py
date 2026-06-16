@@ -42,6 +42,17 @@ if not os.getenv("GROQ_API_KEY") and os.getenv("GROQ_API_KEY_ENC"):
         import logging as _logging
         _logging.getLogger(__name__).warning("config: no se pudo descifrar GROQ_API_KEY_ENC — %s", _e)
 
+# Igual para OPENROUTER_API_KEY (acta / Asistente de reuniones con backend OpenRouter).
+if not os.getenv("OPENROUTER_API_KEY") and os.getenv("OPENROUTER_API_KEY_ENC"):
+    try:
+        from core.secrets import decrypt as _dpapi_decrypt
+        _plain = _dpapi_decrypt(os.getenv("OPENROUTER_API_KEY_ENC"))
+        if _plain:
+            os.environ["OPENROUTER_API_KEY"] = _plain
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("config: no se pudo descifrar OPENROUTER_API_KEY_ENC — %s", _e)
+
 # Versión de la aplicación
 APP_VERSION = "1.0.0"
 

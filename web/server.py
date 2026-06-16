@@ -595,7 +595,36 @@ HTML_TEMPLATE = """
                     <p class="text-xs text-white/55 mt-1">Requiere LM Studio abierto con el servidor local activo (localhost:1234). Probados: <span class="text-white/55">qwen/qwen2.5-vl-7b</span> (calidad, ~40s) · <span class="text-white/55">llama-3.2-3b-instruct</span> (rápido, ~15s). Si LM Studio está cerrado, la reunión sigue transcribiendo pero sin análisis.</p>
                 </div>
                 <div id="cfg-insights-openrouter-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
-                    <p class="text-xs text-white/40">La key va en <code class="text-white/60">.env</code> como <code class="text-white/60">OPENROUTER_API_KEY</code>. Consíguela en <span class="text-white/50">openrouter.ai/keys</span>. Modelo configurable con <code class="text-white/60">OPENROUTER_MODEL</code> (default: <span class="text-white/50">google/gemini-3-flash</span>).</p>
+                    <p class="text-xs text-white/55">Pon tu key abajo en <strong>API Keys</strong> (se guarda cifrada en este equipo). Consíguela en <span class="text-white/70">openrouter.ai/keys</span>. Modelo configurable con <code class="text-white/70">OPENROUTER_MODEL</code> (default: <span class="text-white/70">google/gemini-3-flash</span>).</p>
+                </div>
+            </div>
+
+            <!-- API Keys (colapsable) -->
+            <div class="mt-4 pt-4 border-t border-white/[0.06]">
+                <button type="button" onclick="toggleApiKeys()" aria-expanded="false" aria-controls="api-keys-body"
+                    class="flex items-center justify-between w-full text-left text-sm font-medium text-white/60 hover:text-white/80 focus:outline-none focus:ring-2 focus:ring-purple-500/60 rounded">
+                    <span>API Keys</span>
+                    <svg id="api-keys-chevron" class="ic" style="transition:transform .2s" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                <div id="api-keys-body" class="hidden mt-3 space-y-3">
+                    <p class="text-xs text-white/55">Se guardan <strong>cifradas (DPAPI)</strong> solo en este equipo y no se incluyen al empaquetar. El modelo local no necesita llave.</p>
+                    <div>
+                        <label for="cfg-groq-key" class="text-xs text-white/55 block mb-1">Groq API Key <span id="groq-key-status" class="ml-1 text-xs text-white/45"></span></label>
+                        <div class="flex gap-2">
+                            <input type="password" id="cfg-groq-key" placeholder="gsk_…" autocomplete="off"
+                                class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/45 flex-1">
+                            <button type="button" onclick="saveApiKey('groq')" class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 focus:outline-none focus:ring-2 focus:ring-purple-500/60 whitespace-nowrap">Guardar</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label for="cfg-openrouter-key" class="text-xs text-white/55 block mb-1">OpenRouter API Key <span id="openrouter-key-status" class="ml-1 text-xs text-white/45"></span></label>
+                        <div class="flex gap-2">
+                            <input type="password" id="cfg-openrouter-key" placeholder="sk-or-…" autocomplete="off"
+                                class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/45 flex-1">
+                            <button type="button" onclick="saveApiKey('openrouter')" class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 focus:outline-none focus:ring-2 focus:ring-purple-500/60 whitespace-nowrap">Guardar</button>
+                        </div>
+                    </div>
+                    <div id="api-keys-feedback" class="text-xs hidden" aria-live="polite"></div>
                 </div>
             </div>
 
@@ -1201,6 +1230,57 @@ HTML_TEMPLATE = """
             const saved = document.getElementById('cfg-saved');
             saved.style.opacity = '1';
             setTimeout(() => { saved.style.opacity = '0'; }, 2000);
+        }
+
+        // --- API Keys (cifradas con DPAPI por equipo) ---
+        function toggleApiKeys() {
+            const body = document.getElementById('api-keys-body');
+            const chev = document.getElementById('api-keys-chevron');
+            const btn = document.querySelector('[aria-controls="api-keys-body"]');
+            const open = body.classList.toggle('hidden') === false;
+            if (chev) chev.style.transform = open ? 'rotate(180deg)' : '';
+            if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+            if (open) loadApiKeyStatus();
+        }
+
+        async function loadApiKeyStatus() {
+            try {
+                const s = await fetch('/api/keys').then(r => r.json());
+                const set = (id, ok) => {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    el.textContent = ok ? '· configurada ✓' : '· no configurada';
+                    el.className = 'ml-1 text-xs ' + (ok ? 'text-emerald-400/90' : 'text-white/45');
+                };
+                set('groq-key-status', s.groq);
+                set('openrouter-key-status', s.openrouter);
+            } catch (e) {}
+        }
+
+        async function saveApiKey(provider) {
+            const input = document.getElementById('cfg-' + provider + '-key');
+            const fb = document.getElementById('api-keys-feedback');
+            const val = (input.value || '').trim();
+            if (!val) { toast('Pega la API key primero', 'err'); input.focus(); return; }
+            try {
+                const res = await fetch('/api/keys', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({[provider]: val}),
+                });
+                const d = await res.json();
+                if (!res.ok || d.error) { toast(d.error || 'No se pudo guardar la API key', 'err'); return; }
+                input.value = '';
+                if (fb) {
+                    fb.classList.remove('hidden');
+                    fb.style.color = '#4ade80';
+                    fb.textContent = 'Guardada y cifrada en este equipo ✓';
+                    setTimeout(() => fb.classList.add('hidden'), 4000);
+                }
+                loadApiKeyStatus();
+            } catch (ex) {
+                toast('Error de red al guardar la API key', 'err');
+            }
         }
 
         // --- Backend local ---
@@ -2682,6 +2762,58 @@ def _set_env_key(key: str, value: str):
     os.makedirs(APP_DATA_DIR, exist_ok=True)
     set_key(_ENV_PATH, key, value)
     os.environ[key] = value
+
+
+# Proveedores cuya API key se guarda cifrada (DPAPI) por equipo, como <ENVVAR>_ENC.
+_SECRET_KEYS = {
+    "groq": "GROQ_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+}
+
+
+def _save_secret_key(provider: str, value: str) -> bool:
+    """Cifra (DPAPI) y persiste una API key como <ENVVAR>_ENC en el .env del usuario,
+    elimina cualquier resto en texto plano, y la activa en el proceso actual (sin reiniciar).
+    Devuelve True si se guardó."""
+    env_var = _SECRET_KEYS.get(provider)
+    value = (value or "").strip()
+    if not env_var or not value:
+        return False
+    os.makedirs(APP_DATA_DIR, exist_ok=True)
+    try:
+        from core.secrets import encrypt as _dpapi_encrypt
+        set_key(_ENV_PATH, env_var + "_ENC", _dpapi_encrypt(value))
+        try:  # quitar cualquier valor en texto plano que hubiera quedado
+            from dotenv import unset_key as _unset
+            _unset(_ENV_PATH, env_var)
+        except Exception:
+            pass
+    except Exception:
+        # Fallback (p.ej. plataforma sin DPAPI): guardar en claro como último recurso.
+        set_key(_ENV_PATH, env_var, value)
+    os.environ[env_var] = value
+    return True
+
+
+@app.route("/api/keys")
+def get_api_keys():
+    """Estado de cada API key (configurada o no), sin exponer nunca el valor."""
+    return jsonify({p: bool(os.getenv(env, "").strip()) for p, env in _SECRET_KEYS.items()})
+
+
+@app.route("/api/keys", methods=["POST"])
+def set_api_keys():
+    """Guarda una o varias API keys cifradas. Body JSON: {groq?: "...", openrouter?: "..."}."""
+    data = request.get_json(silent=True) or {}
+    saved = []
+    for provider in _SECRET_KEYS:
+        val = data.get(provider)
+        if isinstance(val, str) and val.strip() and _save_secret_key(provider, val):
+            saved.append(provider)
+    if not saved:
+        return jsonify({"error": "No se recibió ninguna API key válida."}), 400
+    status = {p: bool(os.getenv(env, "").strip()) for p, env in _SECRET_KEYS.items()}
+    return jsonify({"ok": True, "saved": saved, "status": status})
 
 
 @app.route("/api/settings")
