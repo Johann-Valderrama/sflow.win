@@ -41,7 +41,6 @@ pagina sales p2
 
 pagina business [Business - AI Meeting Agent to Empower Teams | Proactor.ai](https://proactor.ai/es/business/)
 
-
 ![590e1c5d-daa7-4e04-bb56-9c09173b27ab](file:///C:/Users/OswyDesktop.0/Pictures/Typedown/590e1c5d-daa7-4e04-bb56-9c09173b27ab.png)
 
 ![decd59ca-aa74-41a3-9560-e9092b126708](file:///C:/Users/OswyDesktop.0/Pictures/Typedown/decd59ca-aa74-41a3-9560-e9092b126708.png)
@@ -54,7 +53,6 @@ pagina business [Business - AI Meeting Agent to Empower Teams | Proactor.ai](htt
 
 pagina educación [AI Learning Partner for School &amp; Students | Proactor.ai](https://proactor.ai/es/education/)
 
-
 ![cb5a79bd-f3e4-49c5-826c-4e247e3f9467](file:///C:/Users/OswyDesktop.0/Pictures/Typedown/cb5a79bd-f3e4-49c5-826c-4e247e3f9467.png)
 
 
@@ -62,7 +60,6 @@ pagina educación [AI Learning Partner for School &amp; Students | Proactor.ai](
 ![cdf91eef-b708-4378-9319-264c0d956fd8](file:///C:/Users/OswyDesktop.0/Pictures/Typedown/cdf91eef-b708-4378-9319-264c0d956fd8.png)
 
 ![05cfc609-dc58-4eb3-9237-ffd745ef316c](file:///C:/Users/OswyDesktop.0/Pictures/Typedown/05cfc609-dc58-4eb3-9237-ffd745ef316c.png)
-
 
 
 
