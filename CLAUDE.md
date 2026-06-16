@@ -99,7 +99,8 @@ vflow/
 ├── db/
 │   └── database.py         # SQLite CRUD
 ├── web/
-│   └── server.py           # Flask dashboard at localhost:5678 (auto-finds free port)
+│   ├── server.py           # Flask dashboard at localhost:5678 (auto-finds free port)
+│   └── static/vendor/      # Assets auto-hospedados (tailwind.js Play + inter-variable.woff2) → dashboard offline, sin CDN
 ├── logo.png                # Brand logo (full size)
 ├── logo_small.png          # Brand logo (22x22 for tray + pill)
 ├── requirements.txt

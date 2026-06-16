@@ -110,6 +110,10 @@ LOGO_SIZE = 22
 # Logo path (read-only bundled asset)
 LOGO_PATH = os.path.join(_RESOURCE_DIR, "logo_small.png")
 
+# Assets web auto-hospedados (Tailwind Play + fuente Inter) — read-only bundled.
+# En dev = <proyecto>/web/static; en bundle = %_MEIPASS%/web/static (ver vflow.spec).
+WEB_STATIC_DIR = os.path.join(_RESOURCE_DIR, "web", "static")
+
 # Audio Visualizer
 NUM_BARS = 20
 VIZ_FPS = 60

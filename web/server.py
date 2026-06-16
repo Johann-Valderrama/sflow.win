@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from flask import Flask, jsonify, render_template_string, request, send_file
 from dotenv import set_key
 from db.database import TranscriptionDB
-from config import APP_DATA_DIR, MEETINGS_DIR
+from config import APP_DATA_DIR, MEETINGS_DIR, WEB_STATIC_DIR
 from core import dictionary as _dictionary
 from core.meeting import MEETING
 from core import meeting_export as _meeting_export
@@ -131,7 +131,7 @@ def _start_url_queue_worker() -> None:
     t.start()
 
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder=WEB_STATIC_DIR, static_url_path="/static")
 app.config["JSON_AS_ASCII"] = False
 app.config["SECRET_KEY"] = secrets.token_hex(32)
 
@@ -145,10 +145,16 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vflow - Transcripciones</title>
-    <!-- NOTE: Tailwind loaded from CDN. Accepted risk: app is local-only, dashboard on localhost. -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind Play y fuente Inter auto-hospedados (web/static/vendor/) para funcionar sin internet. -->
+    <script src="/static/vendor/tailwind.js"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+        @font-face {
+            font-family: 'Inter';
+            font-style: normal;
+            font-weight: 300 600;
+            font-display: swap;
+            src: url('/static/vendor/inter-variable.woff2') format('woff2');
+        }
         body { font-family: 'Inter', system-ui, sans-serif; background: #0a0a0a; color: #e5e5e5; }
         .glass { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); }
         /* Entrada suave de nuevos segmentos/insights del modo reunión (anti-parpadeo) */
@@ -2111,8 +2117,9 @@ MEETING_PAGE = """<!DOCTYPE html>
 <html lang="es"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vflow — Reunión</title>
-<script src="https://cdn.tailwindcss.com"></script>
+<script src="/static/vendor/tailwind.js"></script>
 <style>
+  @font-face { font-family:'Inter'; font-style:normal; font-weight:300 600; font-display:swap; src:url('/static/vendor/inter-variable.woff2') format('woff2'); }
   body { background:#0a0a0f; color:#e5e7eb; font-family:Inter,system-ui,sans-serif; }
   .glass { background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); }
   .mt-fade { animation:mtFade .25s ease-out; }

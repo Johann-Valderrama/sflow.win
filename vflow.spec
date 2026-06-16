@@ -28,6 +28,9 @@ ort_datas, ort_binaries, ort_hidden = collect_all('onnxruntime')
 datas = [
     ('logo_small.png', '.'),
     ('logo.png', '.'),
+    # Assets web auto-hospedados (Tailwind Play + fuente Inter) para funcionar offline.
+    # Se montan en %_MEIPASS%/web/static; config.WEB_STATIC_DIR apunta ahí en bundle.
+    ('web/static', 'web/static'),
 ]
 datas += sounddevice_datas
 datas += ct2_datas
