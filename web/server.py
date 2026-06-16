@@ -239,6 +239,22 @@ HTML_TEMPLATE = """
         .dict-add-from-history:hover { background: rgba(140,80,220,0.2); }
         /* Iconos SVG inline: tamaño/alineación uniforme, heredan color del texto */
         svg.ic { width: 1em; height: 1em; display: inline-block; vertical-align: -0.125em; flex-shrink: 0; }
+        /* Acordeón del panel de Configuración */
+        .set-nav { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
+        .set-chip { display: inline-flex; align-items: center; gap: .35rem; font-size: 11px; padding: .25rem .65rem; border-radius: 9999px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1); color: rgba(255,255,255,.7); cursor: pointer; }
+        .set-chip:hover { background: rgba(255,255,255,.1); color: rgba(255,255,255,.92); }
+        .set-chip-x { margin-left: auto; font-size: 11px; padding: .25rem .65rem; border-radius: 9999px; background: transparent; border: 1px solid rgba(255,255,255,.1); color: rgba(255,255,255,.5); cursor: pointer; }
+        .set-chip-x:hover { color: rgba(255,255,255,.85); background: rgba(255,255,255,.05); }
+        .set-dot { width: .5rem; height: .5rem; border-radius: 9999px; display: inline-block; flex-shrink: 0; }
+        .set-sec { border: 1px solid rgba(255,255,255,.07); border-left: 3px solid var(--sec-accent, rgba(140,80,220,.55)); border-radius: .6rem; background: rgba(255,255,255,.02); margin-bottom: .6rem; }
+        .set-sec-head { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: .7rem .9rem; background: none; border: none; cursor: pointer; text-align: left; border-radius: .6rem; }
+        .set-sec-head:hover { background: rgba(255,255,255,.03); }
+        .set-sec-title { display: flex; align-items: center; gap: .5rem; font-size: 13px; font-weight: 500; color: rgba(255,255,255,.82); }
+        .set-sec-toggle { font-size: 11px; color: rgba(255,255,255,.45); }
+        .set-sec-chev { transition: transform .2s; opacity: .55; }
+        .set-sec-body { padding: 0 .9rem .9rem; }
+        .set-sec.collapsed .set-sec-body { display: none; }
+        .set-sec.collapsed .set-sec-chev { transform: rotate(-90deg); }
     </style>
 </head>
 <body class="min-h-screen p-6">
@@ -441,45 +457,124 @@ HTML_TEMPLATE = """
         <!-- Settings panel -->
         <div id="settings-panel" class="glass rounded-xl p-5 mb-6 hidden">
             <div class="text-sm font-medium text-white/60 mb-4">Configuración</div>
-            <div class="grid gap-4" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))">
-                <div>
-                    <label for="cfg-language" class="text-xs text-white/55 block mb-1">Idioma de transcripción</label>
-                    <select id="cfg-language" class="cfg-select">
-                        <option value="es">Español</option>
-                        <option value="en">English</option>
-                        <option value="fr">Français</option>
-                        <option value="de">Deutsch</option>
-                        <option value="it">Italiano</option>
-                        <option value="pt">Português</option>
-                        <option value="ja">日本語</option>
-                        <option value="zh">中文</option>
-                        <option value="auto">Auto-detectar (mayor costo)</option>
-                    </select>
+
+            <!-- Navegación de secciones -->
+            <div class="set-nav">
+                <span class="text-xs text-white/45 mr-1">Ir a:</span>
+                <button type="button" class="set-chip" onclick="setNavGo('transcripcion')"><span class="set-dot" style="background:rgba(140,80,220,.85)"></span>Transcripción</button>
+                <button type="button" class="set-chip" onclick="setNavGo('sonidos')"><span class="set-dot" style="background:rgba(56,189,248,.85)"></span>Sonidos</button>
+                <button type="button" class="set-chip" onclick="setNavGo('historial')"><span class="set-dot" style="background:rgba(52,211,153,.85)"></span>Historial</button>
+                <button type="button" class="set-chip" onclick="setNavGo('reuniones')"><span class="set-dot" style="background:rgba(167,139,250,.85)"></span>Reuniones</button>
+                <button type="button" class="set-chip" onclick="setNavGo('apikeys')"><span class="set-dot" style="background:rgba(251,191,36,.85)"></span>API Keys</button>
+                <button type="button" id="set-collapse-all" class="set-chip-x" onclick="setCollapseAll()">Comprimir todo</button>
+            </div>
+
+            <!-- Sección: Transcripción -->
+            <div class="set-sec" id="sec-transcripcion" style="--sec-accent:rgba(140,80,220,.6)">
+                <button type="button" class="set-sec-head" onclick="toggleSetSec('transcripcion')" aria-expanded="true" aria-controls="sec-transcripcion-body">
+                    <span class="set-sec-title"><svg class="set-sec-chev ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span class="set-dot" style="background:rgba(140,80,220,.85)"></span>Transcripción</span>
+                    <span class="set-sec-toggle"><span class="set-sec-toggle-label">Ocultar</span></span>
+                </button>
+                <div id="sec-transcripcion-body" class="set-sec-body">
+                    <div class="grid gap-4" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))">
+                        <div>
+                            <label for="cfg-language" class="text-xs text-white/55 block mb-1">Idioma de transcripción</label>
+                            <select id="cfg-language" class="cfg-select">
+                                <option value="es">Español</option>
+                                <option value="en">English</option>
+                                <option value="fr">Français</option>
+                                <option value="de">Deutsch</option>
+                                <option value="it">Italiano</option>
+                                <option value="pt">Português</option>
+                                <option value="ja">日本語</option>
+                                <option value="zh">中文</option>
+                                <option value="auto">Auto-detectar (mayor costo)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="cfg-microphone" class="text-xs text-white/55 block mb-1">Micrófono</label>
+                            <select id="cfg-microphone" class="cfg-select">
+                                <option value="">Sistema por defecto</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="cfg-translate-target" class="text-xs text-white/55 block mb-1">Idioma de salida (traducción)</label>
+                            <select id="cfg-translate-target" class="cfg-select" onchange="updateLocalTranslationNote()">
+                                <option value="en">English</option>
+                                <option value="es">Español</option>
+                                <option value="fr">Français</option>
+                                <option value="de">Deutsch</option>
+                                <option value="it">Italiano</option>
+                                <option value="pt">Português</option>
+                                <option value="ja">日本語</option>
+                                <option value="zh">中文</option>
+                                <option value="ko">한국어</option>
+                                <option value="ru">Русский</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="cfg-audio-source" class="text-xs text-white/55 block mb-1">Fuente de audio</label>
+                            <select id="cfg-audio-source" class="cfg-select">
+                                <option value="mic">Micrófono</option>
+                                <option value="system">Audio del sistema (loopback)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="cfg-backend" class="text-xs text-white/55 block mb-1">Backend de transcripción</label>
+                            <select id="cfg-backend" class="cfg-select" onchange="onBackendChange()">
+                                <option value="groq">Groq API (nube)</option>
+                                <option value="local">Local sin internet</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="cfg-local-model" class="text-xs text-white/55 block mb-1">Modelo local</label>
+                            <select id="cfg-local-model" class="cfg-select">
+                                <option value="small">small — rápido (~466 MB)</option>
+                                <option value="medium">medium — más preciso (~1.5 GB)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <!-- Sección modelo local -->
+                    <div id="local-model-section" class="mt-4 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs text-white/50" id="local-model-status-text">Verificando...</span>
+                            <button onclick="downloadModel()" id="btn-download-model"
+                                class="text-xs px-3 p-2.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-purple-500/60">
+                                Descargar modelo
+                            </button>
+                        </div>
+                        <div id="local-download-progress-wrap" class="hidden">
+                            <div class="w-full bg-white/10 rounded-full h-1.5 mt-1">
+                                <div id="local-download-bar" class="bg-purple-500 h-1.5 rounded-full transition-all" style="width:0%"></div>
+                            </div>
+                            <span class="text-xs text-white/30 mt-1 block" id="local-download-pct">0%</span>
+                        </div>
+                        <div id="local-translation-note" class="mt-2 rounded-lg px-3 py-2 text-xs flex items-start gap-2 hidden">
+                            <span class="flex-shrink-0 mt-px">ℹ️</span>
+                            <span id="local-translation-note-text"></span>
+                        </div>
+                        <div class="flex items-start gap-2 mt-3 pt-3 border-t border-white/[0.06]">
+                            <label class="toggle-switch mt-0.5">
+                                <input type="checkbox" id="cfg-groq-fallback" onchange="updateLocalTranslationNote()">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <div>
+                                <span class="text-xs text-white/50">Permitir Groq como respaldo si el modo local falla</span>
+                                <p class="text-xs text-white/55 mt-0.5">Si se activa, el audio se enviará a Groq cuando el modo local falle.</p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div>
-                    <label for="cfg-microphone" class="text-xs text-white/55 block mb-1">Micrófono</label>
-                    <select id="cfg-microphone" class="cfg-select">
-                        <option value="">Sistema por defecto</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="cfg-translate-target" class="text-xs text-white/55 block mb-1">Idioma de salida (traducción)</label>
-                    <select id="cfg-translate-target" class="cfg-select" onchange="updateLocalTranslationNote()">
-                        <option value="en">English</option>
-                        <option value="es">Español</option>
-                        <option value="fr">Français</option>
-                        <option value="de">Deutsch</option>
-                        <option value="it">Italiano</option>
-                        <option value="pt">Português</option>
-                        <option value="ja">日本語</option>
-                        <option value="zh">中文</option>
-                        <option value="ko">한국어</option>
-                        <option value="ru">Русский</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="cfg-sounds" class="text-xs text-white/55 block mb-1">Sonidos</label>
-                    <div class="flex items-center gap-2" style="height:32px">
+            </div>
+
+            <!-- Sección: Sonidos -->
+            <div class="set-sec collapsed" id="sec-sonidos" style="--sec-accent:rgba(56,189,248,.6)">
+                <button type="button" class="set-sec-head" onclick="toggleSetSec('sonidos')" aria-expanded="false" aria-controls="sec-sonidos-body">
+                    <span class="set-sec-title"><svg class="set-sec-chev ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span class="set-dot" style="background:rgba(56,189,248,.85)"></span>Sonidos</span>
+                    <span class="set-sec-toggle"><span class="set-sec-toggle-label">Mostrar</span></span>
+                </button>
+                <div id="sec-sonidos-body" class="set-sec-body">
+                    <div class="flex items-center gap-2">
                         <label class="toggle-switch">
                             <input type="checkbox" id="cfg-sounds">
                             <span class="toggle-slider"></span>
@@ -493,120 +588,84 @@ HTML_TEMPLATE = """
                         <label for="cfg-beep-volume" class="text-xs text-white/55">Volumen: <span id="cfg-beep-volume-label">2</span></label>
                     </div>
                 </div>
-                <div>
-                    <label for="cfg-save-history" class="text-xs text-white/55 block mb-1">Guardar historial</label>
-                    <div class="flex items-center gap-2" style="height:32px">
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="cfg-save-history">
-                            <span class="toggle-slider"></span>
-                        </label>
-                        <span class="text-xs text-white/55">Guardar transcripciones</span>
-                    </div>
-                </div>
-                <div>
-                    <label for="cfg-retention-days" class="text-xs text-white/55 block mb-1">Eliminar transcripciones después de (días)</label>
-                    <select id="cfg-retention-days" class="cfg-select">
-                        <option value="0">Nunca</option>
-                        <option value="7">7 días</option>
-                        <option value="30">30 días</option>
-                        <option value="90">90 días</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="cfg-audio-source" class="text-xs text-white/55 block mb-1">Fuente de audio</label>
-                    <select id="cfg-audio-source" class="cfg-select">
-                        <option value="mic">Micrófono</option>
-                        <option value="system">Audio del sistema (loopback)</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="cfg-backend" class="text-xs text-white/55 block mb-1">Backend de transcripción</label>
-                    <select id="cfg-backend" class="cfg-select" onchange="onBackendChange()">
-                        <option value="groq">Groq API (nube)</option>
-                        <option value="local">Local sin internet</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="cfg-local-model" class="text-xs text-white/55 block mb-1">Modelo local</label>
-                    <select id="cfg-local-model" class="cfg-select">
-                        <option value="small">small — rápido (~466 MB)</option>
-                        <option value="medium">medium — más preciso (~1.5 GB)</option>
-                    </select>
-                </div>
-            </div>
-            <!-- Sección modelo local -->
-            <div id="local-model-section" class="mt-4 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
-                <div class="flex items-center justify-between mb-2">
-                    <span class="text-xs text-white/50" id="local-model-status-text">Verificando...</span>
-                    <button onclick="downloadModel()" id="btn-download-model"
-                        class="text-xs px-3 p-2.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-purple-500/60">
-                        Descargar modelo
-                    </button>
-                </div>
-                <div id="local-download-progress-wrap" class="hidden">
-                    <div class="w-full bg-white/10 rounded-full h-1.5 mt-1">
-                        <div id="local-download-bar" class="bg-purple-500 h-1.5 rounded-full transition-all" style="width:0%"></div>
-                    </div>
-                    <span class="text-xs text-white/30 mt-1 block" id="local-download-pct">0%</span>
-                </div>
-                <!-- Aviso limitación de traducción (dinámico) -->
-                <div id="local-translation-note" class="mt-2 rounded-lg px-3 py-2 text-xs flex items-start gap-2 hidden">
-                    <span class="flex-shrink-0 mt-px">ℹ️</span>
-                    <span id="local-translation-note-text"></span>
-                </div>
-                <!-- Groq Fallback (solo visible cuando backend=local) -->
-                <div class="flex items-start gap-2 mt-3 pt-3 border-t border-white/[0.06]">
-                    <label class="toggle-switch mt-0.5">
-                        <input type="checkbox" id="cfg-groq-fallback" onchange="updateLocalTranslationNote()">
-                        <span class="toggle-slider"></span>
-                    </label>
-                    <div>
-                        <span class="text-xs text-white/50">Permitir Groq como respaldo si el modo local falla</span>
-                        <p class="text-xs text-white/55 mt-0.5">Si se activa, el audio se enviará a Groq cuando el modo local falle.</p>
-                    </div>
-                </div>
             </div>
 
-            <!-- Backend de análisis de reuniones (insights + acta) — POR TAREA -->
-            <div class="mt-4 pt-4 border-t border-white/[0.06]">
-                <p class="text-xs text-white/55 mb-3">El análisis en vivo necesita velocidad (Groq recomendado); acta y Asistente de reuniones admiten modelos más potentes (OpenRouter, contexto 1 M).</p>
-                <div class="flex flex-col gap-3">
-                    <div>
-                        <label for="cfg-insights-backend-live" class="text-xs text-white/55 block mb-1">Análisis en vivo</label>
-                        <select id="cfg-insights-backend-live" class="cfg-select" onchange="onInsightsBackendChange()">
-                            <option value="groq">Groq API (nube) — instantáneo, requiere internet</option>
-                            <option value="openrouter">OpenRouter (nube) — multi-modelo, requiere internet</option>
-                            <option value="endpoint">Local (LM Studio) — privado, sin internet</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label for="cfg-insights-backend-batch" class="text-xs text-white/55 block mb-1">Acta + Asistente de reuniones</label>
-                        <select id="cfg-insights-backend-batch" class="cfg-select" onchange="onInsightsBackendChange()">
-                            <option value="groq">Groq API (nube) — instantáneo, requiere internet</option>
-                            <option value="openrouter">OpenRouter (nube) — multi-modelo, requiere internet</option>
-                            <option value="endpoint">Local (LM Studio) — privado, sin internet</option>
-                        </select>
-                    </div>
-                </div>
-                <div id="cfg-insights-endpoint-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
-                    <label for="cfg-insights-model" class="text-xs text-white/55 block mb-1">Modelo local (id en LM Studio)</label>
-                    <input type="text" id="cfg-insights-model" placeholder="qwen/qwen2.5-vl-7b"
-                        class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/45 w-full">
-                    <p class="text-xs text-white/55 mt-1">Requiere LM Studio abierto con el servidor local activo (localhost:1234). Probados: <span class="text-white/55">qwen/qwen2.5-vl-7b</span> (calidad, ~40s) · <span class="text-white/55">llama-3.2-3b-instruct</span> (rápido, ~15s). Si LM Studio está cerrado, la reunión sigue transcribiendo pero sin análisis.</p>
-                </div>
-                <div id="cfg-insights-openrouter-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
-                    <p class="text-xs text-white/55">Pon tu key abajo en <strong>API Keys</strong> (se guarda cifrada en este equipo). Consíguela en <span class="text-white/70">openrouter.ai/keys</span>. Modelo configurable con <code class="text-white/70">OPENROUTER_MODEL</code> (default: <span class="text-white/70">google/gemini-3-flash</span>).</p>
-                </div>
-            </div>
-
-            <!-- API Keys (colapsable) -->
-            <div class="mt-4 pt-4 border-t border-white/[0.06]">
-                <button type="button" onclick="toggleApiKeys()" aria-expanded="false" aria-controls="api-keys-body"
-                    class="flex items-center justify-between w-full text-left text-sm font-medium text-white/60 hover:text-white/80 focus:outline-none focus:ring-2 focus:ring-purple-500/60 rounded">
-                    <span>API Keys</span>
-                    <svg id="api-keys-chevron" class="ic" style="transition:transform .2s" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            <!-- Sección: Historial -->
+            <div class="set-sec collapsed" id="sec-historial" style="--sec-accent:rgba(52,211,153,.6)">
+                <button type="button" class="set-sec-head" onclick="toggleSetSec('historial')" aria-expanded="false" aria-controls="sec-historial-body">
+                    <span class="set-sec-title"><svg class="set-sec-chev ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span class="set-dot" style="background:rgba(52,211,153,.85)"></span>Historial</span>
+                    <span class="set-sec-toggle"><span class="set-sec-toggle-label">Mostrar</span></span>
                 </button>
-                <div id="api-keys-body" class="hidden mt-3 space-y-3">
+                <div id="sec-historial-body" class="set-sec-body">
+                    <div class="grid gap-4" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))">
+                        <div>
+                            <label for="cfg-save-history" class="text-xs text-white/55 block mb-1">Guardar historial</label>
+                            <div class="flex items-center gap-2" style="height:32px">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="cfg-save-history">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <span class="text-xs text-white/55">Guardar transcripciones</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label for="cfg-retention-days" class="text-xs text-white/55 block mb-1">Eliminar transcripciones después de (días)</label>
+                            <select id="cfg-retention-days" class="cfg-select">
+                                <option value="0">Nunca</option>
+                                <option value="7">7 días</option>
+                                <option value="30">30 días</option>
+                                <option value="90">90 días</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sección: Reuniones -->
+            <div class="set-sec collapsed" id="sec-reuniones" style="--sec-accent:rgba(167,139,250,.6)">
+                <button type="button" class="set-sec-head" onclick="toggleSetSec('reuniones')" aria-expanded="false" aria-controls="sec-reuniones-body">
+                    <span class="set-sec-title"><svg class="set-sec-chev ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span class="set-dot" style="background:rgba(167,139,250,.85)"></span>Reuniones (análisis y acta)</span>
+                    <span class="set-sec-toggle"><span class="set-sec-toggle-label">Mostrar</span></span>
+                </button>
+                <div id="sec-reuniones-body" class="set-sec-body">
+                    <p class="text-xs text-white/55 mb-3">El análisis en vivo necesita velocidad (Groq recomendado); acta y Asistente de reuniones admiten modelos más potentes (OpenRouter, contexto 1 M).</p>
+                    <div class="flex flex-col gap-3">
+                        <div>
+                            <label for="cfg-insights-backend-live" class="text-xs text-white/55 block mb-1">Análisis en vivo</label>
+                            <select id="cfg-insights-backend-live" class="cfg-select" onchange="onInsightsBackendChange()">
+                                <option value="groq">Groq API (nube) — instantáneo, requiere internet</option>
+                                <option value="openrouter">OpenRouter (nube) — multi-modelo, requiere internet</option>
+                                <option value="endpoint">Local (LM Studio) — privado, sin internet</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="cfg-insights-backend-batch" class="text-xs text-white/55 block mb-1">Acta + Asistente de reuniones</label>
+                            <select id="cfg-insights-backend-batch" class="cfg-select" onchange="onInsightsBackendChange()">
+                                <option value="groq">Groq API (nube) — instantáneo, requiere internet</option>
+                                <option value="openrouter">OpenRouter (nube) — multi-modelo, requiere internet</option>
+                                <option value="endpoint">Local (LM Studio) — privado, sin internet</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="cfg-insights-endpoint-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
+                        <label for="cfg-insights-model" class="text-xs text-white/55 block mb-1">Modelo local (id en LM Studio)</label>
+                        <input type="text" id="cfg-insights-model" placeholder="qwen/qwen2.5-vl-7b"
+                            class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/45 w-full">
+                        <p class="text-xs text-white/55 mt-1">Requiere LM Studio abierto con el servidor local activo (localhost:1234). Probados: <span class="text-white/55">qwen/qwen2.5-vl-7b</span> (calidad, ~40s) · <span class="text-white/55">llama-3.2-3b-instruct</span> (rápido, ~15s). Si LM Studio está cerrado, la reunión sigue transcribiendo pero sin análisis.</p>
+                    </div>
+                    <div id="cfg-insights-openrouter-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
+                        <p class="text-xs text-white/55">Pon tu key abajo en <strong>API Keys</strong> (se guarda cifrada en este equipo). Consíguela en <span class="text-white/70">openrouter.ai/keys</span>. Modelo configurable con <code class="text-white/70">OPENROUTER_MODEL</code> (default: <span class="text-white/70">google/gemini-3-flash</span>).</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sección: API Keys -->
+            <div class="set-sec collapsed" id="sec-apikeys" style="--sec-accent:rgba(251,191,36,.6)">
+                <button type="button" class="set-sec-head" onclick="toggleSetSec('apikeys')" aria-expanded="false" aria-controls="sec-apikeys-body">
+                    <span class="set-sec-title"><svg class="set-sec-chev ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span class="set-dot" style="background:rgba(251,191,36,.85)"></span>API Keys</span>
+                    <span class="set-sec-toggle"><span class="set-sec-toggle-label">Mostrar</span></span>
+                </button>
+                <div id="sec-apikeys-body" class="set-sec-body space-y-3">
                     <p class="text-xs text-white/55">Se guardan <strong>cifradas (DPAPI)</strong> solo en este equipo y no se incluyen al empaquetar. El modelo local no necesita llave.</p>
                     <div>
                         <label for="cfg-groq-key" class="text-xs text-white/55 block mb-1">Groq API Key <span id="groq-key-status" class="ml-1 text-xs text-white/45"></span></label>
@@ -1232,15 +1291,37 @@ HTML_TEMPLATE = """
             setTimeout(() => { saved.style.opacity = '0'; }, 2000);
         }
 
-        // --- API Keys (cifradas con DPAPI por equipo) ---
-        function toggleApiKeys() {
-            const body = document.getElementById('api-keys-body');
-            const chev = document.getElementById('api-keys-chevron');
-            const btn = document.querySelector('[aria-controls="api-keys-body"]');
-            const open = body.classList.toggle('hidden') === false;
-            if (chev) chev.style.transform = open ? 'rotate(180deg)' : '';
-            if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-            if (open) loadApiKeyStatus();
+        // --- Acordeón del panel de Configuración ---
+        function toggleSetSec(id) {
+            const sec = document.getElementById('sec-' + id);
+            if (!sec) return;
+            const collapsed = sec.classList.toggle('collapsed');
+            const head = sec.querySelector('.set-sec-head');
+            const lbl = sec.querySelector('.set-sec-toggle-label');
+            if (head) head.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+            if (lbl) lbl.textContent = collapsed ? 'Mostrar' : 'Ocultar';
+            if (!collapsed && id === 'apikeys') loadApiKeyStatus();
+        }
+
+        function setNavGo(id) {
+            const sec = document.getElementById('sec-' + id);
+            if (!sec) return;
+            if (sec.classList.contains('collapsed')) toggleSetSec(id);  // expandir si estaba cerrada
+            sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        let _setAllCollapsed = false;
+        function setCollapseAll() {
+            _setAllCollapsed = !_setAllCollapsed;
+            document.querySelectorAll('#settings-panel .set-sec').forEach(sec => {
+                sec.classList.toggle('collapsed', _setAllCollapsed);
+                const head = sec.querySelector('.set-sec-head');
+                const lbl = sec.querySelector('.set-sec-toggle-label');
+                if (head) head.setAttribute('aria-expanded', _setAllCollapsed ? 'false' : 'true');
+                if (lbl) lbl.textContent = _setAllCollapsed ? 'Mostrar' : 'Ocultar';
+            });
+            const btn = document.getElementById('set-collapse-all');
+            if (btn) btn.textContent = _setAllCollapsed ? 'Expandir todo' : 'Comprimir todo';
         }
 
         async function loadApiKeyStatus() {
