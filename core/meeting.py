@@ -209,6 +209,25 @@ class MeetingSession:
             for s in segs
         ]
 
+    def snapshot(self) -> dict:
+        """Copia atómica del estado en vivo para el chat "Esta reunión" (unidad 2.3).
+
+        Bajo UN SOLO lock copia transcript + insights: el asistente genera su
+        respuesta sobre esta foto y el estado puede seguir mutando (o la reunión
+        terminar) sin afectarla. Todos los contenedores devueltos son nuevos y
+        sus valores son inmutables (str/float/None): mutar la sesión después NO
+        cambia el snapshot. Los insights van en formato plano (sin IDs):
+        temas [str], pendientes/propuestas/citas [{texto, ...}].
+        """
+        with self._lock:
+            return {
+                "active": self._active,
+                "started_at": self._started_at,
+                "elapsed": self._elapsed() if self._active else 0.0,
+                "segments": self.transcript_segments(),
+                "insights": self._store_to_plain_locked(),
+            }
+
     def add_highlight(self) -> "dict | None":
         """Marca el instante actual como momento destacado (AltGr+H). Idempotente-safe:
         cada llamada añade un highlight nuevo (no es un toggle). Devuelve el dict

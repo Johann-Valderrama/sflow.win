@@ -74,6 +74,28 @@ ASSISTANT_SYSTEM = (
 )
 
 
+_SYSTEM_LIVE = (
+    "Eres el copiloto del usuario en una reunión EN CURSO. Recibes la transcripción en vivo "
+    "hasta este instante (con timestamps mm:ss y hablantes 'Yo'/'Ellos') y el análisis en vivo "
+    "parcial (temas/pendientes/propuestas detectados hasta ahora).\n\n"
+    "REGLAS ESTRICTAS:\n"
+    "- Responde SOLO con base en el CONTEXTO provisto (transcripción en vivo + análisis). "
+    "Prohibido usar conocimiento externo o inventar datos, nombres, fechas o compromisos "
+    "que no estén en el contexto.\n"
+    "- Cita el momento del que proviene cada dato usando su timestamp mm:ss tal como aparece "
+    "en la transcripción (p.ej. \"a los 12:30 acordaron…\"). NO cites identificadores de "
+    "reunión entre corchetes: esta reunión aún no está guardada y no tiene acta.\n"
+    "- La reunión sigue en curso: el contexto está incompleto por definición. Si algo no se "
+    "ha dicho todavía, dilo con claridad (\"eso no se ha mencionado hasta ahora\"). "
+    "Prefiere callar antes que inventar.\n"
+    "- SÍ puedes redactar entregables derivados de lo dicho (resumen parcial, lista de puntos, "
+    "borrador de email o mensaje), PERO los hechos deben salir de la transcripción real: "
+    "puedes dar forma y estilo, nunca inventar contenido factual.\n"
+    "- No conviertas contenido descriptivo en pendientes. No inventes responsables ni fechas.\n"
+    "- Responde en español salvo que el usuario pida explícitamente otro idioma."
+)
+
+
 # ---------------------------------------------------------------------------
 # Budget
 # ---------------------------------------------------------------------------
@@ -362,6 +384,230 @@ def build_context(db, message: str, meeting_id=None, budget: int = None) -> tupl
     # -----------------------------------------------------------------------
     ctx_min, _ = _assemble(idx_min, 0, "")
     return ctx_min[:budget], []
+
+
+# ---------------------------------------------------------------------------
+# Live context builder (unidad 2.3 — chat "Esta reunión" EN VIVO)
+# ---------------------------------------------------------------------------
+
+def _format_live_insights(ins: dict) -> str:
+    """Formatea el Insight Stream plano (temas/pendientes/propuestas/citas) como texto compacto.
+
+    Devuelve "" si no hay nada detectado aún (insights vacíos → el bloque se omite).
+    """
+    ins = ins or {}
+    parts = []
+
+    temas = [str(t) for t in (ins.get("temas") or []) if t]
+    if temas:
+        parts.append("Temas detectados: " + ", ".join(temas))
+
+    plines = []
+    for p in ins.get("pendientes") or []:
+        if isinstance(p, dict):
+            txt = (p.get("texto") or "").strip()
+            if not txt:
+                continue
+            meta = []
+            if p.get("responsable"):
+                meta.append(str(p["responsable"]))
+            fecha_hora = " ".join(filter(None, [p.get("fecha"), p.get("hora")]))
+            if fecha_hora:
+                meta.append(fecha_hora)
+            plines.append(f"- {txt}" + (f" ({', '.join(meta)})" if meta else ""))
+        elif isinstance(p, str) and p.strip():
+            plines.append(f"- {p.strip()}")
+    if plines:
+        parts.append("Pendientes detectados:\n" + "\n".join(plines))
+
+    prolines = []
+    for p in ins.get("propuestas") or []:
+        txt = ((p.get("texto") or "") if isinstance(p, dict) else str(p or "")).strip()
+        if txt:
+            prolines.append(f"- {txt}")
+    if prolines:
+        parts.append("Propuestas detectadas:\n" + "\n".join(prolines))
+
+    clines = []
+    for c in ins.get("citas") or []:
+        if isinstance(c, dict):
+            txt = (c.get("texto") or "").strip()
+            if not txt:
+                continue
+            fh = " ".join(filter(None, [c.get("fecha"), c.get("hora")]))
+            clines.append(f"- {txt}" + (f" ({fh})" if fh else ""))
+        elif isinstance(c, str) and c.strip():
+            clines.append(f"- {c.strip()}")
+    if clines:
+        parts.append("Próximas citas detectadas:\n" + "\n".join(clines))
+
+    return "\n".join(parts)
+
+
+def build_context_live(message: str, budget: int = None, meeting=None) -> tuple:
+    """Construye el contexto del chat sobre la reunión EN CURSO. Contrato NUEVO (unidad 2.3).
+
+    A diferencia de build_context (que lee la DB), aquí la fuente es el singleton
+    MEETING en RAM: se toma UN snapshot atómico (bajo su lock) de transcript +
+    insights y todo se arma sobre esa foto — el estado puede seguir mutando (o la
+    reunión terminar) mientras se genera la respuesta, sin releer.
+
+    Recorte al presupuesto: se PRIORIZA lo más reciente del transcript — se corta
+    por el PRINCIPIO, nunca el final — y se antepone el aviso
+    "[transcript truncado: se muestran los últimos X minutos]".
+
+    ``message`` forma parte del contrato (paridad con build_context) aunque hoy
+    no se usa para retrieval: el transcript vivo entra completo o recortado.
+    ``meeting`` permite inyectar una sesión en tests; por defecto usa MEETING.
+
+    Devuelve (context_str, meta) con meta = {active, segment_count, truncated,
+    empty, shown_seconds}.
+    """
+    budget = budget if budget is not None else _budget_chars()
+    if meeting is None:
+        from core.meeting import MEETING as meeting  # noqa: PLC0415 — import perezoso: evita ciclo y carga de audio en import
+
+    snap = meeting.snapshot()
+    segments = snap.get("segments") or []
+    insights_snap = snap.get("insights") or {}
+
+    header = "=== REUNIÓN EN CURSO (transcripción en vivo, aún sin acta) ==="
+    if snap.get("started_at"):
+        header += f"\nIniciada: {snap['started_at']}"
+
+    ins_str = _format_live_insights(insights_snap)
+    ins_block = ("=== ANÁLISIS EN VIVO (parcial) ===\n" + ins_str) if ins_str else ""
+
+    meta = {
+        "active": bool(snap.get("active")),
+        "segment_count": len(segments),
+        "truncated": False,
+        "empty": not segments,
+        "shown_seconds": 0,
+    }
+
+    if not segments:
+        parts = [header, "(Aún no hay intervenciones transcritas.)"]
+        if ins_block:
+            parts.append(ins_block)
+        return "\n\n".join(parts)[:budget], meta
+
+    lines = [f"[{s['time']} {s['speaker']}] {s['text']}" for s in segments]
+
+    def _fixed_prefix(with_insights: bool) -> str:
+        parts = [header]
+        if with_insights and ins_block:
+            parts.append(ins_block)
+        return "\n\n".join(parts) + "\n\n=== TRANSCRIPCIÓN EN VIVO ===\n"
+
+    prefix = _fixed_prefix(True)
+    avail = budget - len(prefix)
+    if avail < 500 and ins_block:
+        # Presupuesto minúsculo: el transcript vivo manda; se sacrifica el bloque de insights.
+        prefix = _fixed_prefix(False)
+        avail = budget - len(prefix)
+
+    total = sum(len(ln) + 1 for ln in lines)
+    kept_start = 0
+    if total > avail:
+        # Recorte por el PRINCIPIO: acumular desde el final hasta agotar el presupuesto,
+        # reservando espacio para el aviso de truncado.
+        notice_reserve = 80
+        acc = notice_reserve
+        kept_start = len(lines)
+        for i in range(len(lines) - 1, -1, -1):
+            if acc + len(lines[i]) + 1 > avail:
+                break
+            acc += len(lines[i]) + 1
+            kept_start = i
+        if kept_start >= len(lines):
+            # Ni la última línea cabe entera: conservarla igual (el final NUNCA se
+            # pierde); el clamp final la recorta por su principio si hace falta.
+            kept_start = len(lines) - 1
+        meta["truncated"] = True
+
+    kept_lines = lines[kept_start:]
+    if meta["truncated"]:
+        shown_s = max(segments[-1]["t"] - segments[kept_start]["t"], 0.0)
+        meta["shown_seconds"] = int(shown_s)
+        shown_min = max(int(round(shown_s / 60.0)), 1)
+        kept_lines = [f"[transcript truncado: se muestran los últimos {shown_min} minutos]"] + kept_lines
+
+    ctx = prefix + "\n".join(kept_lines)
+    if len(ctx) > budget:
+        # Última defensa (presupuesto absurdo < 1 línea): truncar duro por el PRINCIPIO
+        # del transcript, preservando el final.
+        head_len = len(prefix)
+        tail = ctx[head_len:][-(max(budget - head_len, 0)):]
+        ctx = (prefix + tail)[:budget] if budget > head_len else ctx[-budget:]
+        meta["truncated"] = True
+    return ctx, meta
+
+
+_EMPTY_LIVE_ANSWER = (
+    "Aún no hay contenido transcrito de la reunión en curso. "
+    "En cuanto haya intervenciones podré responder sobre lo hablado."
+)
+
+
+def answer_live(message: str, history=None, max_tokens: int = 1024,
+                reasoning="auto", meeting=None) -> dict:
+    """Responde una pregunta sobre la reunión EN CURSO (snapshot en RAM, no DB).
+
+    MISMO shape de retorno que answer(): {ok, answer, used_meeting_ids, reasoned}
+    (más "live": True y "truncated"). used_meeting_ids siempre [] — la reunión
+    viva no tiene id todavía.
+
+    Side case documentado — transcript vacío: NO se llama al LLM; se devuelve una
+    respuesta fija (determinista, gratis: sin contenido no hay nada que el LLM
+    pueda aportar sin inventar).
+    """
+    message = (message or "").strip()
+
+    if reasoning is True:
+        resolved = True
+    elif reasoning is False:
+        resolved = False
+    else:
+        resolved = _needs_reasoning(message)
+
+    if not message:
+        return {"ok": False, "error": "Mensaje vacío", "reasoned": resolved, "live": True}
+
+    try:
+        context, meta = build_context_live(message, meeting=meeting)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Asistente (vivo): error construyendo contexto: %s", exc)
+        return {"ok": False, "error": "No se pudo leer el estado de la reunión en curso.",
+                "reasoned": resolved, "live": True}
+
+    if meta.get("empty"):
+        return {"ok": True, "answer": _EMPTY_LIVE_ANSWER, "used_meeting_ids": [],
+                "reasoned": False, "live": True, "empty": True, "truncated": False}
+
+    system_content = _SYSTEM_LIVE + "\n\n" + context
+    messages = [{"role": "system", "content": system_content}]
+
+    if history:
+        valid_history = [
+            {"role": h["role"], "content": str(h.get("content") or "")[:2000]}
+            for h in history
+            if isinstance(h, dict) and h.get("role") in ("user", "assistant")
+        ]
+        messages.extend(valid_history[-6:])
+
+    messages.append({"role": "user", "content": message})
+
+    try:
+        text = insights.chat_memory(messages, max_tokens=max_tokens, reasoning=resolved)
+        return {"ok": True, "answer": text, "used_meeting_ids": [], "reasoned": resolved,
+                "live": True, "truncated": bool(meta.get("truncated"))}
+    except insights.InsightsUnavailable as exc:
+        return {"ok": False, "error": str(exc) or "Backend de insights no disponible",
+                "reasoned": resolved, "live": True}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": "Error al consultar el asistente: " + str(exc),
+                "reasoned": resolved, "live": True}
 
 
 # ---------------------------------------------------------------------------

@@ -2744,6 +2744,7 @@ MEETING_PAGE = """<!DOCTYPE html>
           <button id="asst-scope-meeting" disabled class="text-[11px] px-2 py-0.5 rounded-full border transition-colors" title="Selecciona una reunión del historial para preguntar solo sobre ella">Esta reunión</button>
         </div>
       </div>
+      <div id="asst-live-note" class="hidden text-[11px] text-emerald-300/70 mb-2">&#9679; Respondiendo sobre la reuni&oacute;n en curso</div>
       <div id="asst-messages" class="space-y-2 overflow-y-auto mb-2" aria-live="polite" style="min-height:60px;max-height:280px;"></div>
       <div id="asst-chips" class="flex flex-wrap gap-1.5 mb-2"></div>
       <div class="flex gap-2">
@@ -2938,6 +2939,7 @@ async function loadLive(){
       document.getElementById('mt-paused-badge').classList.add('hidden'); _mtPaused=false;
       if(_pendCards.size){ _pendResetAll(); }
       if(d.last_minutes && !_actaShown){ renderActa(d.last_minutes); _actaShown=true; loadHistory(); } }
+    asstSetLive(!!s.active);  // chat "Preguntar": modo vivo sigue al estado de la reunión (unidad 2.3)
     renderTranscript(s, d.segments||[]);
   }catch(e){}
 }
@@ -3186,6 +3188,33 @@ const ASST_CHIPS_MEETING = [
   '\\u00bfQu\\u00e9 se decidi\\u00f3?',
   'Redacta email de seguimiento'
 ];
+// Chips fijos del chat EN VIVO (unidad 2.3 — textos cerrados en debate, no cambiar)
+const ASST_CHIPS_LIVE = [
+  '\\u00bfPuntos clave hasta ahora?',
+  '\\u00bfQu\\u00e9 me falta preguntar?',
+  'Pendientes y responsables'
+];
+let _asstLive = false;
+// Modo vivo de la pestaña Preguntar: chips fijos + nota "reunión en curso".
+// Lo alimenta loadLive() con el estado del polling de /api/meeting.
+function asstSetLive(active){
+  active = !!active;
+  if(active === _asstLive) return;
+  _asstLive = active;
+  if(active){
+    asstSetScope('global');  // la reunión viva manda: se pregunta sin meeting_id
+  } else {
+    asstSetScope(asstMeetingId && currentViewerMeetingId ? 'meeting' : 'global');
+  }
+}
+// Refleja el modo vivo en la UI (nota + chips). La llama asstSetScope al final,
+// así el vivo sobrevive a los toggles de ámbito y se apaga si se elige una reunión guardada.
+function asstSyncLiveUi(){
+  const liveNow = _asstLive && !asstMeetingId;
+  const note = document.getElementById('asst-live-note');
+  if(note) note.classList.toggle('hidden', !liveNow);
+  if(liveNow) asstRenderChips(ASST_CHIPS_LIVE);
+}
 
 function asstRenderChips(chips){
   const el=document.getElementById('asst-chips');
@@ -3216,6 +3245,7 @@ function asstSetScope(mode){
     mb.className='text-[11px] px-2 py-0.5 rounded-full border transition-colors text-white/40 border-white/10'+(mb.disabled?' opacity-40 cursor-not-allowed':' hover:text-white/70');
     asstRenderChips(ASST_CHIPS_GLOBAL);
   }
+  asstSyncLiveUi();  // el modo vivo (unidad 2.3) pisa chips/nota si aplica
 }
 
 function asstAddMsg(role, html){
@@ -3245,7 +3275,8 @@ async function asstSend(text){
     const res=await fetch('/api/meetings/chat',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:msg,history:asstHistory.slice(-6),meeting_id:asstMeetingId,reasoning:reasoningVal})
+      body:JSON.stringify({message:msg,history:asstHistory.slice(-6),meeting_id:asstMeetingId,reasoning:reasoningVal,
+        live:(_asstLive&&!asstMeetingId)?true:undefined})
     });
     const d=await res.json();
     if(!res.ok||d.error){
@@ -4081,8 +4112,19 @@ def meetings_chat():
             reasoning = "auto"
     else:
         reasoning = "auto"
-    result = _assistant.answer(_db, message, history=history, meeting_id=meeting_id,
-                               max_tokens=max_tokens, reasoning=reasoning)
+    # Ruteo vivo vs DB (unidad 2.3): el cliente puede forzar el modo con {"live": true/false};
+    # por defecto, si hay reunión activa y no se pidió una reunión concreta (meeting_id),
+    # el chat responde sobre la reunión en curso (snapshot en RAM). Si no, flujo DB intacto.
+    if "live" in data:
+        use_live = bool(data.get("live"))
+    else:
+        use_live = MEETING.is_active() and meeting_id is None
+    if use_live:
+        result = _assistant.answer_live(message, history=history,
+                                        max_tokens=max_tokens, reasoning=reasoning)
+    else:
+        result = _assistant.answer(_db, message, history=history, meeting_id=meeting_id,
+                                   max_tokens=max_tokens, reasoning=reasoning)
     if not result.get("ok"):
         return jsonify({"error": result.get("error", "error")}), 503
     return jsonify(result)
