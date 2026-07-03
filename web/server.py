@@ -318,6 +318,7 @@ HTML_TEMPLATE = """
                     </div>
                     <p class="text-xs text-white/70 font-medium">Transcribir — manos libres</p>
                     <p class="text-xs text-white/55 mt-0.5">Pulsa Shift tres veces en ~400&nbsp;ms para iniciar. Pulsa Shift una vez más para parar y pegar.</p>
+                    <p class="text-xs text-white/45 mt-0.5">Shift como parte de un acorde (Shift+A, Shift+Enter) no inicia ni detiene: puedes escribir en otra app mientras dictas.</p>
                 </div>
                 <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
                     <div class="flex items-center gap-2 mb-1.5">
@@ -427,7 +428,10 @@ HTML_TEMPLATE = """
             <div class="grid grid-cols-1 md:grid-cols-[1.4fr_1fr] gap-3">
                 <!-- Transcript en vivo -->
                 <div>
-                    <div class="text-xs text-white/45 mb-1.5">Transcript en vivo</div>
+                    <div class="flex items-center justify-between mb-1.5">
+                        <span class="text-xs text-white/45">Transcript en vivo</span>
+                        <button onclick="copyEl('mt-transcript', this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5 transition-colors" title="Copiar transcript">Copiar</button>
+                    </div>
                     <div id="mt-transcript" class="space-y-1.5 max-h-96 overflow-y-auto rounded-lg bg-white/[0.02] border border-white/[0.06] p-3">
                         <div class="text-xs text-white/45">El transcript en vivo aparecerá aquí cuando inicies una reunión.</div>
                     </div>
@@ -449,7 +453,10 @@ HTML_TEMPLATE = """
 
             <!-- Acta post-reunión (se rellena al terminar) -->
             <div id="mt-minutes" class="mt-3 rounded-lg bg-white/[0.02] border border-white/[0.06] p-3 hidden">
-                <div class="text-xs font-medium text-emerald-300/80 mb-2">Acta de la reunión</div>
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs font-medium text-emerald-300/80">Acta de la reunión</span>
+                    <button onclick="copyEl('mt-minutes-body', this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5 transition-colors" title="Copiar acta">Copiar</button>
+                </div>
                 <div id="mt-minutes-body" class="space-y-2 text-sm text-white/80"></div>
             </div>
         </div>
@@ -943,6 +950,16 @@ HTML_TEMPLATE = """
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        function copyEl(id, btn) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            navigator.clipboard.writeText(el.innerText.trim()).then(() => {
+                const prev = btn.textContent;
+                btn.textContent = '✓';
+                setTimeout(() => { btn.textContent = prev; }, 1500);
+            });
         }
 
         // --- Edit ---
@@ -2312,7 +2329,10 @@ MEETING_PAGE = """<!DOCTYPE html>
 
   <div class="grid gap-3 mb-3 grid-cols-1 md:grid-cols-[1.4fr_1fr]">
     <div>
-      <div class="text-xs text-white/55 mb-1.5">Transcripción en vivo</div>
+      <div class="flex items-center justify-between mb-1.5">
+        <span class="text-xs text-white/55">Transcripción en vivo</span>
+        <button onclick="copyEl('mt-transcript', this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5 transition-colors" title="Copiar transcript">Copiar</button>
+      </div>
       <div id="mt-transcript" class="space-y-1.5 max-h-[28rem] overflow-y-auto glass rounded-xl p-3">
         <div class="text-xs text-white/45">Inicia una reunión para ver la transcripción (Yo / Ellos).</div>
       </div>
@@ -2325,7 +2345,10 @@ MEETING_PAGE = """<!DOCTYPE html>
     </div>
   </div>
   <div id="mt-acta" class="glass rounded-xl p-4 mb-8 hidden">
-    <div class="text-sm font-medium text-emerald-300/80 mb-2">Acta de la reunión</div>
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-sm font-medium text-emerald-300/80">Acta de la reunión</span>
+      <button onclick="copyEl('mt-acta-body', this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5 transition-colors" title="Copiar acta">Copiar</button>
+    </div>
     <div id="mt-acta-body" class="space-y-2 text-sm text-white/80"></div>
   </div>
 
@@ -2389,6 +2412,7 @@ const ICONS = {
 };
 function _fillIcons(root){(root||document).querySelectorAll('[data-icon]').forEach(el=>{const i=ICONS[el.dataset.icon];if(i&&!el.querySelector('svg.ic')){const hasText=el.textContent.trim().length>0;el.insertAdjacentHTML('afterbegin', i+(hasText?' ':''));}});}
 function esc(s){ const d=document.createElement('div'); d.textContent = (s==null?'':String(s)); return d.innerHTML; }
+function copyEl(id, btn){ const el=document.getElementById(id); if(!el)return; navigator.clipboard.writeText(el.innerText.trim()).then(()=>{ const p=btn.textContent; btn.textContent='✓'; setTimeout(()=>{ btn.textContent=p; },1500); }); }
 function mdInline(x){
   x=esc(x);
   x=x.replace(/`([^`]+)`/g,'<code>$1</code>');
@@ -2567,8 +2591,8 @@ async function openMeeting(id){
       +'<button id="mt-close-btn" class="btn text-white/30 hover:text-white/60">Cerrar</button>'
       +'</div></div>'
       +'<div class="text-xs font-medium text-violet-300/50 mb-1">L\\u00ednea de tiempo</div><div id="mt-timeline" class="mb-3"></div>'
-      +'<div class="text-xs font-medium text-emerald-300/70 mb-1">Acta</div><div class="space-y-2 mb-3">'+actaHtml(m.minutes)+'</div>'
-      +'<div class="text-xs font-medium text-white/40 mb-1">Transcripci\\u00f3n</div>'+transcriptHtml;
+      +'<div class="flex items-center justify-between mb-1"><span class="text-xs font-medium text-emerald-300/70">Acta</span><button onclick="copyEl(&apos;viewer-acta-body&apos;, this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5">Copiar</button></div><div id="viewer-acta-body" class="space-y-2 mb-3">'+actaHtml(m.minutes)+'</div>'
+      +'<div class="flex items-center justify-between mb-1"><span class="text-xs font-medium text-white/40">Transcripci\\u00f3n</span><button onclick="copyEl(&apos;viewer-transcript-body&apos;, this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5">Copiar</button></div><div id="viewer-transcript-body">'+transcriptHtml+'</div>';
     const _cb=document.getElementById('mt-close-btn');
     if(_cb) _cb.addEventListener('click',function(){
       document.getElementById('mt-viewer').classList.add('hidden');
