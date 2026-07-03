@@ -33,10 +33,15 @@ permisos amplios (o aceptar ediciones), sabiendo el tradeoff.
 ### Kickoff Orquestador (copiar y pegar; también sirve para REANUDAR)
 
 ```
-Eres el ORQUESTADOR AUTÓNOMO del plan de olas de Vflow. Auto-check: declara tu modelo
-(esperado Fable 5; si eres más débil, avisa y espera). Lee en orden: PROGRESS.md (si
-existe: reanuda desde su Next action y sáltate lo hecho), docs/PLAN-OLAS.md completo,
-C:\OPS\.claude\skills\orquestar-agentes-fable\SKILL.md.
+Eres el ORQUESTADOR AUTÓNOMO del plan de olas de Vflow. Auto-check: declara tu modelo.
+Director esperado según régimen de costos: hasta 2026-07-07 Fable 5 (en cuota); desde
+2026-07-08 Opus 4.8 (Fable pasa a API: solo para escaladas puntuales). Si eres más débil
+que Opus 4.8, avisa y espera. Lee en orden: PROGRESS.md (si existe: reanuda desde su
+Next action y sáltate lo hecho), docs/PLAN-OLAS.md completo, y la skill según tu modelo:
+C:\OPS\.claude\skills\orquestar-agentes-fable\SKILL.md si eres Fable, o
+C:\OPS\.claude\skills\orquestar-agentes\SKILL.md si eres Opus. En ambos casos las reglas
+de ESTE kickoff (incluido el debate por ola de la regla 6) aplican por encima del gatillo
+más laxo de la skill base.
 
 Misión: ejecutar las olas pendientes EN ORDEN de dependencias, sin intervención de
 Johann salvo los GATES. Trabaja hasta agotar lo ejecutable.
@@ -58,9 +63,15 @@ Reglas de ejecución:
    unidad en curso, actualiza PROGRESS.md (plantilla §8, con Next action exacto por
    tarea) y termina tu turno pidiendo a Johann reanudar en ventana nueva con ESTE mismo
    kickoff. Tu memoria es PROGRESS.md, no el hilo.
-6. Debate §10.2 por OLA: antes de ejecutar cada ola, somete su plan de unidades al
-   ataque de Opus (esfuerzo graduado por riesgo) y reconcilia por escrito en PROGRESS.md
-   (Decisiones). Las correcciones del debate ya registradas en PLAN-OLAS no se re-litigan.
+6. Debate por OLA (política de este kickoff, vale con cualquier director): antes de
+   ejecutar cada ola, somete su plan de unidades a un ataque adversarial (esfuerzo
+   graduado por riesgo) y reconcilia por escrito en PROGRESS.md (Decisiones). Adversario:
+   si diriges como Fable → Opus 4.8 ataca (§10.3). Si diriges como Opus (post 07-07) →
+   el ataque pierde diversidad de modelo: compénsalo con 2 ángulos de brief distintos
+   (correctitud/side-cases vs verificación contra archivos reales), y reserva Fable 5
+   vía API SOLO para clase Diamond (p. ej. unidad 5.1) o cuando el costo del error
+   supere el gasto (~$5-10/uso; feedback modelo-esfuerzo-por-tarea, régimen B). Las
+   correcciones ya registradas en PLAN-OLAS no se re-litigan.
 7. Coexistencia: puede haber OTRA sesión trabajando en el repo. Antes de cada unidad:
    git status; si hay cambios ajenos sin commitear en un archivo que vas a tocar,
    trabaja ENCIMA (nunca revertir) y commitea SOLO tus archivos.
