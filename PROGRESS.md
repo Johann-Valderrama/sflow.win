@@ -8,7 +8,7 @@
 - (nada — Kickoff 1a cerrado; siguiente: Kickoff 1b en ventana propia)
 
 ## Completado
-- [x] 1.1 Servidor MCP local  (@fable-5, 2026-07-03, commit <se añade tras commit>)
+- [x] 1.1 Servidor MCP local  (@fable-5, 2026-07-03, commit 527156d)
   - Hecho: debate adversarial del contrato (Opus 4.8, 10 objeciones respondidas) · db/database.py: helper _connect() con busy_timeout 5s en TODAS las conexiones, PRAGMA journal_mode=WAL incondicional en _init_db, modo read_only=True (URI mode=ro, salta DDL/migraciones/backfill, error accionable si la DB no existe), meetings_search(raise_errors=) · mcp_server/ nuevo (FastMCP stdio, tools search_meetings/get_minutes/get_transcript) · .mcp.json (venv python) · mcp==1.28.1 en requirements.in/.txt + requirements.lock regenerado con hashes · CLAUDE.md sección 12.
   - Verificado: smoke unitario de las 3 tools · cliente MCP real (SDK stdio) con la app corriendo Y reunión activa: 3 tools OK, 4 llamadas en 0.02s, captura nunca bloqueada, reunión de prueba cerró limpia (silencio → saved:false, sin fila basura) · escritura concurrente con lector RO en transacción abierta: sin locks, snapshot isolation OK, fila de prueba borrada · RO no puede escribir (OperationalError a nivel SQLite) · grep confirma migración total a _connect().
   - Pendiente manual (Johann): conectar desde Claude Code vía .mcp.json en una sesión nueva y consultar una reunión real.
