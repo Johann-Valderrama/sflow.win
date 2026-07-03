@@ -117,9 +117,11 @@ def is_available(task: str = "live") -> bool:
     if backend == "anthropic":
         return bool(os.getenv("ANTHROPIC_API_KEY", "").strip())
     if backend == "claude-cli":
-        # El arranque del CLI (proceso Node completo) mata la latencia del loop en
-        # vivo: solo válido para tareas batch (acta/consolidación/chat).
-        return task == "batch" and _claude_cli_path() is not None
+        # Sirve para vivo Y batch: el análisis en vivo se dispara ~1 vez/min
+        # (INSIGHTS_INTERVAL_SECONDS) en un hilo daemon con candado de un solo
+        # escritor, así que el arranque del CLI (~5-15s) solo retrasa el insight,
+        # no bloquea la captura. Coste real: consume la cuota de la suscripción.
+        return _claude_cli_path() is not None
     # local (llama-cpp embebido): camino A, siguiente fase
     return False
 
@@ -399,19 +401,16 @@ def _chat_claude_cli(messages: list, *, task: str = "live", json_mode: bool = Fa
                      max_tokens: int = 1024) -> str:
     """Llamada a Claude Code headless (`claude -p`) usando la suscripción del usuario.
 
-    Solo válido para task="batch" (acta/consolidación/chat): el arranque del proceso
-    Node del CLI tiene latencia incompatible con el loop de insights en vivo.
+    Sirve para vivo Y batch. En vivo los insights se disparan ~1 vez/min en un hilo
+    daemon con candado de un solo escritor (core/meeting.py), así que el arranque del
+    CLI solo retrasa el insight, no bloquea la captura. Modelo por tarea: vivo →
+    CLAUDE_CLI_MODEL_LIVE (default "haiku"), batch → CLAUDE_CLI_MODEL_BATCH ("sonnet").
 
     El prompt completo (system + user concatenados) se pasa por STDIN, nunca por
     argv (argv es visible para otros procesos del sistema — privacidad).
     """
     _ = json_mode  # sin flag de JSON nativo; se confía en el prompt + _extract_json
     _ = max_tokens  # el CLI no expone un límite de tokens de salida configurable
-
-    if task != "batch":
-        raise InsightsUnavailable(
-            "claude-cli solo soporta tareas batch (acta/chat); usa otro backend para live"
-        )
 
     cli_path = _claude_cli_path()
     if cli_path is None:
@@ -426,7 +425,10 @@ def _chat_claude_cli(messages: list, *, task: str = "live", json_mode: bool = Fa
             parts.append(content)
     prompt = "\n\n".join(parts)
 
-    model = os.getenv("CLAUDE_CLI_MODEL_BATCH", "sonnet").strip()
+    if task == "batch":
+        model = os.getenv("CLAUDE_CLI_MODEL_BATCH", "sonnet").strip()
+    else:
+        model = os.getenv("CLAUDE_CLI_MODEL_LIVE", "haiku").strip()
 
     # cwd: SIEMPRE un directorio neutro (%APPDATA%\Vflow), NUNCA el repo ni el
     # data dir de dev (que en dev ES la raíz del repo): si cwd cayera en el repo,
@@ -441,6 +443,11 @@ def _chat_claude_cli(messages: list, *, task: str = "live", json_mode: bool = Fa
 
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
+    # Vivo: timeout corto (90s) — si el CLI cuelga, el candado de insights se
+    # libera dentro de ~1.5 cadencias en vez de congelar el panel 3 min. Batch
+    # (acta) puede tardar más: 180s.
+    timeout = 90 if task != "batch" else 180
+
     try:
         result = subprocess.run(
             [cli_path, "-p", "--model", model, "--output-format", "text"],
@@ -449,7 +456,7 @@ def _chat_claude_cli(messages: list, *, task: str = "live", json_mode: bool = Fa
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=180,
+            timeout=timeout,
             cwd=_cwd,
             creationflags=creationflags,
         )

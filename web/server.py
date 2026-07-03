@@ -644,6 +644,7 @@ HTML_TEMPLATE = """
                                 <option value="openrouter">OpenRouter (nube) — multi-modelo, requiere internet</option>
                                 <option value="endpoint">Local (LM Studio) — privado, sin internet</option>
                                 <option value="anthropic">Anthropic (API oficial) — Claude Haiku, requiere internet</option>
+                                <option value="claude-cli">Claude (tu suscripción) — vía Claude Code, consume tu cuota</option>
                             </select>
                         </div>
                         <div>
@@ -653,7 +654,7 @@ HTML_TEMPLATE = """
                                 <option value="openrouter">OpenRouter (nube) — multi-modelo, requiere internet</option>
                                 <option value="endpoint">Local (LM Studio) — privado, sin internet</option>
                                 <option value="anthropic">Anthropic (API oficial) — Claude Sonnet, requiere internet</option>
-                                <option value="claude-cli">Claude (tu suscripción) — vía Claude Code, solo acta/chat</option>
+                                <option value="claude-cli">Claude (tu suscripción) — vía Claude Code, consume tu cuota</option>
                             </select>
                         </div>
                     </div>
@@ -670,7 +671,7 @@ HTML_TEMPLATE = """
                         <p class="text-xs text-white/55">Pon tu key abajo en <strong>API Keys</strong> (se guarda cifrada en este equipo). Consíguela en <span class="text-white/70">console.anthropic.com/settings/keys</span>. Modelos: <code class="text-white/70">ANTHROPIC_MODEL_LIVE</code> (default Haiku) y <code class="text-white/70">ANTHROPIC_MODEL_BATCH</code> (default Sonnet).</p>
                     </div>
                     <div id="cfg-insights-claudecli-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
-                        <p class="text-xs text-white/55">Usa tu suscripción de Claude vía Claude Code (requiere <code class="text-white/70">claude</code> instalado y logueado). Solo para el acta/chat, no para insights en vivo. Claude Code guarda transcripts locales propios.</p>
+                        <p class="text-xs text-white/55">Usa tu suscripción de Claude vía Claude Code (requiere <code class="text-white/70">claude</code> instalado y logueado, sin API key). Sirve para acta, Asistente y análisis en vivo. <strong class="text-white/70">Consume la cuota de tu plan</strong> (Pro/Max): una reunión larga con análisis en vivo puede gastar decenas de mensajes. Modelos: <code class="text-white/70">CLAUDE_CLI_MODEL_LIVE</code> (haiku) y <code class="text-white/70">CLAUDE_CLI_MODEL_BATCH</code> (sonnet). Claude Code guarda transcripts locales propios.</p>
                     </div>
                 </div>
             </div>
@@ -816,7 +817,7 @@ HTML_TEMPLATE = """
         // --- Iconos SVG inline (sin dependencia de fuentes; idénticos en Win/Mac/Linux, sin tofu) ---
         function _ic(p){return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>';}
         const ICONS = {
-            settings: _ic('<circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>'),
+            settings: _ic('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'),
             book: _ic('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>'),
             keyboard: _ic('<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M7 13h10"/>'),
             play: _ic('<polygon points="6 4 20 12 6 20 6 4" fill="currentColor" stroke="none"/>'),
@@ -1411,7 +1412,7 @@ HTML_TEMPLATE = """
             const anyEndpoint = backendLive === 'endpoint' || backendBatch === 'endpoint';
             const anyOpenrouter = backendLive === 'openrouter' || backendBatch === 'openrouter';
             const anyAnthropic = backendLive === 'anthropic' || backendBatch === 'anthropic';
-            const anyClaudeCli = backendBatch === 'claude-cli';
+            const anyClaudeCli = backendLive === 'claude-cli' || backendBatch === 'claude-cli';
             document.getElementById('cfg-insights-endpoint-wrap').classList.toggle('hidden', !anyEndpoint);
             document.getElementById('cfg-insights-openrouter-wrap').classList.toggle('hidden', !anyOpenrouter);
             document.getElementById('cfg-insights-anthropic-wrap').classList.toggle('hidden', !anyAnthropic);
