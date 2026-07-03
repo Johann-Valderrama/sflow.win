@@ -155,8 +155,53 @@ HTML_TEMPLATE = """
             font-display: swap;
             src: url('/static/vendor/inter-variable.woff2') format('woff2');
         }
-        body { font-family: 'Inter', system-ui, sans-serif; background: #0a0a0a; color: #e5e5e5; }
+        /* ==== Design tokens (U1 rediseño) ==================================== */
+        :root {
+            --bg: #0a0a0c;
+            --panel: rgba(255,255,255,0.04);
+            --panel-border: rgba(255,255,255,0.08);
+            --panel-hover: rgba(255,255,255,0.06);
+            --txt: rgba(255,255,255,0.87);      /* contenido */
+            --txt-2: rgba(255,255,255,0.60);    /* secundario */
+            --txt-3: rgba(255,255,255,0.42);    /* metadatos */
+            --accent: #8b5cf6;                  /* violeta Vflow / canal Yo / fuente mic */
+            --accent-soft: rgba(139,92,246,0.16);
+            --accent-border: rgba(139,92,246,0.45);
+            --cyan: #22d3ee;                    /* canal Ellos / fuente system */
+            --cyan-soft: rgba(34,211,238,0.13);
+            --amber: #f59e0b;                   /* fuente youtube/url */
+            --amber-soft: rgba(245,158,11,0.13);
+        }
+        body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--txt); font-size: 14px; }
         .glass { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); }
+        /* ==== Sistema de componentes (U1 rediseño) ============================ */
+        .btn { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px;
+            border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid transparent;
+            transition: background .15s, border-color .15s, color .15s; white-space: nowrap; }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-primary:hover { background: #7c4fe0; }
+        .btn-secondary { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.14); color: var(--txt); }
+        .btn-secondary:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.22); }
+        .btn-ghost { background: transparent; color: var(--txt-2); }
+        .btn-ghost:hover { background: rgba(255,255,255,0.06); color: var(--txt); }
+        .btn-danger-ghost { background: transparent; color: rgba(248,113,113,0.8); }
+        .btn-danger-ghost:hover { background: rgba(239,68,68,0.12); color: #f87171; }
+        .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px;
+            border-radius: 8px; color: var(--txt-2); cursor: pointer; border: none; background: transparent;
+            transition: background .15s, color .15s; font-size: 15px; }
+        .icon-btn:hover { background: rgba(255,255,255,0.07); color: var(--txt); }
+        .card { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px; }
+        .card-hover:hover { background: var(--panel-hover); }
+        .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500;
+            padding: 2px 8px; border-radius: 9999px; white-space: nowrap; }
+        .badge-mic { background: var(--accent-soft); color: #c4b5fd; }
+        .badge-system { background: var(--cyan-soft); color: #67e8f9; }
+        .badge-youtube { background: var(--amber-soft); color: #fcd34d; }
+        .metric-card { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px;
+            padding: 14px 16px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .metric-label { font-size: 12px; color: var(--txt-3); }
+        .metric-value { font-size: 22px; font-weight: 600; color: var(--txt); line-height: 1.2; }
+        .metric-sub { font-size: 11px; color: var(--txt-3); }
         /* Entrada suave de nuevos segmentos/insights del modo reunión (anti-parpadeo) */
         .mt-fade { animation: mtFade 0.25s ease-out; }
         @keyframes mtFade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
@@ -636,6 +681,21 @@ HTML_TEMPLATE = """
                 </button>
                 <div id="sec-reuniones-body" class="set-sec-body">
                     <p class="text-xs text-white/55 mb-3">El análisis en vivo necesita velocidad (Groq recomendado); acta y Asistente de reuniones admiten modelos más potentes (OpenRouter, contexto 1 M).</p>
+                    <div class="flex flex-wrap items-center gap-2 mb-3">
+                        <button type="button" id="cfg-insights-preset-sub" onclick="applyInsightsPreset('subscription')"
+                            class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 focus:outline-none focus:ring-2 focus:ring-purple-500/60 whitespace-nowrap">⭐ Usar mi suscripción</button>
+                        <button type="button" id="cfg-insights-preset-api" onclick="applyInsightsPreset('apis')"
+                            class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 focus:outline-none focus:ring-2 focus:ring-purple-500/60 whitespace-nowrap">🌐 Usar APIs (benchmark)</button>
+                    </div>
+                    <div class="mb-3">
+                        <label class="flex items-center gap-2" style="height:32px">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="cfg-insights-fallback">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="text-xs text-white/55">Fallback automático a APIs si el backend activo falla (recomendado)</span>
+                        </label>
+                    </div>
                     <div class="flex flex-col gap-3">
                         <div>
                             <label for="cfg-insights-backend-live" class="text-xs text-white/55 block mb-1">Análisis en vivo</label>
@@ -1258,11 +1318,14 @@ HTML_TEMPLATE = """
             }
         }
 
+        let _lastSettings = null;  // cache de la última respuesta de /api/settings (presets de insights la consultan)
+
         async function loadSettings() {
             const [settings, mics] = await Promise.all([
                 fetch('/api/settings').then(r => r.json()),
                 fetch('/api/microphones').then(r => r.json()),
             ]);
+            _lastSettings = settings;
             document.getElementById('cfg-language').value = settings.language || 'es';
             document.getElementById('cfg-translate-target').value = settings.translate_target || 'en';
             document.getElementById('cfg-sounds').checked = settings.sounds_enabled !== false;
@@ -1293,6 +1356,7 @@ HTML_TEMPLATE = """
             document.getElementById('cfg-insights-backend-live').value = settings.insights_backend_live || 'groq';
             document.getElementById('cfg-insights-backend-batch').value = settings.insights_backend_batch || 'groq';
             document.getElementById('cfg-insights-model').value = settings.insights_endpoint_model || 'qwen/qwen2.5-vl-7b';
+            document.getElementById('cfg-insights-fallback').checked = settings.insights_fallback !== false;
             onInsightsBackendChange();
             updateLocalModelSection();
             refreshLocalModelStatus();
@@ -1315,6 +1379,7 @@ HTML_TEMPLATE = """
                 insights_backend_live: document.getElementById('cfg-insights-backend-live').value,
                 insights_backend_batch: document.getElementById('cfg-insights-backend-batch').value,
                 insights_endpoint_model: document.getElementById('cfg-insights-model').value.trim(),
+                insights_fallback: document.getElementById('cfg-insights-fallback').checked ? 'true' : 'false',
             };
             await fetch('/api/settings', {
                 method: 'POST',
@@ -1324,6 +1389,36 @@ HTML_TEMPLATE = """
             const saved = document.getElementById('cfg-saved');
             saved.style.opacity = '1';
             setTimeout(() => { saved.style.opacity = '0'; }, 2000);
+        }
+
+        // --- Presets de un clic para el backend de insights ---
+        async function applyInsightsPreset(kind) {
+            // _lastSettings se refresca en cada apertura del panel Configuración (loadSettings).
+            const s = _lastSettings || await fetch('/api/settings').then(r => r.json());
+            if (kind === 'subscription') {
+                if (!s.claude_cli_available) {
+                    toast('Claude Code no está instalado/logueado', 'err');
+                    return;
+                }
+                document.getElementById('cfg-insights-backend-live').value = 'claude-cli';
+                document.getElementById('cfg-insights-backend-batch').value = 'claude-cli';
+            } else if (kind === 'apis') {
+                const missing = [];
+                if (!s.has_groq_key) missing.push('Groq');
+                if (!s.has_openrouter_key) missing.push('OpenRouter');
+                if (missing.length) {
+                    toast('Falta la key de ' + missing.join(' y ') + ' — ponla abajo en API Keys', 'err');
+                    return;
+                }
+                document.getElementById('cfg-insights-backend-live').value = 'groq';
+                document.getElementById('cfg-insights-backend-batch').value = 'openrouter';
+            } else {
+                return;
+            }
+            onInsightsBackendChange();
+            await saveSettings();
+            const label = kind === 'subscription' ? 'claude-cli / claude-cli' : 'groq / openrouter';
+            toast('Backends configurados: ' + label, 'ok');
         }
 
         // --- Acordeón del panel de Configuración ---
@@ -2971,6 +3066,10 @@ def get_settings():
         "anthropic_model_live": os.getenv("ANTHROPIC_MODEL_LIVE", "claude-haiku-4-5"),
         "anthropic_model_batch": os.getenv("ANTHROPIC_MODEL_BATCH", "claude-sonnet-5"),
         "claude_cli_model_batch": os.getenv("CLAUDE_CLI_MODEL_BATCH", "sonnet"),
+        "insights_fallback": os.getenv("INSIGHTS_FALLBACK", "true").strip().lower() == "true",
+        "claude_cli_available": _insights._claude_cli_path() is not None,
+        "has_groq_key": bool(os.getenv("GROQ_API_KEY", "").strip()),
+        "has_openrouter_key": bool(os.getenv("OPENROUTER_API_KEY", "").strip()),
     })
 
 
@@ -2994,6 +3093,7 @@ def update_settings():
         "insights_backend": "INSIGHTS_BACKEND",
         "insights_backend_live": "INSIGHTS_BACKEND_LIVE",
         "insights_backend_batch": "INSIGHTS_BACKEND_BATCH",
+        "insights_fallback": "INSIGHTS_FALLBACK",
         "insights_endpoint_model": "INSIGHTS_ENDPOINT_MODEL",
         "audio_source": "AUDIO_SOURCE",
         "anthropic_model_live": "ANTHROPIC_MODEL_LIVE",
