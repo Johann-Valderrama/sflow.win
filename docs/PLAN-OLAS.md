@@ -20,6 +20,71 @@
   auto-check: si su modelo es más débil que el estampado, avisa antes de proceder.
 - Techo de esfuerzo SIEMPRE `xhigh`, nunca `max`.
 
+## Modo autónomo: Kickoff Orquestador (ejecuta olas sin depender de Johann)
+
+Alternativa a lanzar ola por ola: UNA ventana con Fable orquestando todas las olas
+pendientes, con gates explícitos para lo único que requiere atención humana. Límites
+físicos asumidos: las olas son secuenciales por dependencia; el paralelismo real es entre
+unidades de ARCHIVOS DISJUNTOS (web/server.py es hotspot: sus unidades van en serie, sin
+worktrees: el merge del template inline no es viable); recursos compartidos (puerto de
+verificación, navegador, DB dev) en serie (§4). Para autonomía real, lanzar la sesión con
+permisos amplios (o aceptar ediciones), sabiendo el tradeoff.
+
+### Kickoff Orquestador (copiar y pegar; también sirve para REANUDAR)
+
+```
+Eres el ORQUESTADOR AUTÓNOMO del plan de olas de Vflow. Auto-check: declara tu modelo
+(esperado Fable 5; si eres más débil, avisa y espera). Lee en orden: PROGRESS.md (si
+existe: reanuda desde su Next action y sáltate lo hecho), docs/PLAN-OLAS.md completo,
+C:\OPS\.claude\skills\orquestar-agentes-fable\SKILL.md.
+
+Misión: ejecutar las olas pendientes EN ORDEN de dependencias, sin intervención de
+Johann salvo los GATES. Trabaja hasta agotar lo ejecutable.
+
+Reglas de ejecución:
+1. Scheduler: unidades de archivos disjuntos pueden correr en paralelo (subagentes
+   background; isolation worktree SOLO si mutan archivos a la vez). Unidades que tocan
+   web/server.py u otro hotspot van EN SERIE. Un cambio multi-archivo = un solo agente.
+2. Recursos compartidos en serie: un solo verificador a la vez (Flask standalone en
+   puerto 5679, navegador con cache-busting ?v=N, DB dev). Matar el Flask al terminar.
+3. Cada unidad: brief autocontenido en frío (§3: objetivo, contexto, contrato de salida
+   apretado, fronteras de archivos) + estampa de modelo del plan. Máx 2 reintentos; al
+   3º, gate G4.
+4. Nada se integra sin verificar (§5): diff real (git diff acotado, como SCRIPT) +
+   prueba de flujo en navegador. 1 unidad = 1 commit (sin push).
+5. HIGIENE DE CONTEXTO (regla de oro): NUNCA leas tú los archivos grandes (web/server.py,
+   core/*.py completos): delega lectura y ejecución; recibe destilados estructurados.
+   Reancla desde PROGRESS.md al abrir cada ola. Si tu contexto pasa ~50%: cierra la
+   unidad en curso, actualiza PROGRESS.md (plantilla §8, con Next action exacto por
+   tarea) y termina tu turno pidiendo a Johann reanudar en ventana nueva con ESTE mismo
+   kickoff. Tu memoria es PROGRESS.md, no el hilo.
+6. Debate §10.2 por OLA: antes de ejecutar cada ola, somete su plan de unidades al
+   ataque de Opus (esfuerzo graduado por riesgo) y reconcilia por escrito en PROGRESS.md
+   (Decisiones). Las correcciones del debate ya registradas en PLAN-OLAS no se re-litigan.
+7. Coexistencia: puede haber OTRA sesión trabajando en el repo. Antes de cada unidad:
+   git status; si hay cambios ajenos sin commitear en un archivo que vas a tocar,
+   trabaja ENCIMA (nunca revertir) y commitea SOLO tus archivos.
+
+GATES (lo único que espera a Johann; anótalo en PROGRESS.md sección "PARA JOHANN" con
+qué revisar y cómo, y CONTINÚA con trabajo no bloqueado si existe):
+- G1 Contratos consumibles por terceros (p. ej. cambiar el MCP): diseñar + debatir + dejar
+  el contrato para su ojo antes de codearlo.
+- G2 Pruebas físicas que exigen humano: dictar con voz real, reunión real AltGr+R con
+  audio, hotkeys contra IDE. Deja el caso de prueba escrito, paso a paso.
+- G3 Gusto visual: al cerrar cada ola de UI deja screenshots en docs/screenshots/ y sigue;
+  Johann revisa async y pide ajustes después.
+- G4 Tercer reintento fallido, supuesto del plan roto, o decisión de producto no prevista.
+PROHIBIDO siempre: push a remoto, borrar datos de la DB, leer/tocar .env, dependencias
+nuevas sin la política de 30 días, tocar el flujo de dictado sin unidad que lo pida.
+```
+
+### Qué NO se puede automatizar (expectativas honestas)
+
+- Micrófono y voz: G2 existe porque un agente no puede hablar ni oír tu setup real.
+- El gusto: la UI se verifica funcional en navegador, pero "me convence cómo se ve" es tuyo (G3, async).
+- La cuota/modelo: si el orquestador agota contexto o cuota, el handoff por PROGRESS.md
+  requiere que TÚ abras la ventana nueva (30 segundos, no revisión).
+
 ## Frase de arranque estándar (para Johann, en ventana nueva con plan mode)
 
 ```
