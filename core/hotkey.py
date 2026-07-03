@@ -12,6 +12,12 @@ class HotkeyListener(QObject):
        Tiene un retraso de armado (ARMING_DELAY) para no disparar accidentalmente
        si se usa Ctrl+Alt como parte de un atajo de otra aplicación (ej. Ctrl+Alt+L).
     2. Triple-tap Shift:         toggle manos-libres → transcribir (tap Shift de nuevo para detener).
+       Solo cuentan taps LIMPIOS: si otra tecla se presiona mientras Shift está abajo
+       (Shift+A para una mayúscula, Shift+Enter), ese Shift NO cuenta ni para iniciar
+       ni para detener. La decisión se toma al SOLTAR Shift, no al presionarlo, y
+       cualquier tecla no-Shift invalida una secuencia de taps en curso. Motivo: el
+       usuario dicta manos-libres y a la vez teclea en otra app (p. ej. responde un
+       WhatsApp); una mayúscula no debe cortar el dictado a mitad de frase.
     3. Mantener Ctrl+Shift+Alt:  hold → traducir al idioma destino
        (Shift debe estar presionado ANTES de Alt). También usa ARMING_DELAY.
     4. AltGr + T toggle:         manos-libres → traducir (una pulsación inicia, otra detiene).
@@ -49,6 +55,7 @@ class HotkeyListener(QObject):
         # Detección de triple-tap (Shift)
         self._last_shift_press = 0.0
         self._shift_tap_count = 0
+        self._shift_chord = False  # True si otra tecla se presionó con Shift abajo (acorde, no tap)
 
         # Timer de armado diferido para modos 1 y 3 (Ctrl+Alt)
         self._arm_timer: threading.Timer | None = None
@@ -80,6 +87,7 @@ class HotkeyListener(QObject):
         self._alt_gr_t_mode = False
         self._shift_tap_count = 0
         self._last_shift_press = 0.0
+        self._shift_chord = False
 
     # ------------------------------------------------------------------
     # Armado diferido (modos 1 y 3)
@@ -150,6 +158,14 @@ class HotkeyListener(QObject):
         _R_VK = 0x52
         is_r = hasattr(key, 'vk') and key.vk == _R_VK
 
+        # --- Tap limpio de Shift: cualquier otra tecla invalida tap y secuencia ---
+        # Va ANTES de los bloques con return (reunión, modo 4) para que el acorde
+        # quede marcado aunque esos bloques corten el flujo.
+        if not is_shift:
+            self._shift_tap_count = 0          # otra tecla corta una secuencia de taps en curso
+            if self._shift_held:
+                self._shift_chord = True       # Shift está siendo usado como acorde (Shift+A), no como tap
+
         # --- Modo Reunión: toggle AltGr + R (independiente del dictado) ---
         # La reunión es una sesión propia (core.meeting.MEETING), no usa la máquina
         # de estados de dictado: solo emite la señal y el slot decide iniciar/terminar.
@@ -187,34 +203,13 @@ class HotkeyListener(QObject):
         elif is_alt_gr:
             self._alt_gr_held = True
         elif is_shift:
-            now = time.time()
-
             # Ignorar auto-repeat de Windows
             if self._shift_held:
                 return
             self._shift_held = True
-
-            # Manos-libres (modo 2): un solo tap de Shift detiene la grabación
-            if self._hands_free and self._recording:
-                self._hands_free = False
-                self._recording = False
-                self.released.emit()
-                return
-
-            # Detección de triple-tap
-            if now - self._last_shift_press < DOUBLE_TAP_INTERVAL:
-                self._shift_tap_count += 1
-            else:
-                self._shift_tap_count = 1
-            self._last_shift_press = now
-
-            if self._shift_tap_count >= 3 and not self._recording:
-                # Modo 2: triple-tap Shift → transcripción manos-libres
-                self._shift_tap_count = 0
-                self._hands_free = True
-                self._recording = True
-                self.pressed.emit()
-                return
+            self._shift_chord = False  # tap potencial; se invalida si otra tecla llega antes del release
+            # El stop de manos-libres y el triple-tap se deciden en _on_release,
+            # solo si el tap fue LIMPIO (sin otras teclas mientras Shift estuvo abajo).
 
         # --- Modos 1 y 3: Ctrl+Alt hold con retraso de armado ---
         if self._ctrl_held and self._alt_held and not self._recording and self._arm_timer is None:
@@ -245,6 +240,30 @@ class HotkeyListener(QObject):
             self._alt_gr_held = False
         elif is_shift:
             self._shift_held = False
+            clean_tap = not self._shift_chord
+            self._shift_chord = False
+            if clean_tap:
+                now = time.time()
+                # Manos-libres (modo 2): un tap LIMPIO de Shift detiene la grabación
+                if self._hands_free and self._recording:
+                    self._hands_free = False
+                    self._recording = False
+                    self._shift_tap_count = 0
+                    self.released.emit()
+                    return
+                # Detección de triple-tap (solo taps limpios)
+                if now - self._last_shift_press < DOUBLE_TAP_INTERVAL:
+                    self._shift_tap_count += 1
+                else:
+                    self._shift_tap_count = 1
+                self._last_shift_press = now
+                if self._shift_tap_count >= 3 and not self._recording:
+                    # Modo 2: triple-tap Shift → transcripción manos-libres
+                    self._shift_tap_count = 0
+                    self._hands_free = True
+                    self._recording = True
+                    self.pressed.emit()
+                    return
 
         # Cancelar armado si se sueltan Ctrl o Alt antes de que expire el timer
         if (is_ctrl or is_alt) and self._arm_timer is not None:
