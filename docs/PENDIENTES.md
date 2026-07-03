@@ -353,7 +353,13 @@ total). Fathom aporta el patrón de inmediatez; superwhisper/Wispr Flow los patr
 
 Regla transversal (Granola): durante la reunión, UI mínima; el poder vive después, a un clic.
 
-## Panel en vivo: rediseño push→pull (decisión jul 2026, tras ver el panel de Tactiq)
+## ~~Panel en vivo: rediseño push→pull (decisión jul 2026, tras ver el panel de Tactiq)~~
+
+**HECHO 2026-07-03** (commits 5e2d22d, e99ed9f, 19a50bc, hotfix 9fefc23): implementado tal
+como se decidió abajo — dos pestañas En vivo/Preguntar, push mínimo (solo tarjetas de
+pendientes con ✓/✗ y caducidad ~3 min), pausa congela reloj, notas rápidas, chat "Esta
+reunión" en vivo sobre snapshot en RAM. Detalle completo en CLAUDE.md sección "Dashboard
+Shell" ("Panel en vivo push→pull").
 
 Problema del panel actual ("Análisis en vivo" en /reunion): el Insight Stream EMPUJA todo
 (temas, pendientes, propuestas, citas) a una columna que crece sin parar con el mismo peso
@@ -362,19 +368,22 @@ conversación por atención. Tactiq/Fireflies/Granola coinciden en el patrón op
 la IA es PULL (preguntas bajo demanda) y solo lo urgente se empuja.
 
 Rediseño (mockup mostrado en sesión):
-- **Dos pestañas** como Tactiq: "En vivo" (transcript Yo/Ellos + campo "mis notas") y
+- ~~**Dos pestañas** como Tactiq: "En vivo" (transcript Yo/Ellos + campo "mis notas") y
   "Preguntar" (chat con chips scoped a la reunión en curso: "¿Puntos clave hasta ahora?",
-  "¿Qué me falta preguntar?", "Pendientes y responsables").
-- **Push mínimo**: SOLO pendientes detectados aparecen como tarjeta discreta con ✓/✗
+  "¿Qué me falta preguntar?", "Pendientes y responsables").~~ **HECHO 2026-07-03**.
+- ~~**Push mínimo**: SOLO pendientes detectados aparecen como tarjeta discreta con ✓/✗
   (el feedback alimenta el bucle de mejora de prompts). Temas y propuestas dejan de
-  mostrarse en vivo: van al acta.
+  mostrarse en vivo: van al acta.~~ **HECHO 2026-07-03**.
 - **El motor de insights NO se elimina**: sigue corriendo en background con su rolling
   state; alimenta el acta instantánea al colgar y hace que las respuestas del chat en vivo
   sean casi gratis (el estado ya está computado). Solo cambia QUÉ se muestra.
-- **Header con signos vitales**: timer + VU por canal (confianza de que la captura vive).
-- **Barra inferior de 4 acciones**: Highlight (AltGr+H) | Nota rápida | Pausar | Terminar.
-- El chat "Esta reunión" del asistente (hoy deshabilitado hasta elegir del historial) se
-  habilita para la reunión EN CURSO usando el transcript vivo + estado de insights.
+- ~~**Header con signos vitales**: timer + VU por canal (confianza de que la captura vive).~~
+  **HECHO 2026-07-03**.
+- ~~**Barra inferior de 4 acciones**: Highlight (AltGr+H) | Nota rápida | Pausar | Terminar.~~
+  **HECHO 2026-07-03**.
+- ~~El chat "Esta reunión" del asistente (hoy deshabilitado hasta elegir del historial) se
+  habilita para la reunión EN CURSO usando el transcript vivo + estado de insights.~~
+  **HECHO 2026-07-03** (commit 19a50bc).
 
 ## Panel proactivo v2: qué gana el derecho a interrumpir (ideas jul 2026)
 
