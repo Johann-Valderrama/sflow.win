@@ -292,6 +292,9 @@ HTML_TEMPLATE = """
         .skel { background: linear-gradient(90deg, rgba(255,255,255,.04), rgba(255,255,255,.1), rgba(255,255,255,.04)); background-size: 200% 100%; animation: skel 1.2s infinite; border-radius: 6px; }
         @keyframes skel { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
         tr.selected-row { background: rgba(140,80,220,0.08); }
+        /* Acciones de fila discretas hasta el hover (U3) */
+        td.actions-cell { opacity: 0.3; transition: opacity 0.15s; }
+        tr:hover td.actions-cell, tr.selected-row td.actions-cell { opacity: 1; }
         tr.row-hover { user-select: text; }
         tr.row-hover td:not(.text-cell) { user-select: none; -webkit-user-select: none; }
         .dict-entry-dimmed { opacity: 0.4; }
@@ -863,6 +866,25 @@ HTML_TEMPLATE = """
 
         <!-- Vista Dictados (home) -->
         <div id="dictados-view">
+        <div class="grid gap-3 mb-4" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))" id="stats-row">
+            <div class="metric-card">
+                <span class="metric-label">Dictados hoy</span>
+                <span class="metric-value" id="st-today">–</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Minutos esta semana</span>
+                <span class="metric-value" id="st-week">–</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Transcripciones totales</span>
+                <span class="metric-value" id="st-total">–</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Términos del diccionario</span>
+                <span class="metric-value" id="st-dict">–</span>
+                <span class="metric-sub">activos</span>
+            </div>
+        </div>
         <div class="glass rounded-xl overflow-hidden">
             <div class="overflow-x-auto">
             <table class="w-full">
@@ -963,10 +985,21 @@ HTML_TEMPLATE = """
                 selectedIds = new Set([...selectedIds].filter(id => existingIds.has(id)));
                 renderTable(allData);
                 showOffline(false);
+                loadStats();  // agregados baratos (indexados); mismo ciclo de refresh
             } catch (err) {
                 // No relanzar: el setInterval debe seguir vivo.
                 showOffline(true);
             }
+        }
+
+        async function loadStats() {
+            try {
+                const s = await fetch('/api/stats').then(r => r.json());
+                document.getElementById('st-today').textContent = s.today_count;
+                document.getElementById('st-week').textContent = Math.round((s.week_seconds || 0) / 60);
+                document.getElementById('st-total').textContent = s.total_count;
+                document.getElementById('st-dict').textContent = s.dict_active;
+            } catch (e) { /* informativo: no romper el flujo del historial */ }
         }
 
         function renderTable(data) {
@@ -991,11 +1024,12 @@ HTML_TEMPLATE = """
                     hour: '2-digit', minute: '2-digit', second: '2-digit'
                 });
                 const dur = t.duration_seconds ? t.duration_seconds.toFixed(1) + 's' : '-';
+                // Badge de fuente con los valores REALES de la DB: mic (default) / system / youtube
                 const srcBadge = t.source === 'youtube'
-                    ? '<span class="text-white/50 text-xs ml-1" title="YouTube">'+ICONS.youtube+'</span>'
+                    ? '<span class="badge badge-youtube" title="Transcrito desde URL">'+ICONS.youtube+' URL</span>'
                     : t.source === 'system'
-                        ? '<span class="text-white/50 text-xs ml-1" title="Audio del sistema">'+ICONS.speaker+'</span>'
-                        : '';
+                        ? '<span class="badge badge-system" title="Audio del sistema">'+ICONS.speaker+' Sistema</span>'
+                        : '<span class="badge badge-mic" title="Micrófono">'+ICONS.mic+' Mic</span>';
                 const isEditing = editingId === t.id;
                 const checked = selectedIds.has(t.id) ? 'checked' : '';
                 const rowClass = selectedIds.has(t.id) ? 'selected-row' : '';
@@ -1014,10 +1048,10 @@ HTML_TEMPLATE = """
                         <input type="checkbox" class="row-check accent-purple-500 cursor-pointer" data-id="${t.id}"
                             ${checked} onclick="event.stopPropagation(); handleRowSelect(event, ${i})">
                     </td>
-                    <td class="py-3 px-4 text-white/30 text-xs whitespace-nowrap align-top">${time}${srcBadge}</td>
-                    <td class="py-3 px-4 text-white/80 text-sm align-top text-cell">${textCell}</td>
-                    <td class="py-3 px-4 text-white/20 text-xs text-right align-top">${dur}</td>
-                    <td class="py-3 px-4 text-center align-top whitespace-nowrap">
+                    <td class="py-3 px-4 text-white/45 text-xs whitespace-nowrap align-top">${time}<div class="mt-1">${srcBadge}</div></td>
+                    <td class="py-3 px-4 align-top text-cell" style="color: var(--txt); font-size: 14px;">${textCell}</td>
+                    <td class="py-3 px-4 text-white/40 text-xs text-right align-top">${dur}</td>
+                    <td class="py-3 px-4 text-center align-top whitespace-nowrap actions-cell">
                         <button onclick="event.stopPropagation(); copyText(${i}, this)"
                             class="text-white/45 hover:text-white/70 text-xs p-2 rounded hover:bg-white/5"
                             title="Copiar" aria-label="Copiar texto">Copiar</button>
@@ -2977,6 +3011,12 @@ def logo():
 def get_transcriptions():
     """Retorna las últimas 200 transcripciones en formato JSON."""
     return jsonify(_db.get_recent(limit=200))
+
+
+@app.route("/api/stats")
+def get_stats():
+    """Agregados de uso para las metric cards del dashboard (read-only, indexado)."""
+    return jsonify(_db.stats())
 
 
 @app.route("/api/transcriptions/<int:tid>", methods=["DELETE"])

@@ -229,6 +229,33 @@ class TranscriptionDB:
         with self._connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM transcriptions").fetchone()[0]
 
+    def stats(self) -> dict:
+        """Agregados baratos para las metric cards del dashboard.
+
+        Solo consultas indexadas por created_at (nada de conteo de palabras: sería
+        full-scan). Convención de tiempo: created_at es UTC naive (igual que asume
+        el front con `new Date(t.created_at + 'Z')`), por eso date('now') sin
+        modificador de zona.
+        """
+        with self._connect() as conn:
+            today = conn.execute(
+                "SELECT COUNT(*) FROM transcriptions WHERE date(created_at) = date('now')"
+            ).fetchone()[0]
+            week_seconds = conn.execute(
+                "SELECT COALESCE(SUM(duration_seconds), 0) FROM transcriptions "
+                "WHERE created_at >= datetime('now', '-7 days')"
+            ).fetchone()[0]
+            total = conn.execute("SELECT COUNT(*) FROM transcriptions").fetchone()[0]
+            dict_active = conn.execute(
+                "SELECT COUNT(*) FROM dictionary WHERE enabled = 1"
+            ).fetchone()[0]
+            return {
+                "today_count": today,
+                "week_seconds": round(week_seconds or 0, 1),
+                "total_count": total,
+                "dict_active": dict_active,
+            }
+
     def delete_by_id(self, transcription_id: int) -> int:
         """Elimina una transcripción por su ID. Retorna el número de filas eliminadas."""
         with self._connect() as conn:
