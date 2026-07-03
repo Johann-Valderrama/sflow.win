@@ -298,6 +298,8 @@ HTML_TEMPLATE = """
         /* Command palette Ctrl+K (U4) */
         #palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 300;
             display: flex; align-items: flex-start; justify-content: center; padding-top: 14vh; }
+        /* La regla por ID le gana a .hidden de Tailwind (especificidad): sin esto la paleta queda siempre visible */
+        #palette-overlay.hidden { display: none; }
         #palette-box { width: min(620px, calc(100vw - 32px)); background: #16161a;
             border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; overflow: hidden;
             box-shadow: 0 16px 48px rgba(0,0,0,0.6); }
