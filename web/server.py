@@ -202,6 +202,26 @@ HTML_TEMPLATE = """
         .metric-label { font-size: 12px; color: var(--txt-3); }
         .metric-value { font-size: 22px; font-weight: 600; color: var(--txt); line-height: 1.2; }
         .metric-sub { font-size: 11px; color: var(--txt-3); }
+        /* ==== Shell (U2): sidebar + área de contenido ========================= */
+        .shell { display: flex; min-height: 100vh; align-items: stretch; }
+        #sidebar { width: 232px; flex-shrink: 0; position: sticky; top: 0; height: 100vh;
+            display: flex; flex-direction: column; padding: 18px 12px 12px;
+            border-right: 1px solid rgba(255,255,255,0.07); background: rgba(255,255,255,0.015); }
+        .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px;
+            font-size: 13.5px; color: var(--txt-2); cursor: pointer; text-decoration: none;
+            transition: background .15s, color .15s; }
+        .nav-item:hover { background: rgba(255,255,255,0.05); color: var(--txt); }
+        .nav-item.active { background: var(--accent-soft); color: #d6c8fd; }
+        #sidebar-status { margin-top: auto; padding: 10px 12px 2px; border-top: 1px solid rgba(255,255,255,0.06);
+            font-size: 11.5px; color: var(--txt-3); display: flex; flex-direction: column; gap: 4px; }
+        #content { flex: 1; min-width: 0; padding: 22px 28px; }
+        .content-inner { max-width: 1400px; margin: 0 auto; }
+        @media (max-width: 1100px) {
+            #sidebar { width: 62px; padding: 18px 8px 10px; }
+            #sidebar .nav-label, #sidebar-status, #sidebar .brand-name { display: none; }
+            .nav-item { justify-content: center; padding: 9px; }
+            #content { padding: 18px 16px; }
+        }
         /* Entrada suave de nuevos segmentos/insights del modo reunión (anti-parpadeo) */
         .mt-fade { animation: mtFade 0.25s ease-out; }
         @keyframes mtFade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
@@ -302,22 +322,41 @@ HTML_TEMPLATE = """
         .set-sec.collapsed .set-sec-chev { transform: rotate(-90deg); }
     </style>
 </head>
-<body class="min-h-screen p-6">
-    <div class="max-w-4xl mx-auto">
-        <!-- Header -->
-        <header role="banner" class="flex items-center justify-between mb-8 flex-wrap gap-3">
+<body class="min-h-screen">
+    <div class="shell">
+    <aside id="sidebar" aria-label="Navegación principal">
+        <div class="flex items-center gap-2.5 px-2 mb-6">
+            <img src="/logo" class="brand-logo" alt="Vflow">
+            <span class="brand-name text-lg font-semibold text-white">Vflow</span>
+        </div>
+        <nav class="flex flex-col gap-1" id="sidebar-nav" aria-label="Secciones">
+            <a href="#/dictados" class="nav-item" data-view="dictados" data-icon="mic"><span class="nav-label">Dictados</span></a>
+            <a href="#/reunion" class="nav-item" data-view="reunion" data-icon="chat"><span class="nav-label">Reuniones</span></a>
+            <a href="#/diccionario" class="nav-item" data-view="diccionario" data-icon="book"><span class="nav-label">Diccionario</span></a>
+            <a href="#/url" class="nav-item" data-view="url" data-icon="play"><span class="nav-label">Desde URL</span></a>
+            <a href="#/atajos" class="nav-item" data-view="atajos" data-icon="keyboard"><span class="nav-label">Atajos</span></a>
+            <a href="#/ajustes" class="nav-item" data-view="ajustes" data-icon="settings"><span class="nav-label">Ajustes</span></a>
+        </nav>
+        <div id="sidebar-status" title="Estado del sistema">
+            <span id="sb-backend">Backend: —</span>
+            <span id="sb-source">Fuente: —</span>
+        </div>
+    </aside>
+    <div id="content">
+    <div class="content-inner">
+        <!-- Topbar -->
+        <header role="banner" class="flex items-center justify-between mb-6 flex-wrap gap-3">
             <div class="flex items-center gap-3">
-                <img src="/logo" class="brand-logo" alt="Vflow">
-                <h1 class="text-2xl font-semibold text-white">Vflow</h1>
-                <span class="text-xs text-white/40 bg-white/5 px-2 py-1 rounded-full" id="count-badge">-</span>
+                <h1 class="text-xl font-semibold text-white" id="view-title">Dictados</h1>
+                <span class="text-xs text-white/40 bg-white/5 px-2 py-1 rounded-full dictados-only" id="count-badge">-</span>
             </div>
-            <div class="flex items-center gap-3 flex-wrap">
+            <div class="flex items-center gap-2 flex-wrap">
                 <input type="text" id="search" placeholder="Buscar en recientes…" title="Filtra solo las transcripciones cargadas"
-                    class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80
+                    class="dictados-only bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80
                     placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/20 w-48">
-                <div class="dropdown" id="cleanup-dropdown">
+                <div class="dropdown dictados-only" id="cleanup-dropdown">
                     <button onclick="document.getElementById('cleanup-dropdown').classList.toggle('open')"
-                        class="text-white/40 hover:text-white/70 text-sm px-2 py-1 rounded hover:bg-white/5">
+                        class="btn btn-ghost">
                         Limpiar <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
                     </button>
                     <div class="dropdown-menu">
@@ -332,12 +371,8 @@ HTML_TEMPLATE = """
                         <div class="dropdown-item danger" onclick="bulkDelete('all')">Eliminar todo</div>
                     </div>
                 </div>
-                <button onclick="loadData()" class="text-white/40 hover:text-white/70 text-sm">Actualizar</button>
-                <button onclick="toggleSettings()" aria-label="Configuración" data-icon="settings" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Configuración"></button>
-                <button onclick="toggleDictionary()" aria-label="Diccionario" data-icon="book" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Diccionario"></button>
-                <button onclick="toggleShortcuts()" aria-label="Atajos de teclado" data-icon="keyboard" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Atajos de teclado"></button>
-                <button onclick="toggleUrlQueue()" aria-label="Transcribir desde URL" data-icon="play" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Transcribir desde URL"></button>
-                <button onclick="window.open('/reunion','_blank')" aria-label="Abrir ventana de reunión" data-icon="mic" class="text-white/40 hover:text-white/70 text-sm p-2.5 rounded hover:bg-white/5" title="Abrir ventana de reunión (en vivo + historial)"></button>
+                <button onclick="loadData()" class="btn btn-ghost dictados-only">Actualizar</button>
+                <button onclick="window.open('/reunion','_blank')" class="btn btn-secondary" data-icon="mic" title="Ventana de reunión completa (en vivo + historial)"><span>Ventana reunión</span></button>
             </div>
         </header>
 
@@ -826,7 +861,8 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <!-- Table -->
+        <!-- Vista Dictados (home) -->
+        <div id="dictados-view">
         <div class="glass rounded-xl overflow-hidden">
             <div class="overflow-x-auto">
             <table class="w-full">
@@ -852,10 +888,13 @@ HTML_TEMPLATE = """
 
         <!-- Footer -->
         <div class="mt-4 text-center text-white/45 text-xs">
-            Vflow &middot; Ctrl+Shift para grabar &middot; Groq Whisper
+            Vflow &middot; Ctrl+Alt para grabar &middot; AltGr+R reunión
         </div>
+        </div><!-- /dictados-view -->
         </main>
-    </div>
+    </div><!-- /content-inner -->
+    </div><!-- /content -->
+    </div><!-- /shell -->
 
     <!-- Add to dictionary floating button (appears on text selection in transcription table) -->
     <button class="dict-add-from-history" id="dict-from-history-btn" onclick="addSelectedTextToDict()">
@@ -882,6 +921,7 @@ HTML_TEMPLATE = """
             keyboard: _ic('<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M7 13h10"/>'),
             play: _ic('<polygon points="6 4 20 12 6 20 6 4" fill="currentColor" stroke="none"/>'),
             mic: _ic('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>'),
+            chat: _ic('<path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.5 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8A8.5 8.5 0 0 1 12.5 3 8.5 8.5 0 0 1 21 11.5z"/>'),
             chevronDown: _ic('<polyline points="6 9 12 15 18 9"/>'),
             arrow: _ic('<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>'),
             download: _ic('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'),
@@ -1258,16 +1298,20 @@ HTML_TEMPLATE = """
                 document.querySelectorAll('.text-preview.expanded').forEach(el => {
                     el.classList.remove('expanded');
                 });
-                closeOtherPanels(null);
+                navigate('dictados');  // Escape vuelve a la vista principal
             }
         });
 
         _fillIcons();  // rellena los iconos SVG de los elementos estáticos (data-icon)
 
-        // Auto-refresh every 5 seconds (pausado cuando la pestaña está oculta)
+        // (El arranque del shell — _applyRoute + estado del sidebar — vive al final del
+        // bloque del router: sus const _VIEWS/_VIEW_TITLES aún no existen aquí (TDZ).)
+
+        // Auto-refresh every 5 seconds (pausado cuando la pestaña está oculta o en otra vista)
         loadData();
         setInterval(() => {
             if (document.hidden) return;
+            if (_route !== 'dictados') return;  // el historial solo se refresca en su vista
             // No refrescar si el usuario está editando: destruiría el textarea.
             if (editingId !== null) return;
             // No refrescar si hay una selección de texto activa dentro de la tabla.
@@ -1282,21 +1326,65 @@ HTML_TEMPLATE = """
             if (!document.hidden) loadData();
         });
 
-        // --- Panel accordion: solo un panel abierto a la vez ---
-        const _PANEL_IDS = ['settings-panel', 'dictionary-panel', 'shortcuts-panel', 'meeting-panel', 'url-queue-panel'];
+        // --- Enrutado por hash (U2): única fuente de verdad de visibilidad ---
+        // Reemplaza al acordeón closeOtherPanels/_PANEL_IDS: cada panel es una vista.
+        const _VIEWS = {
+            dictados: 'dictados-view',
+            reunion: 'meeting-panel',
+            diccionario: 'dictionary-panel',
+            url: 'url-queue-panel',
+            atajos: 'shortcuts-panel',
+            ajustes: 'settings-panel',
+        };
+        const _VIEW_TITLES = {
+            dictados: 'Dictados', reunion: 'Reunión', diccionario: 'Diccionario',
+            url: 'Transcribir desde URL', atajos: 'Atajos de teclado', ajustes: 'Ajustes',
+        };
+        let _route = 'dictados';
 
-        // Oculta todos los paneles excepto keepId (pasa null para cerrar todos) y
-        // detiene los polls de los paneles que se cierran. Reusa _stopMtPoll/_stopUqPoll.
-        function closeOtherPanels(keepId) {
-            _PANEL_IDS.forEach(id => {
-                if (id === keepId) return;
-                const p = document.getElementById(id);
-                if (!p || p.classList.contains('hidden')) return;
-                p.classList.add('hidden');
-                if (id === 'meeting-panel') _stopMtPoll();
-                if (id === 'url-queue-panel') _stopUqPoll();
-            });
+        function currentRoute() {
+            const h = (location.hash || '').replace(/^#\\/?/, '');
+            return _VIEWS[h] ? h : 'dictados';
         }
+        function navigate(view) { if (_VIEWS[view]) location.hash = '#/' + view; }
+
+        function _applyRoute() {
+            const route = currentRoute();
+            const prev = _route;
+            _route = route;
+            Object.entries(_VIEWS).forEach(([name, id]) => {
+                const el = document.getElementById(id);
+                if (el) el.classList.toggle('hidden', name !== route);
+            });
+            document.querySelectorAll('#sidebar .nav-item').forEach(a =>
+                a.classList.toggle('active', a.dataset.view === route));
+            const title = document.getElementById('view-title');
+            if (title) title.textContent = _VIEW_TITLES[route] || 'Vflow';
+            document.querySelectorAll('.dictados-only').forEach(el =>
+                el.classList.toggle('hidden', route !== 'dictados'));
+            // Salida de vista: detener polls del panel que se abandona
+            if (prev === 'url' && route !== 'url') _stopUqPoll();
+            if (prev === 'reunion' && route !== 'reunion') _stopMtPoll();
+            // Entrada de vista: hooks de montaje
+            if (route === 'ajustes') loadSettings();
+            if (route === 'diccionario') { loadDictionary().then(() => _applyPendingDictPrefill()); }
+            if (route === 'url') {
+                loadUrlQueue().then(summary => {
+                    if (summary && (summary.pending > 0 || summary.processing > 0)) _startUqPoll();
+                });
+            }
+            if (route === 'reunion') {
+                loadMeeting().then(st => { if (st && st.active) _startMtPoll(); });
+            }
+            if (route === 'dictados') loadData();
+            const panel = document.getElementById(_VIEWS[route]);
+            if (panel && route !== 'dictados') _focusPanel(panel);
+        }
+        window.addEventListener('hashchange', _applyRoute);
+
+        // Arranque del shell (aquí los const del router ya están inicializados).
+        _applyRoute();
+        _refreshSidebarStatus();
 
         // Enfoca el primer control del panel tras hacerlo visible.
         function _focusPanel(panel) {
@@ -1305,18 +1393,19 @@ HTML_TEMPLATE = """
             }, 0);
         }
 
-        // --- Settings panel ---
-        async function toggleSettings() {
-            const panel = document.getElementById('settings-panel');
-            if (panel.classList.contains('hidden')) {
-                closeOtherPanels('settings-panel');
-                panel.classList.remove('hidden');
-                _focusPanel(panel);
-                await loadSettings();
-            } else {
-                panel.classList.add('hidden');
-            }
+        // Estado del sistema en el pie del sidebar (backend + fuente de audio).
+        async function _refreshSidebarStatus() {
+            try {
+                const s = await fetch('/api/settings').then(r => r.json());
+                const be = (s.transcription_backend || 'groq') === 'local' ? 'Local (sin internet)' : 'Groq (nube)';
+                const src = (s.audio_source || 'mic') === 'system' ? 'Audio del sistema' : 'Micrófono';
+                document.getElementById('sb-backend').textContent = 'Backend: ' + be;
+                document.getElementById('sb-source').textContent = 'Fuente: ' + src;
+            } catch (e) { /* silencioso: es informativo */ }
         }
+
+        // Compat: los antiguos toggles ahora navegan (cualquier onclick que quede sigue funcionando).
+        function toggleSettings() { navigate('ajustes'); }
 
         let _lastSettings = null;  // cache de la última respuesta de /api/settings (presets de insights la consultan)
 
@@ -1389,6 +1478,7 @@ HTML_TEMPLATE = """
             const saved = document.getElementById('cfg-saved');
             saved.style.opacity = '1';
             setTimeout(() => { saved.style.opacity = '0'; }, 2000);
+            _refreshSidebarStatus();  // el pie del sidebar refleja backend/fuente al instante
         }
 
         // --- Presets de un clic para el backend de insights ---
@@ -1600,25 +1690,8 @@ HTML_TEMPLATE = """
         let _dictEntries = [];
         let _dictBudget = {included: 0, total: 0, included_ids: []};
 
-        async function toggleDictionary() {
-            const panel = document.getElementById('dictionary-panel');
-            if (panel.classList.contains('hidden')) {
-                closeOtherPanels('dictionary-panel');
-                panel.classList.remove('hidden');
-                _focusPanel(panel);
-                await loadDictionary();
-            } else {
-                panel.classList.add('hidden');
-            }
-        }
-
-        function toggleShortcuts() {
-            const panel = document.getElementById('shortcuts-panel');
-            const willOpen = panel.classList.contains('hidden');
-            if (willOpen) closeOtherPanels('shortcuts-panel');
-            panel.classList.toggle('hidden');
-            if (willOpen) _focusPanel(panel);
-        }
+        function toggleDictionary() { navigate('diccionario'); }
+        function toggleShortcuts() { navigate('atajos'); }
 
         // ---- Modo reunión (captura dual mic + sistema) ----
         let _mtPollInterval = null;
@@ -1640,18 +1713,7 @@ HTML_TEMPLATE = """
             loadMeeting();
         }
 
-        function toggleMeeting() {
-            const panel = document.getElementById('meeting-panel');
-            const isHidden = panel.classList.contains('hidden');
-            if (isHidden) closeOtherPanels('meeting-panel');
-            panel.classList.toggle('hidden');
-            if (isHidden) {
-                _focusPanel(panel);
-                loadMeeting().then(st => { if (st && st.active) _startMtPoll(); });
-            } else {
-                _stopMtPoll();
-            }
-        }
+        function toggleMeeting() { navigate('reunion'); }
 
         function _stopMtPoll() {
             if (_mtPollInterval) { clearInterval(_mtPollInterval); _mtPollInterval = null; }
@@ -2134,24 +2196,29 @@ HTML_TEMPLATE = """
             if (btn) btn.style.display = 'none';
         }
 
+        // Contrato U2 (rescate del flujo selección→diccionario): la tabla y el panel
+        // diccionario ya NO coexisten en el DOM visible. El texto seleccionado se guarda
+        // en estado y el prefill ocurre al montar la vista diccionario (hook del router).
+        let _pendingDictText = null;
+
         function addSelectedTextToDict() {
             const btn = document.getElementById('dict-from-history-btn');
-            const text = (btn && btn._selectedText) || '';
+            _pendingDictText = (btn && btn._selectedText) || '';
             hideDictFromHistoryBtn();
             window.getSelection().removeAllRanges();
-            // Abrir panel diccionario si está cerrado
-            const panel = document.getElementById('dictionary-panel');
-            if (panel.classList.contains('hidden')) {
-                panel.classList.remove('hidden');
-                loadDictionary();
+            if (_route === 'diccionario') {
+                _applyPendingDictPrefill();   // ya estamos en la vista: prefill inmediato
+            } else {
+                navigate('diccionario');      // el hook del router hace el prefill al montar
             }
-            // Scroll al panel
-            panel.scrollIntoView({behavior: 'smooth', block: 'start'});
-            // Prefill "Cuando escuche..."
+        }
+
+        function _applyPendingDictPrefill() {
+            if (_pendingDictText === null) return;
             const fromInput = document.getElementById('dict-replace-from');
             const toInput = document.getElementById('dict-replace-to');
-            if (fromInput) { fromInput.value = text; }
-            // Foco en "Palabra"
+            if (fromInput) fromInput.value = _pendingDictText;
+            _pendingDictText = null;
             setTimeout(() => { if (toInput) toInput.focus(); }, 200);
         }
 
@@ -2178,20 +2245,7 @@ HTML_TEMPLATE = """
         // --- URL Queue panel ---
         let _uqPollInterval = null;
 
-        function toggleUrlQueue() {
-            const panel = document.getElementById('url-queue-panel');
-            const isHidden = panel.classList.contains('hidden');
-            if (isHidden) closeOtherPanels('url-queue-panel');
-            panel.classList.toggle('hidden');
-            if (isHidden) {
-                _focusPanel(panel);
-                loadUrlQueue().then(summary => {
-                    if (summary && (summary.pending > 0 || summary.processing > 0)) _startUqPoll();
-                });
-            } else {
-                _stopUqPoll();
-            }
-        }
+        function toggleUrlQueue() { navigate('url'); }
 
         function _stopUqPoll() {
             if (_uqPollInterval) { clearInterval(_uqPollInterval); _uqPollInterval = null; }
@@ -2352,11 +2406,11 @@ HTML_TEMPLATE = """
             if (uqInput) uqInput.addEventListener('keydown', e => { if (e.key === 'Enter') enqueueUrls(); });
         });
 
-        // Watcher global: refrescar historial cuando se completan items de la cola
+        // Watcher global: refrescar historial cuando se completan items de la cola.
+        // Condicionado a la RUTA (única fuente de verdad de visibilidad), no a .hidden.
         let _lastQueueDone = 0;
         setInterval(async () => {
-            const panel = document.getElementById('url-queue-panel');
-            if (!panel || panel.classList.contains('hidden')) return;
+            if (_route !== 'url') return;
             try {
                 const res = await fetch('/api/url-queue');
                 const data = await res.json();
