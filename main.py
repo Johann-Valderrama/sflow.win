@@ -28,6 +28,7 @@ import sys
 import signal
 import subprocess
 import threading
+import webbrowser
 import winreg
 import winsound
 from PyQt6.QtWidgets import (
@@ -744,6 +745,7 @@ class VflowApp(QObject):
             self._meeting_active_seen = True  # sincronizar con el poller
             self._apply_meeting_viz(True)     # visualizador del pill = audio de la reunión
             self.pill.set_state(PillWidget.STATE_RECORDING)
+            self.pill.set_meeting_state(True, source_system=(os.getenv("AUDIO_SOURCE", "mic") == "system"))
             if self.tray:
                 extra = "" if res.get("sys_available", True) else " (solo micrófono: no se detectó audio del sistema)"
                 self.tray.showMessage(
@@ -799,6 +801,7 @@ class VflowApp(QObject):
         self._meeting_stopping = False
         self._meeting_active_seen = False  # sincronizar con el poller
         self._apply_meeting_viz(False)     # restaurar visualizador al recorder de dictado
+        self.pill.set_meeting_state(False)
         if not res.get("ok"):
             self.pill.set_state(PillWidget.STATE_ERROR)
             if self.tray:
@@ -835,22 +838,38 @@ class VflowApp(QObject):
         (hilo Flask), fuera de este controlador. Cubre el bug de la pill "atascada"
         en modo grabación cuando inicias con AltGr+R y terminas desde el dashboard.
         No toca la pill si hay un dictado en curso, ni pisa el flujo de stop por hotkey.
+        También empuja el overlay de reunión (timer/paused/nivel "Ellos") cada tick,
+        no solo en las transiciones — es lo que hace avanzar el timer mm:ss visible.
         """
         active = MEETING.is_active()
-        if active == self._meeting_active_seen:
-            return
-        self._meeting_active_seen = active
-        if self._recording_active:
-            return  # hay un dictado en curso: no interferir con su pill
+        if active != self._meeting_active_seen:
+            self._meeting_active_seen = active
+            if not self._recording_active:
+                if active:
+                    # Reunión iniciada desde fuera (dashboard) → reflejar en la pill
+                    self._apply_meeting_viz(True)
+                    self.pill.set_state(PillWidget.STATE_RECORDING)
+                elif not self._meeting_stopping:
+                    # Reunión terminada desde fuera (dashboard). Si fue por hotkey/tray,
+                    # _on_meeting_stopped ya gestiona la pill (_meeting_stopping=True).
+                    self._apply_meeting_viz(False)
+                    self.pill.set_state(PillWidget.STATE_DONE)
+
         if active:
-            # Reunión iniciada desde fuera (dashboard) → reflejar en la pill
-            self._apply_meeting_viz(True)
-            self.pill.set_state(PillWidget.STATE_RECORDING)
-        elif not self._meeting_stopping:
-            # Reunión terminada desde fuera (dashboard). Si fue por hotkey/tray,
-            # _on_meeting_stopped ya gestiona la pill (_meeting_stopping=True).
-            self._apply_meeting_viz(False)
-            self.pill.set_state(PillWidget.STATE_DONE)
+            try:
+                status = MEETING.status()
+                levels = status.get("levels") or {}
+                self.pill.set_meeting_state(
+                    True,
+                    paused=bool(status.get("paused")),
+                    elapsed_fmt=status.get("elapsed_fmt", "00:00"),
+                    level_ellos=float(levels.get("ellos", 0.0) or 0.0),
+                    source_system=(os.getenv("AUDIO_SOURCE", "mic") == "system"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("_sync_meeting_pill: error actualizando overlay de reunión: %s", exc)
+        elif self.pill._meeting_mode:
+            self.pill.set_meeting_state(False)
 
     def _apply_meeting_viz(self, active: bool):
         """Apunta el visualizador del pill al audio de la reunión (tu voz) o lo
@@ -987,6 +1006,15 @@ def main():
     # Icono de bandeja del sistema
     tray = _setup_tray(app, port, vflow)  # noqa: F841 — debe mantenerse la referencia viva
     vflow.tray = tray  # exponer tray al controlador para mensajes de notificación
+
+    # Clic corto en la pill con reunión activa → abrir el dashboard en /reunion.
+    # QueuedConnection no es estrictamente necesaria aquí (la señal se emite desde
+    # mouseReleaseEvent, ya en el hilo Qt), pero se usa por consistencia con el resto
+    # de conexiones de señales de la app.
+    vflow.pill.open_dashboard_requested.connect(
+        lambda: webbrowser.open(f"http://localhost:{port}/reunion"),
+        Qt.ConnectionType.QueuedConnection,
+    )
 
     logger.info("Vflow v%s activo. Dashboard en http://localhost:%s", APP_VERSION, port)
 

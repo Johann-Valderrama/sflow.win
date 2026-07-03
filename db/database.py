@@ -96,6 +96,8 @@ class TranscriptionDB:
         "ALTER TABLE meetings ADD COLUMN chapters_json TEXT",
         # Momentos destacados marcados por el usuario en vivo (AltGr+H)
         "ALTER TABLE meetings ADD COLUMN highlights_json TEXT",
+        # Notas rápidas capturadas en vivo durante la reunión (unidad 2.1)
+        "ALTER TABLE meetings ADD COLUMN notes_json TEXT",
     ]
 
     # DDL adicional para la cola de URLs (Fase 3, paso 2)
@@ -480,15 +482,16 @@ class TranscriptionDB:
     def meeting_insert(self, title: str, transcript: str, segments_json: str,
                        duration_seconds: float, started_at: str = None,
                        insights_json: str = None, minutes_json: str = None,
-                       chapters_json: str = None, highlights_json: str = None) -> int:
+                       chapters_json: str = None, highlights_json: str = None,
+                       notes_json: str = None) -> int:
         """Inserta una reunión finalizada y devuelve su id."""
         with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO meetings (title, transcript, segments_json, insights_json, "
-                "minutes_json, chapters_json, highlights_json, duration_seconds, started_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "minutes_json, chapters_json, highlights_json, notes_json, duration_seconds, started_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (title, transcript, segments_json, insights_json, minutes_json,
-                 chapters_json, highlights_json, duration_seconds, started_at),
+                 chapters_json, highlights_json, notes_json, duration_seconds, started_at),
             )
             meeting_id = cursor.lastrowid
             self._fts_index_meeting(conn, meeting_id, {

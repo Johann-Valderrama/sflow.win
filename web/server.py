@@ -2674,67 +2674,117 @@ MEETING_PAGE = """<!DOCTYPE html>
   </div>
   <div id="mt-status" class="text-xs text-white/55 mb-3" aria-live="polite"></div>
 
-  <div class="grid gap-3 mb-3 grid-cols-1 md:grid-cols-[1.4fr_1fr]">
-    <div>
-      <div class="flex items-center justify-between mb-1.5">
-        <span class="text-xs text-white/55">Transcripción en vivo</span>
-        <button onclick="copyEl('mt-transcript', this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5 transition-colors" title="Copiar transcript">Copiar</button>
-      </div>
-      <div id="mt-transcript" class="space-y-1.5 max-h-[28rem] overflow-y-auto glass rounded-xl p-3">
-        <div class="text-xs text-white/45">Inicia una reunión para ver la transcripción (Yo / Ellos).</div>
-      </div>
-    </div>
-    <div>
-      <div class="text-xs text-white/55 mb-1.5">Análisis en vivo</div>
-      <div id="mt-insights" class="space-y-3 max-h-[28rem] overflow-y-auto glass rounded-xl p-3">
-        <div class="text-xs text-white/45">Temas, pendientes, propuestas y próximas reuniones.</div>
-      </div>
-    </div>
-  </div>
-  <div id="mt-acta" class="glass rounded-xl p-4 mb-8 hidden">
-    <div class="flex items-center justify-between mb-2">
-      <span class="text-sm font-medium text-emerald-300/80">Acta de la reunión</span>
-      <button onclick="copyEl('mt-acta-body', this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5 transition-colors" title="Copiar acta">Copiar</button>
-    </div>
-    <div id="mt-acta-body" class="space-y-2 text-sm text-white/80"></div>
+  <!-- Pestañas: En vivo | Preguntar (el chat existente vive dentro de "Preguntar") -->
+  <div id="mt-tabs" class="flex items-center gap-1 mb-3 hidden">
+    <button id="mt-tab-btn-live" onclick="mtSetTab('live')" class="text-xs px-3 py-1.5 rounded-t-lg border-b-2 transition-colors">En vivo</button>
+    <button id="mt-tab-btn-ask" onclick="mtSetTab('ask')" class="text-xs px-3 py-1.5 rounded-t-lg border-b-2 transition-colors">Preguntar</button>
   </div>
 
-  <div class="flex items-center justify-between mb-2 mt-8">
-    <div class="text-sm font-medium text-white/60">Historial de reuniones</div>
-    <div class="flex gap-2">
-      <button onclick="exportAll()" class="btn text-white/45 hover:text-white/70 hover:bg-white/5" title="Exportar todas a Markdown">Exportar todas (.md)</button>
-      <button onclick="clearAll()" class="btn text-white/55 hover:text-red-300 hover:bg-white/5" title="Eliminar todas las reuniones">Limpiar todo</button>
-    </div>
-  </div>
-  <input id="meetingSearch" type="search" placeholder="Buscar en reuniones…" aria-label="Buscar en reuniones"
-    class="focus:outline-none focus:ring-2 focus:ring-violet-500/60"
-    style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.4rem .75rem;font-size:.8rem;margin-bottom:.5rem;"
-    oninput="onSearchInput(this.value)">
-  <div id="mt-history" class="space-y-1"></div>
-  <div id="mt-viewer" class="glass rounded-xl p-4 mt-3 hidden"></div>
-
-  <!-- Asistente de reuniones — chat de memoria -->
-  <div class="glass rounded-xl p-4 mt-6">
-    <div class="flex items-center justify-between mb-2">
-      <div class="text-sm font-medium text-violet-300/80" data-icon="chat">Asistente de reuniones &mdash; pregúntale a tus reuniones</div>
-      <div class="flex items-center gap-1">
-        <button id="asst-scope-global" class="text-[11px] px-2 py-0.5 rounded-full border transition-colors">Global</button>
-        <button id="asst-scope-meeting" disabled class="text-[11px] px-2 py-0.5 rounded-full border transition-colors" title="Selecciona una reunión del historial para preguntar solo sobre ella">Esta reunión</button>
+  <!-- Panel: En vivo -->
+  <div id="mt-tab-live">
+    <!-- Header de reunión activa: timer + VU por canal + pausa -->
+    <div id="mt-live-header" class="glass rounded-xl p-4 mb-3 hidden">
+      <div class="flex items-center justify-between flex-wrap gap-3">
+        <div class="flex items-center gap-3">
+          <div id="mt-timer" class="text-3xl font-mono font-semibold tabular-nums text-white/90">00:00</div>
+          <div id="mt-paused-badge" class="text-xs px-2 py-1 rounded-md bg-amber-500/20 text-amber-300 hidden">⏸ EN PAUSA</div>
+        </div>
+        <div class="flex items-center gap-4">
+          <div class="flex items-center gap-1.5" title="Nivel de tu micrófono">
+            <span class="text-[11px] text-purple-300/80 w-8">Yo</span>
+            <div class="w-24 h-1.5 rounded-full bg-white/10 overflow-hidden"><div id="mt-vu-yo" class="h-full rounded-full" style="width:0%;background:var(--accent);transition:width .12s linear;"></div></div>
+          </div>
+          <div class="flex items-center gap-1.5" title="Nivel de audio del sistema (Ellos)">
+            <span class="text-[11px] text-sky-300/80 w-10">Ellos</span>
+            <div class="w-24 h-1.5 rounded-full bg-white/10 overflow-hidden"><div id="mt-vu-ellos" class="h-full rounded-full" style="width:0%;background:var(--cyan);transition:width .12s linear;"></div></div>
+          </div>
+        </div>
       </div>
     </div>
-    <div id="asst-messages" class="space-y-2 overflow-y-auto mb-2" aria-live="polite" style="min-height:60px;max-height:280px;"></div>
-    <div id="asst-chips" class="flex flex-wrap gap-1.5 mb-2"></div>
-    <div class="flex gap-2">
-      <input id="asst-input" type="text" placeholder="Pregunta sobre tus reuniones…" aria-label="Pregunta sobre tus reuniones"
-        class="focus:outline-none focus:ring-2 focus:ring-violet-500/60"
-        style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.35rem .7rem;font-size:.8rem;"
-        onkeydown="if(event.key==='Enter')asstSend()">
-      <button id="asst-send" onclick="asstSend()" class="btn bg-violet-600/30 text-violet-200 hover:bg-violet-600/50">Enviar</button>
+
+    <div class="grid gap-3 mb-3 grid-cols-1 md:grid-cols-[1.4fr_1fr]">
+      <div>
+        <div class="flex items-center justify-between mb-1.5">
+          <span class="text-xs text-white/55">Transcripción en vivo</span>
+          <button onclick="copyEl('mt-transcript', this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5 transition-colors" title="Copiar transcript">Copiar</button>
+        </div>
+        <div id="mt-transcript" class="space-y-1.5 max-h-[28rem] overflow-y-auto glass rounded-xl p-3">
+          <div class="text-xs text-white/45">Inicia una reunión para ver la transcripción (Yo / Ellos).</div>
+        </div>
+      </div>
+      <div>
+        <div class="text-xs text-white/55 mb-1.5">Pendientes</div>
+        <div id="pending-cards" class="space-y-2 max-h-[28rem] overflow-y-auto glass rounded-xl p-3">
+        </div>
+        <div class="mt-3">
+          <div class="text-xs text-white/55 mb-1.5">Nota rápida</div>
+          <div class="flex gap-2">
+            <input id="mt-note-input" type="text" placeholder="Escribe una nota…" aria-label="Nota rápida"
+              class="focus:outline-none focus:ring-2 focus:ring-violet-500/60"
+              style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.35rem .7rem;font-size:.8rem;"
+              onkeydown="if(event.key==='Enter')mtAddNote()">
+            <button onclick="mtAddNote()" class="btn bg-white/[0.06] text-white/60 hover:bg-white/[0.1]">Añadir</button>
+          </div>
+          <div id="mt-notes-list" class="space-y-1 mt-2"></div>
+        </div>
+      </div>
     </div>
-    <div class="flex items-center gap-1.5 mt-1.5">
-      <input type="checkbox" id="asst-reason" style="accent-color:#7c3aed;cursor:pointer;">
-      <label for="asst-reason" data-icon="spark" class="text-[11px] text-white/35 cursor-pointer select-none"
-        title="Activa razonamiento para preguntas analíticas (más lento/caro)">Pensar más</label>
+
+    <!-- Barra de 4 acciones -->
+    <div id="mt-action-bar" class="flex items-center gap-2 mb-3 hidden">
+      <button onclick="mtHighlight()" class="btn bg-white/[0.06] text-amber-300/90 hover:bg-amber-500/15" title="Marcar momento destacado">⭐ Highlight</button>
+      <button onclick="mtFocusNote()" class="btn bg-white/[0.06] text-white/70 hover:bg-white/[0.1]" title="Añadir una nota rápida">📝 Nota</button>
+      <button id="mt-pause-btn" onclick="mtTogglePause()" class="btn bg-white/[0.06] text-white/70 hover:bg-white/[0.1]" title="Pausar o reanudar la captura">⏸ Pausar</button>
+      <button onclick="stopMeeting()" class="btn bg-red-600/30 text-red-300 hover:bg-red-600/50" title="Terminar la reunión">⏹ Terminar</button>
+    </div>
+
+    <div id="mt-acta" class="glass rounded-xl p-4 mb-8 hidden">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-sm font-medium text-emerald-300/80">Acta de la reunión</span>
+        <button onclick="copyEl('mt-acta-body', this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5 transition-colors" title="Copiar acta">Copiar</button>
+      </div>
+      <div id="mt-acta-body" class="space-y-2 text-sm text-white/80"></div>
+    </div>
+
+    <div class="flex items-center justify-between mb-2 mt-8">
+      <div class="text-sm font-medium text-white/60">Historial de reuniones</div>
+      <div class="flex gap-2">
+        <button onclick="exportAll()" class="btn text-white/45 hover:text-white/70 hover:bg-white/5" title="Exportar todas a Markdown">Exportar todas (.md)</button>
+        <button onclick="clearAll()" class="btn text-white/55 hover:text-red-300 hover:bg-white/5" title="Eliminar todas las reuniones">Limpiar todo</button>
+      </div>
+    </div>
+    <input id="meetingSearch" type="search" placeholder="Buscar en reuniones…" aria-label="Buscar en reuniones"
+      class="focus:outline-none focus:ring-2 focus:ring-violet-500/60"
+      style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.4rem .75rem;font-size:.8rem;margin-bottom:.5rem;"
+      oninput="onSearchInput(this.value)">
+    <div id="mt-history" class="space-y-1"></div>
+    <div id="mt-viewer" class="glass rounded-xl p-4 mt-3 hidden"></div>
+  </div>
+
+  <!-- Panel: Preguntar (Asistente de reuniones — chat de memoria, sin cambios internos) -->
+  <div id="mt-tab-ask" class="hidden">
+    <div class="glass rounded-xl p-4 mt-6">
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-sm font-medium text-violet-300/80" data-icon="chat">Asistente de reuniones &mdash; pregúntale a tus reuniones</div>
+        <div class="flex items-center gap-1">
+          <button id="asst-scope-global" class="text-[11px] px-2 py-0.5 rounded-full border transition-colors">Global</button>
+          <button id="asst-scope-meeting" disabled class="text-[11px] px-2 py-0.5 rounded-full border transition-colors" title="Selecciona una reunión del historial para preguntar solo sobre ella">Esta reunión</button>
+        </div>
+      </div>
+      <div id="asst-messages" class="space-y-2 overflow-y-auto mb-2" aria-live="polite" style="min-height:60px;max-height:280px;"></div>
+      <div id="asst-chips" class="flex flex-wrap gap-1.5 mb-2"></div>
+      <div class="flex gap-2">
+        <input id="asst-input" type="text" placeholder="Pregunta sobre tus reuniones…" aria-label="Pregunta sobre tus reuniones"
+          class="focus:outline-none focus:ring-2 focus:ring-violet-500/60"
+          style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.35rem .7rem;font-size:.8rem;"
+          onkeydown="if(event.key==='Enter')asstSend()">
+        <button id="asst-send" onclick="asstSend()" class="btn bg-violet-600/30 text-violet-200 hover:bg-violet-600/50">Enviar</button>
+      </div>
+      <div class="flex items-center gap-1.5 mt-1.5">
+        <input type="checkbox" id="asst-reason" style="accent-color:#7c3aed;cursor:pointer;">
+        <label for="asst-reason" data-icon="spark" class="text-[11px] text-white/35 cursor-pointer select-none"
+          title="Activa razonamiento para preguntas analíticas (más lento/caro)">Pensar más</label>
+      </div>
     </div>
   </div>
   </main>
@@ -2797,19 +2847,77 @@ function pendMeta(p){ const a=[]; if(p&&p.responsable)a.push(esc(p.responsable))
   const fh=[p&&p.fecha,p&&p.hora].filter(Boolean).map(esc).join(' '); if(fh)a.push(ICONS.calendar+' '+fh);
   return a.length?' <span class="text-white/35">('+a.join(' \\u00b7 ')+')</span>':''; }
 
+let _mtNotes = [], _mtPaused = false;
 async function loadLive(){
   try{
     const r = await fetch('/api/meeting'); const d = await r.json(); const s = d.status||{};
     const startB=document.getElementById('mt-start'), stopB=document.getElementById('mt-stop');
+    const liveHeader=document.getElementById('mt-live-header'), actionBar=document.getElementById('mt-action-bar');
+    const tabs=document.getElementById('mt-tabs');
     if(s.active){ startB.classList.add('hidden'); stopB.classList.remove('hidden');
-      let t='Grabando '+(s.elapsed_fmt||'00:00')+' \\u00b7 '+(s.segment_count||0)+' intervenciones';
+      liveHeader.classList.remove('hidden'); actionBar.classList.remove('hidden'); tabs.classList.remove('hidden');
+      let t=(s.paused?'En pausa \\u00b7 ':'Grabando ')+(s.elapsed_fmt||'00:00')+' \\u00b7 '+(s.segment_count||0)+' intervenciones';
       if(s.sys_available===false)t+=' \\u00b7 solo micr\\u00f3fono';
       if(s.insight_running)t+=' \\u00b7 analizando\\u2026'; if(s.error)t+=' \\u00b7 \\u26a0 '+s.error;
       document.getElementById('mt-status').textContent=t; _actaShown=false;
+      document.getElementById('mt-timer').textContent=s.elapsed_fmt||'00:00';
+      _mtPaused=!!s.paused;
+      document.getElementById('mt-paused-badge').classList.toggle('hidden', !_mtPaused);
+      const pauseBtn=document.getElementById('mt-pause-btn');
+      if(pauseBtn) pauseBtn.textContent=_mtPaused?'\\u25b6 Reanudar':'\\u23f8 Pausar';
+      const lv=(s.levels||{}), pctYo=Math.round(Math.min(lv.yo||0,1)*100), pctEllos=Math.round(Math.min(lv.ellos||0,1)*100);
+      const vuYo=document.getElementById('mt-vu-yo'), vuEllos=document.getElementById('mt-vu-ellos');
+      if(vuYo) vuYo.style.width=pctYo+'%'; if(vuEllos) vuEllos.style.width=pctEllos+'%';
     } else { startB.classList.remove('hidden'); stopB.classList.add('hidden'); document.getElementById('mt-status').textContent='';
+      liveHeader.classList.add('hidden'); actionBar.classList.add('hidden'); tabs.classList.add('hidden');
+      document.getElementById('mt-paused-badge').classList.add('hidden'); _mtPaused=false;
       if(d.last_minutes && !_actaShown){ renderActa(d.last_minutes); _actaShown=true; loadHistory(); } }
-    renderTranscript(s, d.segments||[]); renderInsights(d.insights||{});
+    renderTranscript(s, d.segments||[]);
   }catch(e){}
+}
+
+// --- Pestañas En vivo / Preguntar ---
+function mtSetTab(tab){
+  const live=document.getElementById('mt-tab-live'), ask=document.getElementById('mt-tab-ask');
+  const btnLive=document.getElementById('mt-tab-btn-live'), btnAsk=document.getElementById('mt-tab-btn-ask');
+  const activeCls='text-white/85 border-violet-400', inactiveCls='text-white/40 border-transparent hover:text-white/70';
+  if(tab==='ask'){ live.classList.add('hidden'); ask.classList.remove('hidden');
+    btnAsk.className='text-xs px-3 py-1.5 rounded-t-lg border-b-2 transition-colors '+activeCls;
+    btnLive.className='text-xs px-3 py-1.5 rounded-t-lg border-b-2 transition-colors '+inactiveCls;
+  } else { live.classList.remove('hidden'); ask.classList.add('hidden');
+    btnLive.className='text-xs px-3 py-1.5 rounded-t-lg border-b-2 transition-colors '+activeCls;
+    btnAsk.className='text-xs px-3 py-1.5 rounded-t-lg border-b-2 transition-colors '+inactiveCls;
+  }
+}
+mtSetTab('live');
+
+// --- Acciones en vivo: highlight, nota rápida, pausa ---
+async function mtHighlight(){
+  try{ const r=await fetch('/api/meeting/highlight',{method:'POST'}); const d=await r.json();
+    if(d.ok && d.item){ mtoast('\\u2b50 Momento destacado ('+d.item.time+')','ok'); } else { mtoast('No hay reunión activa.','err'); }
+  }catch(e){ mtoast('Error de red al marcar highlight.','err'); }
+}
+function mtFocusNote(){ const inp=document.getElementById('mt-note-input'); if(inp){ inp.focus(); } }
+async function mtAddNote(){
+  const inp=document.getElementById('mt-note-input'); const text=(inp.value||'').trim(); if(!text) return;
+  try{ const r=await fetch('/api/meeting/note',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text})});
+    const d=await r.json();
+    if(d.ok && d.item){ inp.value=''; _mtNotes.push(d.item); renderMtNotes(); mtoast('Nota añadida.','ok'); }
+    else{ mtoast('No hay reunión activa.','err'); }
+  }catch(e){ mtoast('Error de red al añadir la nota.','err'); }
+}
+function renderMtNotes(){
+  const el=document.getElementById('mt-notes-list'); if(!el) return;
+  if(!_mtNotes.length){ el.innerHTML=''; return; }
+  el.innerHTML=_mtNotes.map(n=>'<div class="text-xs text-white/60"><span class="text-white/30 font-mono mr-1">'+esc(n.time)+'</span>'+esc(n.text)+'</div>').join('');
+}
+async function mtTogglePause(){
+  const url=_mtPaused?'/api/meeting/resume':'/api/meeting/pause';
+  const btn=document.getElementById('mt-pause-btn'); if(btn) btn.disabled=true;
+  try{ const r=await fetch(url,{method:'POST'}); const d=await r.json();
+    if(d.ok!==false){ _mtPaused=!!d.paused; await loadLive(); }
+  }catch(e){ mtoast('Error de red al pausar/reanudar.','err'); }
+  finally{ if(btn) btn.disabled=false; }
 }
 function renderTranscript(s, segs){
   const c=document.getElementById('mt-transcript');
@@ -2822,18 +2930,10 @@ function renderTranscript(s, segs){
     c.appendChild(div); }
   _segCount=segs.length; c.scrollTop=c.scrollHeight;
 }
+// Push→pull: el "Análisis en vivo" (temas/pendientes/propuestas) ya NO se muestra en
+// vivo — va al acta. El único push permitido es la tarjeta de pendientes (unidad 2.2,
+// contenedor #pending-cards). fcl/_seen se conservan para el fade-in de esas tarjetas.
 function fcl(id){ if(id==null)return''; if(_seen.has(id))return''; _seen.add(id); return ' mt-fade'; }
-function renderInsights(ins){
-  const el=document.getElementById('mt-insights');
-  const T=ins.temas||[],P=ins.pendientes||[],R=(ins.propuestas||[]).filter(p=>(p.confianza||'alta')==='alta'),C=ins.citas||[];
-  if(!T.length&&!P.length&&!R.length&&!C.length){ el.innerHTML='<div class="text-xs text-white/45">Temas, pendientes, propuestas y próximas reuniones.</div>'; return; }
-  let h='';
-  if(T.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-white/30 mb-1">Temas</div>'+T.map(t=>'<div class="text-xs text-white/75 mb-0.5'+fcl(t.id)+'">\\u2022 '+esc(t.text!=null?t.text:t)+'</div>').join('')+'</div>';
-  if(P.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-amber-300/50 mb-1">Pendientes</div>'+P.map(p=>'<div class="text-xs text-white/75 mb-0.5'+fcl(p.id)+'">'+ICONS.arrow+' '+esc(p.texto||'')+pendMeta(p)+'</div>').join('')+'</div>';
-  if(R.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-sky-300/50 mb-1">Propuestas</div>'+R.map(p=>'<div class="text-xs text-white/75 mb-0.5'+fcl(p.id)+'">'+ICONS.bulb+' '+esc(p.texto||'')+'</div>').join('')+'</div>';
-  if(C.length)h+='<div><div class="text-[11px] uppercase tracking-wide text-emerald-300/50 mb-1">Próximas reuniones</div>'+C.map(c=>'<div class="text-xs text-white/75 mb-0.5'+fcl(c.id)+'">'+ICONS.calendar+' '+esc(c.texto||'')+pendMeta({fecha:c.fecha,hora:c.hora})+'</div>').join('')+'</div>';
-  el.innerHTML=h;
-}
 function actaHtml(m){
   m=m||{}; const dec=m.decisiones||[],tem=m.temas||[],pen=m.pendientes||[],pro=m.propuestas||[],cit=m.citas||[],mom=m.momentos_destacados||[]; let h='';
   if(m.resumen)h+='<p class="text-white/80">'+esc(m.resumen)+'</p>';
@@ -2847,7 +2947,7 @@ function actaHtml(m){
 }
 function renderActa(m){ document.getElementById('mt-acta-body').innerHTML=actaHtml(m); document.getElementById('mt-acta').classList.remove('hidden'); }
 
-async function startMeeting(){ _seen=new Set(); _segCount=0; _actaShown=false;
+async function startMeeting(){ _seen=new Set(); _segCount=0; _actaShown=false; _mtNotes=[]; renderMtNotes();
   document.getElementById('mt-acta').classList.add('hidden'); document.getElementById('mt-transcript').innerHTML='';
   const btn=document.getElementById('mt-start'); btn.disabled=true;
   try{ const r=await fetch('/api/meeting/start',{method:'POST'}); const d=await r.json();
@@ -3750,6 +3850,35 @@ def meeting_start():
 def meeting_stop():
     """Detiene la reunión, persiste el acta y devuelve el transcript final."""
     res = MEETING.stop()
+    return jsonify(res)
+
+
+@app.route("/api/meeting/highlight", methods=["POST"])
+def meeting_highlight():
+    """Marca el instante actual como momento destacado (equivalente web de AltGr+H)."""
+    item = MEETING.add_highlight()
+    return jsonify({"ok": item is not None, "item": item})
+
+
+@app.route("/api/meeting/note", methods=["POST"])
+def meeting_note():
+    """Añade una nota rápida al instante actual de la reunión."""
+    data = request.get_json(silent=True) or {}
+    item = MEETING.add_note(data.get("text", ""))
+    return jsonify({"ok": item is not None, "item": item})
+
+
+@app.route("/api/meeting/pause", methods=["POST"])
+def meeting_pause():
+    """Pausa la captura de la reunión (congela el reloj)."""
+    res = MEETING.pause()
+    return jsonify(res)
+
+
+@app.route("/api/meeting/resume", methods=["POST"])
+def meeting_resume():
+    """Reanuda la captura de la reunión tras una pausa."""
+    res = MEETING.resume()
     return jsonify(res)
 
 

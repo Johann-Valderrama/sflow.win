@@ -97,6 +97,17 @@ class MeetingSession:
         self._sys_frames: list = []
         self._segments: list = []          # [{"t": float, "speaker": str, "text": str}]
         self._highlights: list = []        # [{"t": float, "time": "mm:ss"}] — momentos marcados con AltGr+H
+        self._notes: list = []             # [{"t": float, "time": "mm:ss", "text": str}] — notas rápidas del usuario
+        # Niveles por canal (RMS 0..1 del último chunk de audio) para los VU del dashboard.
+        # Escritura de float simple: atómica bajo el GIL, no necesita el lock (barato,
+        # se recalcula en cada callback de audio; decisión de debate: nada de _tail_rms aquí).
+        self._level_mic: float = 0.0
+        self._level_sys: float = 0.0
+        # Pausa "congelar-reloj": los callbacks dejan de acumular frames pero el reloj
+        # se congela también (no sigue corriendo durante la pausa). Ver pause()/resume().
+        self._paused: bool = False
+        self._paused_total: float = 0.0
+        self._pause_started: float | None = None
         self._mic: MicSource | None = None
         self._sys: LoopbackSource | None = None
         # Carryover de prompt por canal: la cola del último texto da contexto al
@@ -145,11 +156,21 @@ class MeetingSession:
         return self._active
 
     def _elapsed(self) -> float:
-        return time.monotonic() - self._t0 if self._t0 else 0.0
+        """Segundos transcurridos desde el inicio, excluyendo el tiempo en pausa.
+
+        Congela el reloj mientras está pausada: usa _pause_started (el instante en
+        que se pausó) en vez de "ahora", así el timer no avanza durante la pausa.
+        """
+        if not self._t0:
+            return 0.0
+        now = self._pause_started if (self._paused and self._pause_started) else time.monotonic()
+        return now - self._t0 - self._paused_total
 
     def status(self) -> dict:
         """Estado liviano para el dashboard (polling)."""
         with self._lock:
+            level_mic = self._level_mic if (self._active and not self._paused) else 0.0
+            level_sys = self._level_sys if (self._active and not self._paused) else 0.0
             return {
                 "active": self._active,
                 "started_at": self._started_at,
@@ -159,6 +180,8 @@ class MeetingSession:
                 "sys_available": self._sys_available,
                 "insight_running": self._insight_running,
                 "error": self._last_error,
+                "paused": self._paused,
+                "levels": {"yo": level_mic, "ellos": level_sys},
             }
 
     def get_insights(self) -> dict:
@@ -197,6 +220,51 @@ class MeetingSession:
             self._highlights.append(item)
             return item
 
+    def add_note(self, text: str) -> "dict | None":
+        """Añade una nota rápida al instante actual. Devuelve el dict añadido,
+        o None si no hay reunión activa o el texto está vacío."""
+        text = (text or "").strip()
+        if not text:
+            return None
+        with self._lock:
+            if not self._active:
+                return None
+            t = self._elapsed()
+            item = {"t": round(t, 1), "time": _fmt_mmss(t), "text": text}
+            self._notes.append(item)
+            return item
+
+    def pause(self) -> dict:
+        """Pausa la captura: congela el reloj y deja de acumular frames.
+
+        Hace un flush de la ventana actual antes de pausar (reutiliza el mecanismo
+        de _flush_window) para no perder lo hablado hasta este instante. Idempotente.
+        """
+        with self._lock:
+            if not self._active or self._paused:
+                return {"ok": True, "paused": self._paused}
+            window_start = self._window_start
+        # _flush_window adquiere su propio lock; se llama fuera del bloque anterior
+        # para no anidar innecesariamente (el lock es reentrante, pero mejor evitarlo).
+        self._flush_window(window_start)
+        with self._lock:
+            self._paused = True
+            self._pause_started = time.monotonic()
+            self._window_start = self._elapsed()
+            return {"ok": True, "paused": True}
+
+    def resume(self) -> dict:
+        """Reanuda la captura tras una pausa. Idempotente."""
+        with self._lock:
+            if not self._active or not self._paused:
+                return {"ok": True, "paused": self._paused}
+            if self._pause_started is not None:
+                self._paused_total += time.monotonic() - self._pause_started
+            self._paused = False
+            self._pause_started = None
+            self._window_start = self._elapsed()
+            return {"ok": True, "paused": False}
+
     def transcript_text(self) -> str:
         """Transcript completo como texto plano (para persistir)."""
         return "\n".join(
@@ -216,6 +284,12 @@ class MeetingSession:
             self._sys_frames = []
             self._segments = []
             self._highlights = []
+            self._notes = []
+            self._level_mic = 0.0
+            self._level_sys = 0.0
+            self._paused = False
+            self._paused_total = 0.0
+            self._pause_started = None
             self._last_error = None
             self._carry = {self.LABEL_MIC: "", self.LABEL_SYS: ""}
             self._window_start = 0.0
@@ -274,6 +348,12 @@ class MeetingSession:
         with self._lock:
             if not self._active:
                 return {"ok": True, "already_stopped": True}
+            # Resume implícito: si se termina en pausa, cierra la contabilidad del
+            # tiempo pausado ANTES de leer _elapsed() para la duración final.
+            if self._paused and self._pause_started is not None:
+                self._paused_total += time.monotonic() - self._pause_started
+                self._paused = False
+                self._pause_started = None
             self._active = False  # los callbacks dejan de acumular frames
         duration = self._elapsed()
 
@@ -312,6 +392,7 @@ class MeetingSession:
         # Fail-safe: si el LLM no está disponible devuelve un acta vacía.
         with self._lock:
             highlights = list(self._highlights)
+            notes = list(self._notes)
         minutes = _insights.generate_minutes(transcript, self._store_to_plain(), highlights=highlights)
         with self._lock:
             self._last_minutes = minutes  # para que el dashboard la muestre aunque se terminara por hotkey/tray
@@ -345,6 +426,8 @@ class MeetingSession:
                 )
                 if highlights:
                     insert_kwargs["highlights_json"] = json.dumps(highlights, ensure_ascii=False)
+                if notes:
+                    insert_kwargs["notes_json"] = json.dumps(notes, ensure_ascii=False)
                 meeting_id = self._db.meeting_insert(**insert_kwargs)
                 saved = True
             except Exception as exc:  # noqa: BLE001
@@ -399,19 +482,32 @@ class MeetingSession:
     # Captura y chunking
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _chunk_rms(chunk: np.ndarray) -> float:
+        """RMS (0-1) barato de UN chunk de audio (nada de ventana deslizante: es
+        justo lo que necesita el VU del dashboard, no la detección de silencio)."""
+        if chunk.size == 0:
+            return 0.0
+        arr = chunk.astype(np.float32) / 32768.0
+        return float(min(np.sqrt(np.mean(arr ** 2)) * 4.0, 1.0))  # factor de escala, satura a 1.0
+
     def _mic_callback(self, chunk: np.ndarray):
         with self._lock:
-            if self._active:
-                self._mic_frames.append(chunk)
-                # Alimentar el visualizador del pill (tu voz). Cap para no crecer sin
-                # límite si nadie consume; el visualizador drena a VIZ_FPS.
-                if self.viz_queue.qsize() < 32:
-                    self.viz_queue.put(chunk)
+            if not self._active or self._paused:
+                return
+            self._mic_frames.append(chunk)
+            # Alimentar el visualizador del pill (tu voz). Cap para no crecer sin
+            # límite si nadie consume; el visualizador drena a VIZ_FPS.
+            if self.viz_queue.qsize() < 32:
+                self.viz_queue.put(chunk)
+        self._level_mic = self._chunk_rms(chunk)
 
     def _sys_callback(self, chunk: np.ndarray):
         with self._lock:
-            if self._active:
-                self._sys_frames.append(chunk)
+            if not self._active or self._paused:
+                return
+            self._sys_frames.append(chunk)
+        self._level_sys = self._chunk_rms(chunk)
 
     def _drain_viz_queue(self):
         """Vacía la cola del visualizador (al iniciar/terminar reunión)."""

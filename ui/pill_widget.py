@@ -3,7 +3,7 @@ import ctypes.wintypes
 import logging
 import math
 from PyQt6.QtWidgets import QWidget, QApplication
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPainterPath, QPen, QPixmap, QCursor
 from ui.audio_visualizer import AudioVisualizer
 from config import (
@@ -51,6 +51,9 @@ class PillWidget(QWidget):
     STATE_DONE = "done"
     STATE_ERROR = "error"
 
+    # Clic corto (sin arrastre) con reunión activa: pide abrir el dashboard en /reunion.
+    open_dashboard_requested = pyqtSignal()
+
     def __init__(self):
         """Configura la ventana flotante, timers de animación y el visualizador de audio."""
         super().__init__()
@@ -61,9 +64,24 @@ class PillWidget(QWidget):
         self._current_height = float(PILL_HEIGHT_IDLE)
         self._bottom_anchor_y: int = 0  # set in _position_on_screen
         self._drag_pos = None
+        self._press_pos = None  # posición global del mousePress, para distinguir clic de arrastre
+        self._DRAG_THRESHOLD = 6  # px: por debajo de esto, un release cuenta como "clic"
+
+        # Estado de reunión (distinto del dictado): acento propio + timer + indicador
+        # compacto del canal "Ellos" (NO se reescribe AudioVisualizer, ver CLAUDE.md).
+        self._meeting_mode = False
+        self._meeting_paused = False
+        self._meeting_elapsed_fmt = "00:00"
+        self._meeting_level_ellos = 0.0
+        self._meeting_source_system = False  # AUDIO_SOURCE=system: matiz/glifo levemente distinto
         self._bg_color_active = QColor(15, 15, 15, int(255 * PILL_OPACITY))
         self._bg_color_idle = QColor(140, 140, 140, 176)  # gray, 20% more translucent
         self._bg_color = self._bg_color_idle  # start in idle
+        # Acento de reunión: ámbar (distinto del violeta de dictado) para que el
+        # usuario diferencie "grabando reunión" de "dictando" de un vistazo.
+        self._meeting_accent = QColor(217, 119, 6)       # ámbar (AUDIO_SOURCE=mic)
+        self._meeting_accent_system = QColor(202, 138, 4)  # ámbar con matiz distinto (AUDIO_SOURCE=system)
+        self._meeting_cyan = QColor(34, 211, 238)          # indicador "Ellos" (mismo cian del dashboard)
 
         self._logo = QPixmap(LOGO_PATH)
         if not self._logo.isNull():
@@ -160,6 +178,21 @@ class PillWidget(QWidget):
                 self._position_on_screen()
         except Exception as exc:
             logger.warning("_ensure_on_screen falló: %s", exc)
+
+    def set_meeting_state(self, active: bool, paused: bool = False, elapsed_fmt: str = "00:00",
+                           level_ellos: float = 0.0, source_system: bool = False):
+        """Actualiza el estado de reunión mostrado en la pill (llamado desde main.py ~1/s).
+
+        No cambia self._state (idle/recording/...): la reunión pinta un acento propio
+        ENCIMA del estado normal de dictado mientras `active` es True. Solo repinta
+        (sin animación de tamaño): timer/indicador son overlays baratos.
+        """
+        self._meeting_mode = active
+        self._meeting_paused = paused
+        self._meeting_elapsed_fmt = elapsed_fmt
+        self._meeting_level_ellos = max(0.0, min(1.0, level_ellos))
+        self._meeting_source_system = source_system
+        self.update()
 
     def set_state(self, state: str):
         """Cambia el estado visual de la pill (idle, recording, processing, done, error)."""
@@ -273,6 +306,16 @@ class PillWidget(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(0, 0, w, h, radius, radius)
 
+        # Anillo de reunión: acento ámbar (distinto del violeta de dictado) para que el
+        # usuario diferencie "reunión" de "dictado" de un vistazo. Se dibuja ENCIMA del
+        # borde normal, sin cambiar el resto del estado visual.
+        if self._meeting_mode and h >= 10:
+            ring_color = self._meeting_accent_system if self._meeting_source_system else self._meeting_accent
+            ring = QPen(ring_color, 2.0)
+            painter.setPen(ring)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(1, 1, w - 2, h - 2, radius - 1, radius - 1)
+
         # Skip content when thin (idle line — no logo, no icons)
         if h < 10:
             painter.end()
@@ -314,6 +357,32 @@ class PillWidget(QWidget):
             painter.drawLine(icon_cx - 3, icon_cy - 3, icon_cx + 3, icon_cy + 3)
             painter.drawLine(icon_cx - 3, icon_cy + 3, icon_cx + 3, icon_cy - 3)
 
+        # Overlay de reunión: timer mm:ss (o ⏸ parpadeante en pausa) + indicador
+        # compacto cian de actividad del canal "Ellos" (confirma que se captura sin
+        # tocar AudioVisualizer, que sigue mostrando solo el mic).
+        if self._meeting_mode and self._state == self.STATE_RECORDING:
+            text_x = 6 + LOGO_SIZE + 6
+            text_w = max(w - text_x - 12, 0)
+            if text_w > 10:
+                painter.setPen(QColor(255, 255, 255, 235))
+                font = painter.font()
+                font.setPointSizeF(max(font.pointSizeF(), 8.0))
+                painter.setFont(font)
+                if self._meeting_paused and (self._spinner_angle // 60) % 2 == 0:
+                    label = "⏸"  # glifo de pausa, parpadea reutilizando el ángulo del spinner
+                else:
+                    label = self._meeting_elapsed_fmt
+                painter.drawText(text_x, 0, text_w - 10, h, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label)
+                # Indicador "Ellos": punto cian cuya opacidad sigue el nivel del canal.
+                dot_r = 3
+                dot_cx = w - 10
+                dot_cy = h // 2
+                alpha = int(60 + 180 * self._meeting_level_ellos)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(self._meeting_cyan.red(), self._meeting_cyan.green(),
+                                         self._meeting_cyan.blue(), min(alpha, 255)))
+                painter.drawEllipse(dot_cx - dot_r, dot_cy - dot_r, dot_r * 2, dot_r * 2)
+
         painter.end()
 
     def _force_topmost(self):
@@ -342,9 +411,10 @@ class PillWidget(QWidget):
         QTimer.singleShot(0, self._force_topmost)
 
     def mousePressEvent(self, event):
-        """Registra la posición inicial para arrastrar la pill."""
+        """Registra la posición inicial para arrastrar la pill (y para distinguir clic de arrastre)."""
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._press_pos = event.globalPosition().toPoint()
             event.accept()
 
     def mouseMoveEvent(self, event):
@@ -374,5 +444,17 @@ class PillWidget(QWidget):
             event.accept()
 
     def mouseReleaseEvent(self, event):
-        """Finaliza el arrastre de la pill."""
+        """Finaliza el arrastre de la pill.
+
+        Si el desplazamiento total desde el press fue menor al umbral (clic corto,
+        no arrastre) y hay una reunión activa, emite open_dashboard_requested para
+        que main.py abra el dashboard en /reunion. Sin reunión activa, un clic corto
+        no hace nada (comportamiento previo sin cambios).
+        """
+        if event.button() == Qt.MouseButton.LeftButton and self._press_pos is not None:
+            release_pos = event.globalPosition().toPoint()
+            moved = (release_pos - self._press_pos).manhattanLength()
+            if moved < self._DRAG_THRESHOLD and self._meeting_mode:
+                self.open_dashboard_requested.emit()
         self._drag_pos = None
+        self._press_pos = None
