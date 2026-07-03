@@ -98,6 +98,7 @@ class MeetingSession:
         self._segments: list = []          # [{"t": float, "speaker": str, "text": str}]
         self._highlights: list = []        # [{"t": float, "time": "mm:ss"}] — momentos marcados con AltGr+H
         self._notes: list = []             # [{"t": float, "time": "mm:ss", "text": str}] — notas rápidas del usuario
+        self._feedback: list = []          # [{"key","tipo","texto","value","t","time"}] — feedback ✓/✗ del único push (unidad 2.2)
         # Niveles por canal (RMS 0..1 del último chunk de audio) para los VU del dashboard.
         # Escritura de float simple: atómica bajo el GIL, no necesita el lock (barato,
         # se recalcula en cada callback de audio; decisión de debate: nada de _tail_rms aquí).
@@ -234,6 +235,38 @@ class MeetingSession:
             self._notes.append(item)
             return item
 
+    def add_feedback(self, key: str, tipo: str, texto: str, value: int) -> "dict | None":
+        """Registra el feedback ✓/✗ del único push permitido en vivo (unidad 2.2).
+
+        Persiste la señal para el bucle de mejora de prompts; NO afecta el
+        Insight Stream ni la UI en vivo más allá de la confirmación de la tarjeta.
+        Dedup por key: si ya había feedback para esa key, REEMPLAZA su value en
+        vez de duplicar (una sola señal por ítem, la más reciente gana).
+        Devuelve el item añadido/actualizado, o None si no hay reunión activa o
+        el value no es válido.
+        """
+        key = (key or "").strip()
+        if not key or value not in (1, -1):
+            return None
+        with self._lock:
+            if not self._active:
+                return None
+            t = self._elapsed()
+            item = {
+                "key": key,
+                "tipo": (tipo or "").strip(),
+                "texto": (texto or "").strip(),
+                "value": value,
+                "t": round(t, 1),
+                "time": _fmt_mmss(t),
+            }
+            for existing in self._feedback:
+                if existing["key"] == key:
+                    existing.update(item)
+                    return existing
+            self._feedback.append(item)
+            return item
+
     def pause(self) -> dict:
         """Pausa la captura: congela el reloj y deja de acumular frames.
 
@@ -285,6 +318,7 @@ class MeetingSession:
             self._segments = []
             self._highlights = []
             self._notes = []
+            self._feedback = []
             self._level_mic = 0.0
             self._level_sys = 0.0
             self._paused = False
@@ -393,6 +427,7 @@ class MeetingSession:
         with self._lock:
             highlights = list(self._highlights)
             notes = list(self._notes)
+            feedback = list(self._feedback)
         minutes = _insights.generate_minutes(transcript, self._store_to_plain(), highlights=highlights)
         with self._lock:
             self._last_minutes = minutes  # para que el dashboard la muestre aunque se terminara por hotkey/tray
@@ -428,6 +463,8 @@ class MeetingSession:
                     insert_kwargs["highlights_json"] = json.dumps(highlights, ensure_ascii=False)
                 if notes:
                     insert_kwargs["notes_json"] = json.dumps(notes, ensure_ascii=False)
+                if feedback:
+                    insert_kwargs["feedback_json"] = json.dumps(feedback, ensure_ascii=False)
                 meeting_id = self._db.meeting_insert(**insert_kwargs)
                 saved = True
             except Exception as exc:  # noqa: BLE001

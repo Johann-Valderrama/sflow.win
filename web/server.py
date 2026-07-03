@@ -1931,16 +1931,17 @@ HTML_TEMPLATE = """
         function renderInsights(ins) {
             const el = document.getElementById('mt-insights');
             if (!el) return;
-            // Solo repintar si el análisis cambió de verdad (anti-parpadeo); la firma
-            // incluye el modo para que cambiar Foco↔Revisión repinte.
-            const insSig = _mtViewMode + '|' + JSON.stringify(ins || {});
+            // Push→pull (unidad 2.2): el panel embebido del dashboard SOLO muestra
+            // pendientes (lo accionable); temas/propuestas/citas viven en el acta y en
+            // el panel completo de /reunion. Firma simplificada: ya no depende del modo
+            // Foco/Revisión (el panel embebido siempre es "solo pendientes").
+            const pend = ins.pendientes || [];
+            const insSig = JSON.stringify(pend);
             if (insSig === _mtInsSig) return;
             _mtInsSig = insSig;
-            const temas = ins.temas || [];
-            const pend = ins.pendientes || [];
-            const prop = (ins.propuestas || []).filter(p => (p.confianza || 'alta') === 'alta');
-            if (!temas.length && !pend.length && !prop.length) {
-                el.innerHTML = '<div class="text-xs text-white/45">Temas, pendientes y propuestas aparecerán aquí a medida que avance la reunión.</div>';
+            const linkHtml = '<div class="text-[10px] text-white/35 mt-2">Panel completo → <a href="/reunion" class="text-violet-300/70 hover:text-violet-200 underline">/reunion</a></div>';
+            if (!pend.length) {
+                el.innerHTML = '<div class="text-xs text-white/45">Los pendientes detectados aparecerán aquí a medida que avance la reunión.</div>' + linkHtml;
                 return;
             }
             // fade solo para ids no vistos antes (los ya mostrados no re-animan)
@@ -1949,41 +1950,11 @@ HTML_TEMPLATE = """
                 if (_mtSeenInsightIds.has(id)) return '';
                 _mtSeenInsightIds.add(id); return ' mt-fade';
             };
-            // Modo FOCO: mínima distracción — solo el resumen de conteos + pendientes (lo accionable)
-            if (_mtViewMode === 'foco') {
-                let fhtml = '<div class="text-xs text-white/50 mb-2">' + temas.length + ' temas · '
-                    + pend.length + ' pendientes · ' + prop.length + ' propuestas</div>';
-                if (pend.length) {
-                    fhtml += pend.map(p => {
-                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">'+ICONS.arrow+' ' + escapeHtml(String(p.texto || '')) + pendMeta(p) + '</div>';
-                    }).join('');
-                } else {
-                    fhtml += '<div class="text-[11px] text-white/50">Sin pendientes detectados aún.</div>';
-                }
-                fhtml += '<div class="text-[10px] text-white/45 mt-2">Modo Foco: solo lo accionable. Cambia a Revisión para ver todo.</div>';
-                el.innerHTML = fhtml;
-                return;
-            }
-            let html = '';
-            if (temas.length) {
-                html += '<div><div class="text-[11px] uppercase tracking-wide text-white/55 mb-1">Temas</div>'
-                    + temas.map(t => '<div class="text-xs text-white/75 mb-0.5' + fadeCls(t.id) + '">• ' + escapeHtml(String(t.text != null ? t.text : t)) + '</div>').join('') + '</div>';
-            }
-            if (pend.length) {
-                html += '<div><div class="text-[11px] uppercase tracking-wide text-amber-300/50 mb-1">Pendientes</div>'
-                    + pend.map(p => {
-                        return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">'+ICONS.arrow+' ' + escapeHtml(String(p.texto || '')) + pendMeta(p) + '</div>';
-                    }).join('') + '</div>';
-            }
-            if (prop.length) {
-                html += '<div><div class="text-[11px] uppercase tracking-wide text-sky-300/50 mb-1">Propuestas</div>'
-                    + prop.map(p => '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">'+ICONS.bulb+' ' + escapeHtml(String(p.texto || '')) + '</div>').join('') + '</div>';
-            }
-            const citas = ins.citas || [];
-            if (citas.length) {
-                html += '<div><div class="text-[11px] uppercase tracking-wide text-emerald-300/50 mb-1">Próximas reuniones</div>'
-                    + citas.map(c => '<div class="text-xs text-white/75 mb-0.5' + fadeCls(c.id) + '">'+ICONS.calendar+' ' + escapeHtml(String(c.texto || '')) + pendMeta({fecha: c.fecha, hora: c.hora}) + '</div>').join('') + '</div>';
-            }
+            let html = '<div><div class="text-[11px] uppercase tracking-wide text-amber-300/50 mb-1">Pendientes</div>'
+                + pend.map(p => {
+                    return '<div class="text-xs text-white/75 mb-0.5' + fadeCls(p.id) + '">'+ICONS.arrow+' ' + escapeHtml(String(p.texto || '')) + pendMeta(p) + '</div>';
+                }).join('') + '</div>';
+            html += linkHtml;
             el.innerHTML = html;
         }
 
@@ -2847,6 +2818,97 @@ function pendMeta(p){ const a=[]; if(p&&p.responsable)a.push(esc(p.responsable))
   const fh=[p&&p.fecha,p&&p.hora].filter(Boolean).map(esc).join(' '); if(fh)a.push(ICONS.calendar+' '+fh);
   return a.length?' <span class="text-white/35">('+a.join(' \\u00b7 ')+')</span>':''; }
 
+// --- Tarjetas de pendiente ✓/✗ (unidad 2.2: único push en vivo, con caducidad) ---
+// pendKey: hash simple del texto NORMALIZADO (minúsculas, sin acentos, sin puntuación,
+// espacios colapsados). NUNCA se usa el id del pendiente: la consolidación LLM puede
+// renumerarlo, lo que crearía tarjetas fantasma (verificado en debate de diseño).
+function pendKey(texto){
+  const norm=(texto||'').toString().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'')
+    .toLowerCase().replace(/[^a-z0-9\\s]/g,' ').replace(/\\s+/g,' ').trim();
+  let h=0; for(let i=0;i<norm.length;i++){ h=((h<<5)-h+norm.charCodeAt(i))|0; }
+  return 'p'+h;
+}
+const _pendCards = new Map(); // key -> {texto, responsable, firstSeen, resolved, timer}
+const _PEND_TTL_MS = 180000;   // ~3 min de caducidad
+const _PEND_MAX_VISIBLE = 3;
+
+function _pendRemove(key){
+  const c=_pendCards.get(key); if(!c) return;
+  if(c.timer) clearTimeout(c.timer);
+  const el=document.getElementById('pc-'+key);
+  if(el){ el.style.transition='opacity .3s ease, transform .3s ease'; el.style.opacity='0'; el.style.transform='translateX(8px)';
+    setTimeout(()=>{ if(el.parentNode) el.parentNode.removeChild(el); }, 300); }
+}
+
+function _pendScheduleExpiry(key){
+  const c=_pendCards.get(key); if(!c) return;
+  if(c.timer) clearTimeout(c.timer);
+  const remaining=Math.max(0, _PEND_TTL_MS - (Date.now()-c.firstSeen));
+  c.timer=setTimeout(()=>{ c.expired=true; _pendRemove(key); }, remaining);
+}
+
+function _pendRenderCard(key){
+  const c=_pendCards.get(key); if(!c) return;
+  const container=document.getElementById('pending-cards'); if(!container) return;
+  const div=document.createElement('div');
+  div.id='pc-'+key;
+  div.className='rounded-lg bg-amber-500/[0.06] border border-amber-400/20 p-2.5 mt-fade';
+  div.innerHTML =
+    '<div class="text-xs text-white/80 leading-snug mb-1.5">'+esc(c.texto)+pendMeta(c)+'</div>'+
+    '<div class="flex items-center gap-1.5" id="pc-actions-'+key+'">'+
+      '<button class="text-[11px] px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300/90 hover:bg-emerald-500/25" onclick="mtPendFeedback(\\''+key+'\\',1)" title="Confirmar pendiente">\\u2713</button>'+
+      '<button class="text-[11px] px-2 py-0.5 rounded bg-white/[0.06] text-white/45 hover:bg-white/[0.1]" onclick="mtPendFeedback(\\''+key+'\\',-1)" title="No es un pendiente real">\\u2717</button>'+
+    '</div>';
+  container.appendChild(div);
+}
+
+function _pendEnforceMax(){
+  // Máximo _PEND_MAX_VISIBLE tarjetas visibles: si llega una 4ª, cae la más vieja.
+  const visible=[..._pendCards.entries()].filter(([,c])=>!c.resolved && !c.expired)
+    .sort((a,b)=>a[1].firstSeen-b[1].firstSeen);
+  while(visible.length>_PEND_MAX_VISIBLE){
+    const [oldestKey]=visible.shift();
+    _pendCards.get(oldestKey).expired=true;
+    _pendRemove(oldestKey);
+  }
+}
+
+function renderPendingCards(pendientes){
+  if(!Array.isArray(pendientes)) return;
+  for(const p of pendientes){
+    const texto=(p&&p.texto||'').trim(); if(!texto) continue;
+    const key=pendKey(texto);
+    if(_pendCards.has(key)) continue; // ya vista (nueva, resuelta o caducada): nunca reaparece
+    const card={texto, responsable:p.responsable, fecha:p.fecha, hora:p.hora,
+      firstSeen: Date.now(), resolved:false, expired:false, timer:null};
+    _pendCards.set(key, card);
+    _pendRenderCard(key);
+    _pendScheduleExpiry(key);
+    _pendEnforceMax();
+  }
+}
+
+async function mtPendFeedback(key, value){
+  const c=_pendCards.get(key); if(!c || c.resolved) return;
+  c.resolved=true;
+  const actions=document.getElementById('pc-actions-'+key);
+  if(actions){ actions.innerHTML = value===1
+    ? '<span class="text-[11px] text-emerald-300">\\u2713 Gracias</span>'
+    : '<span class="text-[11px] text-white/35">\\u2717 Descartado</span>'; }
+  try{
+    await fetch('/api/meeting/feedback',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({key:key, tipo:'pendiente', texto:c.texto, value:value})});
+  }catch(e){ /* best-effort: la tarjeta igual se retira */ }
+  setTimeout(()=>{ _pendRemove(key); }, 2000);
+}
+
+function _pendResetAll(){
+  const container=document.getElementById('pending-cards');
+  if(container) container.innerHTML='';
+  for(const c of _pendCards.values()){ if(c.timer) clearTimeout(c.timer); }
+  _pendCards.clear();
+}
+
 let _mtNotes = [], _mtPaused = false;
 async function loadLive(){
   try{
@@ -2868,9 +2930,11 @@ async function loadLive(){
       const lv=(s.levels||{}), pctYo=Math.round(Math.min(lv.yo||0,1)*100), pctEllos=Math.round(Math.min(lv.ellos||0,1)*100);
       const vuYo=document.getElementById('mt-vu-yo'), vuEllos=document.getElementById('mt-vu-ellos');
       if(vuYo) vuYo.style.width=pctYo+'%'; if(vuEllos) vuEllos.style.width=pctEllos+'%';
+      renderPendingCards((d.insights||{}).pendientes||[]);
     } else { startB.classList.remove('hidden'); stopB.classList.add('hidden'); document.getElementById('mt-status').textContent='';
       liveHeader.classList.add('hidden'); actionBar.classList.add('hidden'); tabs.classList.add('hidden');
       document.getElementById('mt-paused-badge').classList.add('hidden'); _mtPaused=false;
+      if(_pendCards.size){ _pendResetAll(); }
       if(d.last_minutes && !_actaShown){ renderActa(d.last_minutes); _actaShown=true; loadHistory(); } }
     renderTranscript(s, d.segments||[]);
   }catch(e){}
@@ -3865,6 +3929,19 @@ def meeting_note():
     """Añade una nota rápida al instante actual de la reunión."""
     data = request.get_json(silent=True) or {}
     item = MEETING.add_note(data.get("text", ""))
+    return jsonify({"ok": item is not None, "item": item})
+
+
+@app.route("/api/meeting/feedback", methods=["POST"])
+def meeting_feedback():
+    """Registra el feedback ✓/✗ de una tarjeta de pendiente (único push en vivo)."""
+    data = request.get_json(silent=True) or {}
+    item = MEETING.add_feedback(
+        data.get("key", ""),
+        data.get("tipo", ""),
+        data.get("texto", ""),
+        data.get("value"),
+    )
     return jsonify({"ok": item is not None, "item": item})
 
 
