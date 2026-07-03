@@ -428,12 +428,16 @@ def _chat_claude_cli(messages: list, *, task: str = "live", json_mode: bool = Fa
 
     model = os.getenv("CLAUDE_CLI_MODEL_BATCH", "sonnet").strip()
 
-    # cwd: el directorio de datos de la app (donde viven DB/.env), NUNCA el repo —
-    # si cwd fuera el repo, claude cargaría el CLAUDE.md y el .mcp.json del proyecto.
+    # cwd: SIEMPRE un directorio neutro (%APPDATA%\Vflow), NUNCA el repo ni el
+    # data dir de dev (que en dev ES la raíz del repo): si cwd cayera en el repo,
+    # claude cargaría el CLAUDE.md del proyecto y el .mcp.json en cada llamada
+    # (tokens y latencia desperdiciados + un servidor MCP arrancado por acta).
+    appdata = os.environ.get("APPDATA", "")
+    _cwd = os.path.join(appdata, "Vflow") if appdata else os.path.expanduser("~")
     try:
-        from config import APP_DATA_DIR as _cwd  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
-        _cwd = os.getcwd()
+        os.makedirs(_cwd, exist_ok=True)
+    except OSError:
+        _cwd = os.path.expanduser("~")
 
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
