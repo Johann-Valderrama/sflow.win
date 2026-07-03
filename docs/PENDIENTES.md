@@ -70,8 +70,10 @@ Mapa de funciones de Proactor (páginas /work-meeting, /sales, /business, /educa
 2. **Búsqueda full-text del historial de reuniones** (FTS5). Prerequisito del chat.
 3. **Redacción de entregables** desde la reunión: borrador de email de seguimiento, informe, etc.
    (una llamada LLM sobre el acta/transcript). Encaja con el chat.
-4. **Momentos clave con marca de tiempo / highlights**: marcar automáticamente (o a mano) los
-   momentos importantes para saltar a ellos. Hoy hay timestamp por segmento pero no "key moments".
+4. ~~**Momentos clave con marca de tiempo / highlights**: marcar automáticamente (o a mano) los
+   momentos importantes para saltar a ellos. Hoy hay timestamp por segmento pero no "key moments".~~
+   **HECHO 2026-07-03** (commit 37bbfd4): AltGr+H marca el momento a mano (marcado automático
+   sigue pendiente); ver "Momentos destacados" en CLAUDE.md.
 5. **Plantillas por tipo de reunión / "modo agenda"** (ventas con BANT, educación, negocio):
    el diferenciador que Proactor NO tiene bien resuelto. Da contexto al LLM → mejores insights.
 6. **BANT auto-extraído** para modo ventas (Budget/Authority/Need/Timeline). Subcaso de plantillas.
@@ -318,8 +320,9 @@ total). Fathom aporta el patrón de inmediatez; superwhisper/Wispr Flow los patr
    destaca lo humano. Ya tenemos transcript + insights + LLM: esfuerzo medio, impacto máximo.
 2. **Acta instantánea al colgar** (Fathom): generar el acta automáticamente al terminar la
    captura, sin botón. Cero espera percibida.
-3. **Atajo Highlight en vivo** (Fathom): AltGr+H marca timestamp; los momentos marcados
-   aparecen destacados en el acta. Esfuerzo bajo (es solo marcar tiempo).
+3. ~~**Atajo Highlight en vivo** (Fathom): AltGr+H marca timestamp; los momentos marcados
+   aparecen destacados en el acta. Esfuerzo bajo (es solo marcar tiempo).~~
+   **HECHO 2026-07-03** (commit 37bbfd4).
 4. **Lupa de trazabilidad** (Granola): cada bullet del acta enlaza al fragmento del transcript
    origen. Confianza barata (tenemos timestamps por segmento).
 5. **Plantillas por tipo de reunión** que definen la estructura del acta (ya estaba en el

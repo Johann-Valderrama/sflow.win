@@ -223,6 +223,10 @@ raíz), autodescubierto por Claude Code vía `.mcp.json`; NO se bundlea en el .e
   así el MCP lee mientras la app escribe sin "database is locked".
 - **Limitación documentada**: el índice FTS lo mantiene el proceso escritor; el lector RO nunca
   hace backfill. stdout es del protocolo: nada de `print()` en `mcp_server/`.
+- **Momentos destacados**: `AltGr+H` durante una reunión activa persiste el timestamp en
+  `highlights_json` (tabla `meetings`, migración idempotente); el acta al cerrar incluye la
+  sección `momentos_destacados` ({"time", "texto"}, regla callar>inventar), visible en dashboard
+  (vivo/historial), export markdown, Asistente de reuniones y `get_minutes` (passthrough).
 
 ## Security & Privacy
 
@@ -257,6 +261,7 @@ Edit `core/hotkey.py`:
 - **Mode 1 (Ctrl+Alt hold)**: Press and hold Ctrl+Alt to transcribe; release to stop. Transcribed text auto-pastes.
 - **Mode 2 (Triple-tap Shift)**: Press Shift three times within 400ms to start hands-free transcription; press Shift once to stop. Only *clean* taps count (press and release Shift with no other key in between): Shift used as part of a chord (Shift+A for a capital, Shift+Enter) neither starts nor stops recording, and any non-Shift key resets an in-progress tap sequence. The tap decision happens on Shift *release*.
 - **Mode 3 (Ctrl+Shift+Alt hold)**: Press and hold Ctrl+Shift+Alt (Shift before Alt) to translate from any language to target language.
+- **AltGr+H (highlight)**: during an active meeting (AltGr+R), press AltGr+H to mark the current timestamp as a highlight (auto-repeat suppressed); feedback = beep + tray notification "✓ Momento destacado (mm:ss)".
 - **Mode 4 (AltGr+T toggle)**: Press AltGr+T once to start translation hands-free; press again to stop.
 - To customize intervals, edit `DOUBLE_TAP_INTERVAL` in `config.py`.
 - **Arming Delay** — Edit `ARMING_DELAY` in `config.py` (default: 0.15s). Modes 1 and 3 (hold keys) require the hotkey combination to be pressed for this duration *without other keys* before recording starts. This prevents accidental triggers when using IDE shortcuts like Ctrl+Alt+L. Set to 0 for immediate activation (at the cost of possible misfires).
