@@ -20,6 +20,19 @@
   auto-check: si su modelo es más débil que el estampado, avisa antes de proceder.
 - Techo de esfuerzo SIEMPRE `xhigh`, nunca `max`.
 
+## Frase de arranque estándar (para Johann, en ventana nueva con plan mode)
+
+```
+Lee docs/PLAN-OLAS.md y ejecuta el Kickoff Ola <N>. Sigue sus instrucciones al pie de la
+letra, incluido el auto-check de modelo.
+```
+
+Aplica a las olas 2-6 (un kickoff por ola). ÚNICA excepción: la Ola 1 tiene DOS kickoffs
+(1a: MCP, 1b: visual) por decisión del debate adversarial (objeción #5: la pieza delicada
+no comparte corrida con las mecánicas). Se lanzan como "Kickoff Ola 1a" y "Kickoff Ola 1b",
+en cualquier orden o en paralelo (archivos disjuntos). Orden entre olas: respetar las
+dependencias del resumen (la 2 requiere el CSS de 1b; la 5 requiere 2 y 3).
+
 **¿Orquestar-agentes?** Sí, pero solo donde paga (filtro maestro §0): las olas con 2-3
 unidades independientes se paralelizan con ejecutores baratos y verificación antes de
 integrar; el núcleo secuencial (contratos, prompts) lo hace el orquestador o un L1. Si el
