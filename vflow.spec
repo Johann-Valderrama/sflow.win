@@ -70,6 +70,11 @@ a = Analysis(
         'sniffio',
         'certifi',
         'idna',
+        # anthropic (backend 'anthropic' de insights) + deps propias no cubiertas por groq
+        'anthropic',
+        'jiter',
+        'distro',
+        'docstring_parser',
         # numpy
         'numpy',
         # dotenv

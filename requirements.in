@@ -6,6 +6,7 @@ sounddevice
 numpy
 pynput
 groq
+anthropic
 python-dotenv
 flask
 faster-whisper

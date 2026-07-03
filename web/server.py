@@ -643,6 +643,7 @@ HTML_TEMPLATE = """
                                 <option value="groq">Groq API (nube) — instantáneo, requiere internet</option>
                                 <option value="openrouter">OpenRouter (nube) — multi-modelo, requiere internet</option>
                                 <option value="endpoint">Local (LM Studio) — privado, sin internet</option>
+                                <option value="anthropic">Anthropic (API oficial) — Claude Haiku, requiere internet</option>
                             </select>
                         </div>
                         <div>
@@ -651,6 +652,8 @@ HTML_TEMPLATE = """
                                 <option value="groq">Groq API (nube) — instantáneo, requiere internet</option>
                                 <option value="openrouter">OpenRouter (nube) — multi-modelo, requiere internet</option>
                                 <option value="endpoint">Local (LM Studio) — privado, sin internet</option>
+                                <option value="anthropic">Anthropic (API oficial) — Claude Sonnet, requiere internet</option>
+                                <option value="claude-cli">Claude (tu suscripción) — vía Claude Code, solo acta/chat</option>
                             </select>
                         </div>
                     </div>
@@ -662,6 +665,12 @@ HTML_TEMPLATE = """
                     </div>
                     <div id="cfg-insights-openrouter-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
                         <p class="text-xs text-white/55">Pon tu key abajo en <strong>API Keys</strong> (se guarda cifrada en este equipo). Consíguela en <span class="text-white/70">openrouter.ai/keys</span>. Modelo configurable con <code class="text-white/70">OPENROUTER_MODEL</code> (default: <span class="text-white/70">google/gemini-3-flash</span>).</p>
+                    </div>
+                    <div id="cfg-insights-anthropic-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
+                        <p class="text-xs text-white/55">Pon tu key abajo en <strong>API Keys</strong> (se guarda cifrada en este equipo). Consíguela en <span class="text-white/70">console.anthropic.com/settings/keys</span>. Modelos: <code class="text-white/70">ANTHROPIC_MODEL_LIVE</code> (default Haiku) y <code class="text-white/70">ANTHROPIC_MODEL_BATCH</code> (default Sonnet).</p>
+                    </div>
+                    <div id="cfg-insights-claudecli-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
+                        <p class="text-xs text-white/55">Usa tu suscripción de Claude vía Claude Code (requiere <code class="text-white/70">claude</code> instalado y logueado). Solo para el acta/chat, no para insights en vivo. Claude Code guarda transcripts locales propios.</p>
                     </div>
                 </div>
             </div>
@@ -688,6 +697,14 @@ HTML_TEMPLATE = """
                             <input type="password" id="cfg-openrouter-key" placeholder="sk-or-…" autocomplete="off"
                                 class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/45 flex-1">
                             <button type="button" onclick="saveApiKey('openrouter')" class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 focus:outline-none focus:ring-2 focus:ring-purple-500/60 whitespace-nowrap">Guardar</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label for="cfg-anthropic-key" class="text-xs text-white/55 block mb-1">Anthropic API Key <span id="anthropic-key-status" class="ml-1 text-xs text-white/45"></span></label>
+                        <div class="flex gap-2">
+                            <input type="password" id="cfg-anthropic-key" placeholder="sk-ant-…" autocomplete="off"
+                                class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/45 flex-1">
+                            <button type="button" onclick="saveApiKey('anthropic')" class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 focus:outline-none focus:ring-2 focus:ring-purple-500/60 whitespace-nowrap">Guardar</button>
                         </div>
                     </div>
                     <div id="api-keys-feedback" class="text-xs hidden" aria-live="polite"></div>
@@ -1352,6 +1369,7 @@ HTML_TEMPLATE = """
                 };
                 set('groq-key-status', s.groq);
                 set('openrouter-key-status', s.openrouter);
+                set('anthropic-key-status', s.anthropic);
             } catch (e) {}
         }
 
@@ -1392,8 +1410,12 @@ HTML_TEMPLATE = """
             const backendBatch = document.getElementById('cfg-insights-backend-batch').value;
             const anyEndpoint = backendLive === 'endpoint' || backendBatch === 'endpoint';
             const anyOpenrouter = backendLive === 'openrouter' || backendBatch === 'openrouter';
+            const anyAnthropic = backendLive === 'anthropic' || backendBatch === 'anthropic';
+            const anyClaudeCli = backendBatch === 'claude-cli';
             document.getElementById('cfg-insights-endpoint-wrap').classList.toggle('hidden', !anyEndpoint);
             document.getElementById('cfg-insights-openrouter-wrap').classList.toggle('hidden', !anyOpenrouter);
+            document.getElementById('cfg-insights-anthropic-wrap').classList.toggle('hidden', !anyAnthropic);
+            document.getElementById('cfg-insights-claudecli-wrap').classList.toggle('hidden', !anyClaudeCli);
         }
 
         function updateLocalModelSection() {
@@ -2873,6 +2895,7 @@ def _set_env_key(key: str, value: str):
 _SECRET_KEYS = {
     "groq": "GROQ_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
 }
 
 
@@ -2944,6 +2967,9 @@ def get_settings():
                                     or os.getenv("INSIGHTS_BACKEND", "groq").strip().lower()
                                     or "groq"),
         "insights_endpoint_model": os.getenv("INSIGHTS_ENDPOINT_MODEL", "qwen/qwen2.5-vl-7b"),
+        "anthropic_model_live": os.getenv("ANTHROPIC_MODEL_LIVE", "claude-haiku-4-5"),
+        "anthropic_model_batch": os.getenv("ANTHROPIC_MODEL_BATCH", "claude-sonnet-5"),
+        "claude_cli_model_batch": os.getenv("CLAUDE_CLI_MODEL_BATCH", "sonnet"),
     })
 
 
@@ -2969,6 +2995,9 @@ def update_settings():
         "insights_backend_batch": "INSIGHTS_BACKEND_BATCH",
         "insights_endpoint_model": "INSIGHTS_ENDPOINT_MODEL",
         "audio_source": "AUDIO_SOURCE",
+        "anthropic_model_live": "ANTHROPIC_MODEL_LIVE",
+        "anthropic_model_batch": "ANTHROPIC_MODEL_BATCH",
+        "claude_cli_model_batch": "CLAUDE_CLI_MODEL_BATCH",
     }
     for field, env_key in allowed.items():
         if field in data:

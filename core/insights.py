@@ -29,12 +29,17 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
+import sys
 import threading
 
 logger = logging.getLogger(__name__)
 
 _client = None
 _client_lock = threading.Lock()
+_anthropic_client = None
+_anthropic_client_lock = threading.Lock()
 _last_error: str | None = None  # último error real de llamada (para surfacing en la UI)
 
 
@@ -109,6 +114,12 @@ def is_available(task: str = "live") -> bool:
         return bool(os.getenv("INSIGHTS_ENDPOINT_URL", "http://localhost:1234/v1").strip())
     if backend == "openrouter":
         return bool(os.getenv("OPENROUTER_API_KEY", "").strip())
+    if backend == "anthropic":
+        return bool(os.getenv("ANTHROPIC_API_KEY", "").strip())
+    if backend == "claude-cli":
+        # El arranque del CLI (proceso Node completo) mata la latencia del loop en
+        # vivo: solo válido para tareas batch (acta/consolidación/chat).
+        return task == "batch" and _claude_cli_path() is not None
     # local (llama-cpp embebido): camino A, siguiente fase
     return False
 
@@ -116,14 +127,21 @@ def is_available(task: str = "live") -> bool:
 def _model(task: str = "live") -> str:
     """Modelo LLM según el backend activo para la tarea dada.
 
-    Groq, el endpoint (LM Studio) y OpenRouter usan nombres distintos, así que cada uno
-    tiene su propia variable: conmutar nube↔local desde el dashboard no rompe la config.
+    Groq, el endpoint (LM Studio), OpenRouter, Anthropic y claude-cli usan nombres
+    distintos, así que cada uno tiene su propia variable: conmutar entre backends
+    desde el dashboard no rompe la config.
     """
     backend = _resolve_backend(task)
     if backend == "endpoint":
         return os.getenv("INSIGHTS_ENDPOINT_MODEL", "qwen/qwen2.5-vl-7b").strip()
     if backend == "openrouter":
         return os.getenv("OPENROUTER_MODEL", "google/gemini-3.1-flash-lite").strip()
+    if backend == "anthropic":
+        if task == "batch":
+            return os.getenv("ANTHROPIC_MODEL_BATCH", "claude-sonnet-5").strip()
+        return os.getenv("ANTHROPIC_MODEL_LIVE", "claude-haiku-4-5").strip()
+    if backend == "claude-cli":
+        return os.getenv("CLAUDE_CLI_MODEL_BATCH", "sonnet").strip()
     return os.getenv("INSIGHTS_MODEL", "llama-3.3-70b-versatile").strip()
 
 
@@ -141,17 +159,54 @@ def _get_groq_client():
     return _client
 
 
+def _get_anthropic_client():
+    """Lazy init del cliente Anthropic oficial (reutiliza ANTHROPIC_API_KEY)."""
+    global _anthropic_client
+    if _anthropic_client is None:
+        with _anthropic_client_lock:
+            if _anthropic_client is None:
+                from anthropic import Anthropic  # noqa: PLC0415
+                key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+                if not key:
+                    raise InsightsUnavailable("ANTHROPIC_API_KEY no configurada")
+                _anthropic_client = Anthropic(api_key=key, timeout=60.0)
+    return _anthropic_client
+
+
+def _claude_cli_path() -> "str | None":
+    """Resuelve la ruta al binario de Claude Code CLI (claude / claude.cmd).
+
+    Orden: CLAUDE_CLI_PATH (env) → shutil.which("claude") → ruta típica de
+    instalación npm global en Windows (%APPDATA%\\npm\\claude.cmd). None si no
+    se encuentra ninguno.
+    """
+    override = os.getenv("CLAUDE_CLI_PATH", "").strip()
+    if override and os.path.isfile(override):
+        return override
+    found = shutil.which("claude")
+    if found:
+        return found
+    appdata = os.environ.get("APPDATA", "")
+    if appdata:
+        npm_cmd = os.path.join(appdata, "npm", "claude.cmd")
+        if os.path.isfile(npm_cmd):
+            return npm_cmd
+    return None
+
+
 def _chat(messages: list, *, task: str = "live", json_mode: bool = False,
           temperature: float = 0.2, max_tokens: int = 1024,
           reasoning: bool = False) -> str:
     """Llama al LLM de insights y devuelve el contenido de texto.
 
     Dispatch por backend resuelto para la tarea: 'groq' (default), 'endpoint'
-    (LM Studio / on-prem OpenAI-compatible) u 'openrouter' (nube multi-modelo).
+    (LM Studio / on-prem OpenAI-compatible), 'openrouter' (nube multi-modelo),
+    'anthropic' (API oficial de Anthropic) o 'claude-cli' (suscripción Claude vía
+    Claude Code headless, solo tareas batch).
     El parámetro ``task`` ("live" o "batch") determina qué variable de entorno
     se usa para seleccionar el backend.
     El parámetro ``reasoning`` activa razonamiento extendido en backends que lo
-    soportan (openrouter). Ignorado en groq y endpoint.
+    soportan (openrouter). Ignorado en groq, endpoint, anthropic y claude-cli.
     """
     backend = _resolve_backend(task)
 
@@ -163,6 +218,14 @@ def _chat(messages: list, *, task: str = "live", json_mode: bool = False,
         return _chat_openrouter(messages, task=task, json_mode=json_mode,
                                 temperature=temperature, max_tokens=max_tokens,
                                 reasoning=reasoning)
+
+    if backend == "anthropic":
+        return _chat_anthropic(messages, task=task, json_mode=json_mode,
+                               temperature=temperature, max_tokens=max_tokens)
+
+    if backend == "claude-cli":
+        return _chat_claude_cli(messages, task=task, json_mode=json_mode,
+                                max_tokens=max_tokens)
 
     if backend != "groq":
         raise InsightsUnavailable(f"Backend de insights '{backend}' aún no implementado")
@@ -267,6 +330,135 @@ def _chat_openrouter(messages: list, *, task: str = "live", json_mode: bool,
         raise InsightsUnavailable(f"OpenRouter no disponible: {exc}{body}") from exc
     data = resp.json()
     return (data["choices"][0]["message"]["content"] or "").strip()
+
+
+def _flatten_anthropic_content(content_blocks) -> str:
+    """Concatena el texto de una lista de bloques de respuesta de Anthropic.
+
+    Aislado en su propia función (en vez de inline en _chat_anthropic) para poder
+    testearlo con objetos fake (basta con que cada bloque tenga .type y .text).
+    """
+    return "".join(
+        b.text for b in content_blocks if getattr(b, "type", None) == "text"
+    ).strip()
+
+
+def _chat_anthropic(messages: list, *, task: str = "live", json_mode: bool = False,
+                    temperature: float = 0.2, max_tokens: int = 1024) -> str:
+    """Llamada a la API oficial de Anthropic (backend 'anthropic').
+
+    Modelos por tarea: live → ANTHROPIC_MODEL_LIVE (default claude-haiku-4-5),
+    batch → ANTHROPIC_MODEL_BATCH (default claude-sonnet-5).
+
+    NUNCA envía temperature/top_p/top_k (claude-sonnet-5 rechaza con 400 cualquier
+    parámetro de sampling no-default) ni el campo thinking (Sonnet 5 corre thinking
+    adaptativo por defecto sin necesidad de configurarlo; Haiku no lo necesita).
+    El parámetro ``temperature`` de la firma se recibe por compatibilidad con el
+    resto de backends pero se ignora deliberadamente.
+    """
+    _ = temperature  # ignorado a propósito — ver docstring
+    _ = json_mode  # sin response_format nativo aquí; se confía en el prompt + _extract_json
+
+    system = ""
+    user_messages = []
+    for m in messages:
+        if m.get("role") == "system":
+            system = (system + "\n\n" + m.get("content", "")) if system else m.get("content", "")
+        else:
+            user_messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+
+    # El thinking adaptativo de Sonnet 5 consume presupuesto de salida: darle
+    # holgura para que no trunque el JSON antes de terminar de razonar.
+    floor = 6000 if task == "batch" else 1024
+    effective_max_tokens = max(max_tokens, floor)
+
+    from anthropic import APIConnectionError, APIStatusError  # noqa: PLC0415
+
+    try:
+        client = _get_anthropic_client()
+        resp = client.messages.create(
+            model=_model(task),
+            max_tokens=effective_max_tokens,
+            system=system or None,
+            messages=user_messages,
+        )
+    except InsightsUnavailable:
+        raise
+    except APIStatusError as exc:
+        raise InsightsUnavailable(f"Anthropic API error ({exc.status_code}): {exc.message}") from exc
+    except APIConnectionError as exc:
+        raise InsightsUnavailable(f"Anthropic no disponible: {exc}") from exc
+
+    if getattr(resp, "stop_reason", None) == "refusal":
+        return ""
+
+    return _flatten_anthropic_content(resp.content)
+
+
+def _chat_claude_cli(messages: list, *, task: str = "live", json_mode: bool = False,
+                     max_tokens: int = 1024) -> str:
+    """Llamada a Claude Code headless (`claude -p`) usando la suscripción del usuario.
+
+    Solo válido para task="batch" (acta/consolidación/chat): el arranque del proceso
+    Node del CLI tiene latencia incompatible con el loop de insights en vivo.
+
+    El prompt completo (system + user concatenados) se pasa por STDIN, nunca por
+    argv (argv es visible para otros procesos del sistema — privacidad).
+    """
+    _ = json_mode  # sin flag de JSON nativo; se confía en el prompt + _extract_json
+    _ = max_tokens  # el CLI no expone un límite de tokens de salida configurable
+
+    if task != "batch":
+        raise InsightsUnavailable(
+            "claude-cli solo soporta tareas batch (acta/chat); usa otro backend para live"
+        )
+
+    cli_path = _claude_cli_path()
+    if cli_path is None:
+        raise InsightsUnavailable(
+            "Claude Code CLI no encontrado — instala Claude Code y haz login (claude login)"
+        )
+
+    parts = []
+    for m in messages:
+        content = m.get("content", "")
+        if content:
+            parts.append(content)
+    prompt = "\n\n".join(parts)
+
+    model = os.getenv("CLAUDE_CLI_MODEL_BATCH", "sonnet").strip()
+
+    # cwd: el directorio de datos de la app (donde viven DB/.env), NUNCA el repo —
+    # si cwd fuera el repo, claude cargaría el CLAUDE.md y el .mcp.json del proyecto.
+    try:
+        from config import APP_DATA_DIR as _cwd  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        _cwd = os.getcwd()
+
+    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+    try:
+        result = subprocess.run(
+            [cli_path, "-p", "--model", model, "--output-format", "text"],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=180,
+            cwd=_cwd,
+            creationflags=creationflags,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise InsightsUnavailable("claude-cli superó el timeout") from exc
+    except OSError as exc:
+        raise InsightsUnavailable(f"claude-cli no se pudo ejecutar: {exc}") from exc
+
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()[:200]
+        raise InsightsUnavailable(f"claude-cli falló (code {result.returncode}): {stderr}")
+
+    return (result.stdout or "").strip()
 
 
 # ---------------------------------------------------------------------------

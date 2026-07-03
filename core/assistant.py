@@ -89,7 +89,12 @@ def _budget_chars() -> int:
     # El asistente corre sobre el backend "batch" (acta/asistente), no el global: el presupuesto
     # debe seguir a ese backend (p.ej. LM Studio local necesita una ventana más chica).
     backend = insights._resolve_backend("batch")
-    return 18000 if backend == "endpoint" else 80000
+    if backend == "endpoint":
+        return 18000
+    if backend == "claude-cli":
+        # El prompt se pasa por stdin al proceso claude -p: contenerlo.
+        return 40000
+    return 80000
 
 
 # ---------------------------------------------------------------------------

@@ -297,6 +297,18 @@ Edit `config.py`:
 - `GROQ_FALLBACK` (default: `false`) — Si `true`, cuando el backend local falla la app reintenta con Groq (requiere `GROQ_API_KEY`). Apagado por defecto; activar desde dashboard Settings (checkbox visible solo cuando backend=local).
 - `VAD_ENABLED` (default: `true`) — Aplica Silero VAD al audio antes de enviarlo a Groq para recortar silencios (reduce costo y alucinaciones). El backend local usa su propio VAD interno; esta opción solo afecta a Groq. Apagar si hay problemas (fail-open: el audio se envía sin modificar).
 - `AUDIO_SOURCE` (default: `mic`) — Fuente de captura: `"mic"` (micrófono) o `"system"` (audio del sistema vía WASAPI loopback con pyaudiowpatch, para transcribir videos/cursos que suenan en el PC). Cambiable desde el tray ("Fuente: …") o el dashboard sin reiniciar: se relee al inicio de cada grabación. En modo `system`: no hay auto-pegado (el texto va al portapapeles + notificación del tray + historial), el watchdog de micrófono se desactiva (WASAPI loopback no entrega buffers en silencio total), y `LoopbackSource` (core/recorder.py) captura a la frecuencia nativa del dispositivo de salida con downmix a mono y resample a 16kHz, por lo que el resto del pipeline no cambia. Cada transcripción guarda su fuente en la columna `source` de la DB (migración idempotente). Script de diagnóstico: `test_loopback.py` en la raíz.
+- `ANTHROPIC_API_KEY` — Key de la API oficial de Anthropic (automáticamente cifrada con DPAPI, igual que `GROQ_API_KEY`). Habilita el backend de insights `"anthropic"`.
+- `ANTHROPIC_MODEL_LIVE` (default: `claude-haiku-4-5`) — Modelo Anthropic para insights en vivo (Insight Stream) cuando el backend activo es `anthropic`.
+- `ANTHROPIC_MODEL_BATCH` (default: `claude-sonnet-5`) — Modelo Anthropic para tareas batch (acta, consolidación, Asistente de reuniones) cuando el backend activo es `anthropic`.
+- `CLAUDE_CLI_PATH` — Ruta explícita al binario de Claude Code CLI (`claude`/`claude.cmd`) si no se resuelve solo (orden: esta variable → `PATH` → `%APPDATA%\npm\claude.cmd`). Solo aplica al backend `claude-cli`.
+- `CLAUDE_CLI_MODEL_BATCH` (default: `sonnet`) — Alias de modelo pasado a `claude -p --model` para el backend `claude-cli`.
+
+### Backends de insights — Anthropic (API oficial) y claude-cli (suscripción Claude)
+
+Además de `groq` (default), `endpoint` (LM Studio local) y `openrouter`, la capa de insights (`core/insights.py`) soporta dos backends adicionales, configurables por tarea con `INSIGHTS_BACKEND_LIVE` / `INSIGHTS_BACKEND_BATCH`:
+
+- **`anthropic`** — API oficial de Anthropic. Modelo por tarea: live usa `ANTHROPIC_MODEL_LIVE` (Haiku, rápido/barato para el Insight Stream), batch usa `ANTHROPIC_MODEL_BATCH` (Sonnet, más inteligente para acta/chat). Nunca envía `temperature`/sampling params ni el campo `thinking` (Sonnet 5 corre thinking adaptativo por defecto sin configurarlo).
+- **`claude-cli`** — usa la suscripción Claude del usuario vía Claude Code headless (`claude -p --model <alias> --output-format text`, prompt por stdin nunca por argv). SOLO disponible para tareas batch (acta/consolidación/chat); para `task="live"` se reporta como no disponible porque la latencia de arranque del CLI (proceso Node completo) rompe el loop en vivo. Requiere Claude Code instalado y logueado; el `cwd` del subproceso es el directorio de datos de la app (nunca el repo, para no cargar su `CLAUDE.md`/`.mcp.json`).
 
 ### Backend Local (faster-whisper)
 

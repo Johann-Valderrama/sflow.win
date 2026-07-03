@@ -5,7 +5,10 @@
 - Kickoff activo: **Ola 1a — unidad 1.1 Servidor MCP local** (stdio, read-only sobre SQLite, tools search_meetings / get_minutes / get_transcript). Detalle: docs/PLAN-OLAS.md Ola 1.
 
 ## En curso
-- (nada — Kickoff 1a cerrado; siguiente: Kickoff 1b en ventana propia)
+- [ ] Fuera de olas: backends Claude para insights/acta (pedido de Johann 2026-07-03)  (@fable-5, IN_PROGRESS 2026-07-03)
+  - Qué: 2 backends nuevos en core/insights.py — "anthropic" (API, key DPAPI, Haiku live / Sonnet batch) y "claude-cli" (suscripción vía Claude Code headless) + selector en UI. La suscripción NO incluye API: la vía es claude -p.
+  - Last checkpoint: debate adversarial cerrado (Opus: RECHAZAR v1 por alcance subestimado → diseño v2 reconciliado). Objeciones: #1 descifrado DPAPI hardcodeado (ACEPTADA: bloque en config.py) · #2 cableado real en _chat/is_available/_model (ACEPTADA: brief enumera 7 puntos) · #3 vflow.spec sin el SDK (ACEPTADA: hiddenimports) · #4 _extract_json vs bloques Claude (ACEPTADA: aplanar text blocks) · #5 temperature en toda la cadena (ACEPTADA: backend lo ignora; Sonnet 5 rechaza sampling no-default) · #6 transcript en argv (MITIGADA: prompt por stdin + nota de privacidad en UI) · #7 which(claude) en .exe (MITIGADA: CLAUDE_CLI_PATH → which → %APPDATA%\npm) · #8 latencia CLI en live (ACEPTADA: claude-cli SOLO batch) · #9 "IDs de modelo inventados" (REFUTADA: claude-haiku-4-5 y claude-sonnet-5 verificados contra la doc oficial vía skill claude-api) · #10 _budget_chars (ACEPTADA: casos nuevos). Alternativa B de Opus adoptada como atajo sin código (openrouter + anthropic/claude-*); descartar claude-cli rechazado (pedido central de Johann, viable batch-only). Riesgo extra detectado por Fable: el subprocess de claude-cli debe correr con cwd en el dir de datos, no en el repo (evita cargar CLAUDE.md/.mcp.json del proyecto).
+  - Next action: agente Sonnet 5 implementando (brief completo enviado); al retorno: revisar diff real + verificación c (llamada real claude-cli) → commit único.
 
 ## Completado
 - [x] 1.1 Servidor MCP local  (@fable-5, 2026-07-03, commit 527156d)
