@@ -443,6 +443,7 @@ class VflowApp(QObject):
         self.hotkey.released.connect(self._on_hotkey_released, Qt.ConnectionType.QueuedConnection)
         self.hotkey.translate_pressed.connect(self._on_translate_pressed, Qt.ConnectionType.QueuedConnection)
         self.hotkey.meeting_toggle.connect(self._on_meeting_toggle, Qt.ConnectionType.QueuedConnection)
+        self.hotkey.highlight_pressed.connect(self._on_highlight, Qt.ConnectionType.QueuedConnection)
         self.meeting_stopped.connect(self._on_meeting_stopped, Qt.ConnectionType.QueuedConnection)
         self.transcription_done.connect(self._on_transcription_done, Qt.ConnectionType.QueuedConnection)
         self.transcription_error.connect(self._on_transcription_error, Qt.ConnectionType.QueuedConnection)
@@ -760,6 +761,28 @@ class VflowApp(QObject):
                     QSystemTrayIcon.MessageIcon.Critical,
                     4000,
                 )
+
+    @pyqtSlot()
+    def _on_highlight(self):
+        """Marca el instante actual como momento destacado (AltGr+H).
+
+        Silencioso si no hay reunión activa (evita ruido si el usuario pulsa el
+        atajo por error fuera de una reunión). Con reunión activa: persiste el
+        highlight en MEETING y da feedback inmediato (beep + notificación tray).
+        """
+        if not MEETING.is_active():
+            return
+        item = MEETING.add_highlight()
+        if not item:
+            return
+        _play_sound(1046)  # beep agudo distinto = confirmación de highlight
+        if self.tray:
+            self.tray.showMessage(
+                "Vflow — Reunión",
+                f"✓ Momento destacado ({item['time']})",
+                QSystemTrayIcon.MessageIcon.Information,
+                2500,
+            )
 
     def _meeting_stop_worker(self):
         """Detiene la reunión en background (bloquea) y emite el resultado al hilo Qt."""

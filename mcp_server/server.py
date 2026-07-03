@@ -83,7 +83,10 @@ def search_meetings(query: str = "", limit: int = 10) -> dict:
 def get_minutes(meeting_id: int) -> dict:
     """Devuelve el acta de una reunión: resumen, decisiones, temas, pendientes,
     propuestas, citas (todo lo que contenga el acta) más los capítulos con timestamp.
-    minutes=null si la reunión aún no tiene acta generada."""
+    El acta puede incluir además "momentos_destacados" (instantes que el usuario
+    marcó en vivo con AltGr+H, con su timestamp y contexto breve) cuando el usuario
+    marcó alguno durante la reunión. minutes=null si la reunión aún no tiene acta
+    generada."""
     meeting = _get_meeting_or_fail(meeting_id)
 
     minutes = _parse_json(meeting.get("minutes_json"))

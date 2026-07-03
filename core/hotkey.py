@@ -38,6 +38,7 @@ class HotkeyListener(QObject):
     released = pyqtSignal()
     translate_pressed = pyqtSignal()
     meeting_toggle = pyqtSignal()  # AltGr+R: iniciar/terminar modo reunión (toggle)
+    highlight_pressed = pyqtSignal()  # AltGr+H: marcar momento destacado durante la reunión
 
     def __init__(self):
         """Inicializa el estado de teclas, el timer de armado y la detección de triple-tap."""
@@ -49,6 +50,7 @@ class HotkeyListener(QObject):
         self._recording = False
         self._hands_free = False
         self._alt_gr_t_mode = False  # True cuando está en modo toggle AltGr+T
+        self._h_held = False  # supresión de auto-repeat para AltGr+H (no es un toggle idempotente)
 
         self._listener: keyboard.Listener | None = None
 
@@ -85,6 +87,7 @@ class HotkeyListener(QObject):
         self._recording = False
         self._hands_free = False
         self._alt_gr_t_mode = False
+        self._h_held = False
         self._shift_tap_count = 0
         self._last_shift_press = 0.0
         self._shift_chord = False
@@ -157,6 +160,10 @@ class HotkeyListener(QObject):
         # ante layouts igual que la detección de 'T'.
         _R_VK = 0x52
         is_r = hasattr(key, 'vk') and key.vk == _R_VK
+        # Detectar 'H' por vk (0x48) para el highlight de reunión (AltGr+H), robusto
+        # ante layouts igual que la detección de 'T'/'R'.
+        _H_VK = 0x48
+        is_h = hasattr(key, 'vk') and key.vk == _H_VK
 
         # --- Tap limpio de Shift: cualquier otra tecla invalida tap y secuencia ---
         # Va ANTES de los bloques con return (reunión, modo 4) para que el acorde
@@ -173,7 +180,16 @@ class HotkeyListener(QObject):
             self.meeting_toggle.emit()
             return
 
-        # --- Modo 4: toggle AltGr + T (traducir, manos-libres) ---
+        # --- Highlight de reunión: AltGr + H (marcar momento destacado) ---
+        # NO es un toggle idempotente como R/T: sin supresión de auto-repeat, mantener
+        # H presionado emitiría la señal decenas de veces por segundo (Windows repite
+        # on_press mientras la tecla sigue abajo). self._h_held bloquea los repeats
+        # hasta el release real de H.
+        if is_h and self._alt_gr_held:
+            if not self._h_held:
+                self._h_held = True
+                self.highlight_pressed.emit()
+            return
         if is_t and self._alt_gr_held:
             if self._alt_gr_t_mode and self._recording:
                 # Segunda pulsación → detener grabación
@@ -230,6 +246,10 @@ class HotkeyListener(QObject):
         is_alt    = key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r)
         is_alt_gr = key == keyboard.Key.alt_gr
         is_shift  = key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r)
+        _H_VK = 0x48
+        is_h = hasattr(key, 'vk') and key.vk == _H_VK
+        if is_h:
+            self._h_held = False
 
         # Actualizar estado de modificadores
         if is_ctrl:

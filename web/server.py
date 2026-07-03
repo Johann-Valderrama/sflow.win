@@ -1992,13 +1992,15 @@ HTML_TEMPLATE = """
             const body = document.getElementById('mt-minutes-body');
             if (!wrap || !body) return;
             m = m || {};
-            const dec = m.decisiones || [], tem = m.temas || [], pen = m.pendientes || [], prop = m.propuestas || [], cit = m.citas || [];
-            if (!m.resumen && !dec.length && !tem.length && !pen.length && !prop.length && !cit.length) {
+            const dec = m.decisiones || [], tem = m.temas || [], pen = m.pendientes || [], prop = m.propuestas || [], cit = m.citas || [], mom = m.momentos_destacados || [];
+            if (!m.resumen && !dec.length && !tem.length && !pen.length && !prop.length && !cit.length && !mom.length) {
                 wrap.classList.add('hidden');
                 return;
             }
             let html = '';
             if (m.resumen) html += '<p class="text-white/80">' + escapeHtml(String(m.resumen)) + '</p>';
+            if (mom.length) html += '<div><div class="text-xs text-yellow-300/50 mt-2 mb-1">⭐ Momentos destacados</div>'
+                + mom.map(x => '<div class="text-xs text-white/75">'+ICONS.star+' <span class="text-white/50">' + escapeHtml(String(x.time || '')) + '</span> ' + escapeHtml(String(x.texto || '')) + '</div>').join('') + '</div>';
             if (dec.length) html += '<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'
                 + dec.map(d => '<div class="text-xs text-white/75">• ' + escapeHtml(String(d)) + '</div>').join('') + '</div>';
             if (pen.length) html += '<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'
@@ -2833,8 +2835,9 @@ function renderInsights(ins){
   el.innerHTML=h;
 }
 function actaHtml(m){
-  m=m||{}; const dec=m.decisiones||[],tem=m.temas||[],pen=m.pendientes||[],pro=m.propuestas||[],cit=m.citas||[]; let h='';
+  m=m||{}; const dec=m.decisiones||[],tem=m.temas||[],pen=m.pendientes||[],pro=m.propuestas||[],cit=m.citas||[],mom=m.momentos_destacados||[]; let h='';
   if(m.resumen)h+='<p class="text-white/80">'+esc(m.resumen)+'</p>';
+  if(mom.length)h+='<div><div class="text-xs text-yellow-300/50 mt-2 mb-1">\\u2b50 Momentos destacados</div>'+mom.map(x=>'<div class="text-xs text-white/75">'+ICONS.spark+' <span class="text-white/50">'+esc(x.time||'')+'</span> '+esc(x.texto||'')+'</div>').join('')+'</div>';
   if(dec.length)h+='<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'+dec.map(d=>'<div class="text-xs text-white/75">\\u2022 '+esc(d)+'</div>').join('')+'</div>';
   if(pen.length)h+='<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'+pen.map(p=>'<div class="text-xs text-white/75">'+ICONS.arrow+' '+esc(p.texto||p)+pendMeta(p)+'</div>').join('')+'</div>';
   if(pro.length)h+='<div><div class="text-xs text-sky-300/50 mt-2 mb-1">Propuestas</div>'+pro.map(p=>'<div class="text-xs text-white/75">'+ICONS.bulb+' '+esc(p.texto!=null?p.texto:p)+'</div>').join('')+'</div>';

@@ -757,6 +757,15 @@ _MINUTES_SYSTEM = (
     '  "propuestas": lista de strings (sugerencias/ideas accionables planteadas)\n'
     '  "citas": lista de objetos {"texto": string, "fecha": string|null, "hora": string|null} '
     "— próximas reuniones/citas agendadas; [] si no hubo\n\n"
+    "Si el mensaje del usuario incluye una lista de MOMENTOS DESTACADOS POR EL USUARIO "
+    "(instantes mm:ss que el usuario marcó como importantes durante la reunión), añade además "
+    "la clave:\n"
+    '  "momentos_destacados": lista de objetos {"time": "mm:ss", "texto": string} — uno por cada '
+    "instante marcado, con 'texto' describiendo brevemente qué se estaba diciendo o decidiendo "
+    "alrededor de ese momento, según el contexto de la transcripción cercano a ese timestamp. "
+    "Si la transcripción no da contexto suficiente para un instante concreto, usa el texto genérico "
+    "'Momento marcado por el usuario' para ese ítem — NUNCA inventes contenido que no esté en la "
+    "transcripción. Si no se te proporcionan momentos destacados, omite esta clave por completo.\n\n"
     "REGLAS:\n"
     "- Básate en la transcripción y el análisis en vivo; no inventes.\n"
     "- Conserva los pendientes y propuestas detectados en vivo si la transcripción los respalda.\n"
@@ -881,12 +890,15 @@ def generate_chapters(transcript: str, segments: list | None = None) -> list:
 
 
 def generate_minutes(transcript: str, insights: dict | None = None,
-                     reasoning: bool = False) -> dict:
+                     reasoning: bool = False, *, highlights: list | None = None) -> dict:
     """Genera el acta de la reunión (una sola llamada LLM). Fail-safe.
 
     Recibe opcionalmente el análisis en vivo (temas/pendientes/propuestas) para que el
-    acta sea consistente con lo que vio el usuario. Devuelve un dict con claves
-    resumen/decisiones/temas/pendientes/propuestas, o un acta vacía si el LLM falla.
+    acta sea consistente con lo que vio el usuario, y opcionalmente los ``highlights``
+    (momentos marcados en vivo por el usuario con AltGr+H: [{"t": float, "time": "mm:ss"}])
+    para que el acta incluya una sección "momentos_destacados". Devuelve un dict con
+    claves resumen/decisiones/temas/pendientes/propuestas/citas (+ momentos_destacados
+    si hubo highlights), o un acta vacía si el LLM falla.
     """
     empty = {"resumen": "", "decisiones": [], "temas": [], "pendientes": [], "propuestas": [], "citas": []}
     if not transcript.strip() or not is_available(task="batch"):
@@ -894,6 +906,12 @@ def generate_minutes(transcript: str, insights: dict | None = None,
     user = f"TRANSCRIPCIÓN:\n{transcript}"
     if insights:
         user += f"\n\nANÁLISIS EN VIVO DETECTADO:\n{json.dumps(insights, ensure_ascii=False)}"
+    if highlights:
+        times = ", ".join(h.get("time", "") for h in highlights if h.get("time"))
+        user += (
+            "\n\nMOMENTOS DESTACADOS POR EL USUARIO (marcó estos instantes como importantes): "
+            f"{times}"
+        )
     minutes_max_tokens = max(1600, 2400) if reasoning else 1600
     try:
         content = _chat(
@@ -910,7 +928,7 @@ def generate_minutes(transcript: str, insights: dict | None = None,
         data = _extract_json(content)
         if not isinstance(data, dict):
             return empty
-        return {
+        result = {
             "resumen": data.get("resumen", "") or "",
             "decisiones": data.get("decisiones", []) or [],
             "temas": data.get("temas", []) or [],
@@ -918,6 +936,10 @@ def generate_minutes(transcript: str, insights: dict | None = None,
             "propuestas": data.get("propuestas", []) or [],
             "citas": data.get("citas", []) or [],
         }
+        momentos = data.get("momentos_destacados")
+        if momentos:
+            result["momentos_destacados"] = momentos
+        return result
     except InsightsUnavailable:
         return empty
     except Exception as exc:  # noqa: BLE001

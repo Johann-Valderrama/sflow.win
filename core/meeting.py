@@ -96,6 +96,7 @@ class MeetingSession:
         self._mic_frames: list = []
         self._sys_frames: list = []
         self._segments: list = []          # [{"t": float, "speaker": str, "text": str}]
+        self._highlights: list = []        # [{"t": float, "time": "mm:ss"}] — momentos marcados con AltGr+H
         self._mic: MicSource | None = None
         self._sys: LoopbackSource | None = None
         # Carryover de prompt por canal: la cola del último texto da contexto al
@@ -184,6 +185,18 @@ class MeetingSession:
             for s in segs
         ]
 
+    def add_highlight(self) -> "dict | None":
+        """Marca el instante actual como momento destacado (AltGr+H). Idempotente-safe:
+        cada llamada añade un highlight nuevo (no es un toggle). Devuelve el dict
+        {"t", "time"} añadido, o None si no hay reunión activa."""
+        with self._lock:
+            if not self._active:
+                return None
+            t = self._elapsed()
+            item = {"t": round(t, 1), "time": _fmt_mmss(t)}
+            self._highlights.append(item)
+            return item
+
     def transcript_text(self) -> str:
         """Transcript completo como texto plano (para persistir)."""
         return "\n".join(
@@ -202,6 +215,7 @@ class MeetingSession:
             self._mic_frames = []
             self._sys_frames = []
             self._segments = []
+            self._highlights = []
             self._last_error = None
             self._carry = {self.LABEL_MIC: "", self.LABEL_SYS: ""}
             self._window_start = 0.0
@@ -296,7 +310,9 @@ class MeetingSession:
         # Acta post-reunión: una sola llamada LLM sobre el transcript completo, alimentada
         # con el análisis en vivo para que sea consistente con lo que vio el usuario.
         # Fail-safe: si el LLM no está disponible devuelve un acta vacía.
-        minutes = _insights.generate_minutes(transcript, self._store_to_plain())
+        with self._lock:
+            highlights = list(self._highlights)
+        minutes = _insights.generate_minutes(transcript, self._store_to_plain(), highlights=highlights)
         with self._lock:
             self._last_minutes = minutes  # para que el dashboard la muestre aunque se terminara por hotkey/tray
 
@@ -317,7 +333,7 @@ class MeetingSession:
                 if self._db is None:
                     self._db = TranscriptionDB()
                 title = f"Reunión {self._started_at or ''}".strip()
-                meeting_id = self._db.meeting_insert(
+                insert_kwargs = dict(
                     title=title,
                     transcript=transcript,
                     segments_json=json.dumps(segments, ensure_ascii=False),
@@ -327,6 +343,9 @@ class MeetingSession:
                     minutes_json=json.dumps(minutes, ensure_ascii=False),
                     chapters_json=json.dumps(chapters, ensure_ascii=False),
                 )
+                if highlights:
+                    insert_kwargs["highlights_json"] = json.dumps(highlights, ensure_ascii=False)
+                meeting_id = self._db.meeting_insert(**insert_kwargs)
                 saved = True
             except Exception as exc:  # noqa: BLE001
                 logger.error("No se pudo guardar la reunión en la DB: %s", exc)

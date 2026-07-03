@@ -109,6 +109,17 @@ def _format_acta(minutes: dict) -> str:
         if resumen:
             parts.append(f"Resumen: {resumen}")
 
+        momentos = minutes.get("momentos_destacados") or []
+        if momentos:
+            mlines = []
+            for m in momentos:
+                if isinstance(m, dict):
+                    mlines.append(f"- {m.get('time', '')} {m.get('texto', '')}".strip())
+                elif isinstance(m, str):
+                    mlines.append(f"- {m}")
+            if mlines:
+                parts.append("Momentos destacados:\n" + "\n".join(mlines))
+
         decisiones = minutes.get("decisiones") or []
         if decisiones:
             lines = "\n".join(f"- {d}" for d in decisiones if d)

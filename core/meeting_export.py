@@ -45,6 +45,14 @@ def _fmt_cita(c: dict) -> str:
     return f"- {c.get('texto', '')}" + (f" — 📅 {fh}" if fh else "")
 
 
+def _fmt_momento(m: dict) -> str:
+    if isinstance(m, str):
+        return f"- {m}"
+    time = m.get("time", "")
+    texto = m.get("texto", "")
+    return f"- **{time}** — {texto}" if time else f"- {texto}"
+
+
 def meeting_markdown(meeting: dict) -> str:
     """Construye el markdown completo de una reunión a partir de su fila de DB."""
     started = meeting.get("started_at") or meeting.get("created_at") or ""
@@ -81,6 +89,10 @@ def meeting_markdown(meeting: dict) -> str:
     resumen = minutes.get("resumen", "")
     if resumen:
         body += ["## Resumen", resumen, ""]
+
+    momentos = minutes.get("momentos_destacados") or []
+    if momentos:
+        body += ["## ⭐ Momentos destacados"] + [_fmt_momento(m) for m in momentos] + [""]
 
     decisiones = minutes.get("decisiones") or []
     if decisiones:
