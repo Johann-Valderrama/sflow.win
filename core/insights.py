@@ -24,6 +24,13 @@ usar Groq para el análisis en vivo (velocidad) y OpenRouter para el acta/Asiste
 
 Todo es fail-safe: si el LLM no está disponible o falla, las funciones devuelven
 el estado anterior / un acta vacía sin romper la reunión.
+
+Fallback automático (``INSIGHTS_FALLBACK``, default "true"): si el backend primario
+de una tarea falla, ``_chat`` reintenta UNA vez con groq u openrouter (el primero
+disponible, nunca el mismo que falló) y abre un circuit breaker por
+``INSIGHTS_FALLBACK_COOLDOWN`` segundos (default 300) para no golpear un backend
+roto en cada llamada — durante ese tiempo se va directo al fallback. Ver ``_chat``,
+``_fallback_backend`` y ``_breaker``.
 """
 import json
 import logging
@@ -33,6 +40,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +49,12 @@ _client_lock = threading.Lock()
 _anthropic_client = None
 _anthropic_client_lock = threading.Lock()
 _last_error: str | None = None  # último error real de llamada (para surfacing en la UI)
+
+# ---------------------------------------------------------------------------
+# Circuit breaker de fallback (ver _chat / _fallback_backend)
+# ---------------------------------------------------------------------------
+_breaker: dict[str, float] = {}  # backend → time.monotonic() del último fallo
+_breaker_lock = threading.Lock()
 
 
 def last_error() -> "str | None":
@@ -101,11 +115,12 @@ def _resolve_backend(task: str = "live") -> str:
     return per_task or global_fallback
 
 
-def is_available(task: str = "live") -> bool:
-    """¿Se puede usar la capa de insights con la configuración actual para la tarea dada?"""
-    if os.getenv("INSIGHTS_ENABLED", "true").lower().strip() != "true":
-        return False
-    backend = _resolve_backend(task)
+def _backend_available(backend: str) -> bool:
+    """¿Este backend concreto tiene lo que necesita para funcionar (key/CLI/URL)?
+
+    Extraído de ``is_available`` para poder evaluar backends distintos del primario
+    (p. ej. el candidato a fallback) sin duplicar la lógica por backend.
+    """
     if backend == "groq":
         return bool(os.getenv("GROQ_API_KEY", "").strip())
     if backend == "endpoint":
@@ -126,14 +141,55 @@ def is_available(task: str = "live") -> bool:
     return False
 
 
-def _model(task: str = "live") -> str:
-    """Modelo LLM según el backend activo para la tarea dada.
+def _fallback_enabled() -> bool:
+    return os.getenv("INSIGHTS_FALLBACK", "true").strip().lower() == "true"
+
+
+def _fallback_backend(exclude: str) -> "str | None":
+    """Primer backend de fallback disponible, excluyendo ``exclude``.
+
+    Orden fijo: groq (si hay GROQ_API_KEY) → openrouter (si hay OPENROUTER_API_KEY).
+    NUNCA devuelve 'endpoint' (ventana de contexto local demasiado chica para ser
+    un fallback útil) ni 'anthropic'/'claude-cli' (backends de intención explícita
+    del usuario, no candidatos automáticos de respaldo).
+    """
+    candidates = []
+    if os.getenv("GROQ_API_KEY", "").strip():
+        candidates.append("groq")
+    if os.getenv("OPENROUTER_API_KEY", "").strip():
+        candidates.append("openrouter")
+    for c in candidates:
+        if c != exclude:
+            return c
+    return None
+
+
+def is_available(task: str = "live") -> bool:
+    """¿Se puede usar la capa de insights con la configuración actual para la tarea dada?
+
+    True si el backend primario está listo, o si el fallback automático está
+    activado y hay un backend de respaldo disponible (aunque el primario no lo esté).
+    """
+    if os.getenv("INSIGHTS_ENABLED", "true").lower().strip() != "true":
+        return False
+    backend = _resolve_backend(task)
+    if _backend_available(backend):
+        return True
+    if _fallback_enabled() and _fallback_backend(backend) is not None:
+        return True
+    return False
+
+
+def _model(task: str = "live", backend: "str | None" = None) -> str:
+    """Modelo LLM según el backend dado (o el activo para la tarea si no se pasa).
 
     Groq, el endpoint (LM Studio), OpenRouter, Anthropic y claude-cli usan nombres
     distintos, así que cada uno tiene su propia variable: conmutar entre backends
-    desde el dashboard no rompe la config.
+    desde el dashboard no rompe la config. Cada ``_chat_*`` pasa su propio backend
+    para pedir el modelo correcto incluso cuando se ejecuta como fallback de otro.
     """
-    backend = _resolve_backend(task)
+    if backend is None:
+        backend = _resolve_backend(task)
     if backend == "endpoint":
         return os.getenv("INSIGHTS_ENDPOINT_MODEL", "qwen/qwen2.5-vl-7b").strip()
     if backend == "openrouter":
@@ -196,22 +252,12 @@ def _claude_cli_path() -> "str | None":
     return None
 
 
-def _chat(messages: list, *, task: str = "live", json_mode: bool = False,
-          temperature: float = 0.2, max_tokens: int = 1024,
-          reasoning: bool = False) -> str:
-    """Llama al LLM de insights y devuelve el contenido de texto.
-
-    Dispatch por backend resuelto para la tarea: 'groq' (default), 'endpoint'
-    (LM Studio / on-prem OpenAI-compatible), 'openrouter' (nube multi-modelo),
-    'anthropic' (API oficial de Anthropic) o 'claude-cli' (suscripción Claude vía
-    Claude Code headless, solo tareas batch).
-    El parámetro ``task`` ("live" o "batch") determina qué variable de entorno
-    se usa para seleccionar el backend.
-    El parámetro ``reasoning`` activa razonamiento extendido en backends que lo
-    soportan (openrouter). Ignorado en groq, endpoint, anthropic y claude-cli.
+def _dispatch(backend: str, messages: list, *, task: str, json_mode: bool,
+              temperature: float, max_tokens: int, reasoning: bool) -> str:
+    """Enruta una llamada a la función del backend dado. Sin lógica de fallback:
+    eso vive en ``_chat``. Cada rama pide su modelo con ``_model(task, backend)``
+    para que un backend usado como fallback nunca resuelva el modelo del primario.
     """
-    backend = _resolve_backend(task)
-
     if backend == "endpoint":
         return _chat_endpoint(messages, task=task, json_mode=json_mode,
                               temperature=temperature, max_tokens=max_tokens)
@@ -232,12 +278,97 @@ def _chat(messages: list, *, task: str = "live", json_mode: bool = False,
     if backend != "groq":
         raise InsightsUnavailable(f"Backend de insights '{backend}' aún no implementado")
 
-    kwargs = dict(model=_model(task), messages=messages, temperature=temperature,
+    kwargs = dict(model=_model(task, "groq"), messages=messages, temperature=temperature,
                   max_tokens=max_tokens)
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
     resp = _get_groq_client().chat.completions.create(**kwargs)
     return (resp.choices[0].message.content or "").strip()
+
+
+def _breaker_open(backend: str) -> bool:
+    """¿El breaker de este backend sigue abierto (falló hace menos de cooldown)?"""
+    with _breaker_lock:
+        failed_at = _breaker.get(backend)
+    if failed_at is None:
+        return False
+    cooldown = float(os.getenv("INSIGHTS_FALLBACK_COOLDOWN", "300") or 300)
+    return (time.monotonic() - failed_at) < cooldown
+
+
+def _breaker_trip(backend: str, fallback: "str | None", err: Exception) -> None:
+    """Abre el breaker de ``backend`` (registra el timestamp del fallo).
+
+    Solo se llama cuando REALMENTE se intentó el primario y falló — no cuando el
+    breaker ya estaba abierto y se lo saltó (eso no debe refrescar el timestamp,
+    o el primario nunca se reintentaría tras el cooldown).
+    """
+    cooldown = os.getenv("INSIGHTS_FALLBACK_COOLDOWN", "300") or "300"
+    with _breaker_lock:
+        already_open = backend in _breaker
+        _breaker[backend] = time.monotonic()
+    if not already_open:
+        msg = str(err)[:200]
+        if fallback:
+            logger.warning(
+                "insights: backend '%s' falló (%s) — usando '%s' durante %ss",
+                backend, msg, fallback, cooldown,
+            )
+        else:
+            logger.warning("insights: backend '%s' falló (%s) — sin fallback disponible", backend, msg)
+
+
+def _chat(messages: list, *, task: str = "live", json_mode: bool = False,
+          temperature: float = 0.2, max_tokens: int = 1024,
+          reasoning: bool = False) -> str:
+    """Llama al LLM de insights y devuelve el contenido de texto.
+
+    Dispatch por backend resuelto para la tarea: 'groq' (default), 'endpoint'
+    (LM Studio / on-prem OpenAI-compatible), 'openrouter' (nube multi-modelo),
+    'anthropic' (API oficial de Anthropic) o 'claude-cli' (suscripción Claude vía
+    Claude Code headless, solo tareas batch).
+    El parámetro ``task`` ("live" o "batch") determina qué variable de entorno
+    se usa para seleccionar el backend.
+    El parámetro ``reasoning`` activa razonamiento extendido en backends que lo
+    soportan (openrouter). Ignorado en groq, endpoint, anthropic y claude-cli.
+
+    Fallback automático (INSIGHTS_FALLBACK, default "true"): si el backend primario
+    falla con InsightsUnavailable, se reintenta UNA vez con un backend de respaldo
+    (groq u openrouter, nunca endpoint/anthropic/claude-cli — ver _fallback_backend)
+    y se abre un circuit breaker de INSIGHTS_FALLBACK_COOLDOWN segundos (default 300)
+    para no reintentar el primario roto en cada llamada.
+    """
+    global _last_error
+    backend = _resolve_backend(task)
+    fallback_on = _fallback_enabled()
+
+    # Breaker ya abierto para el primario: saltar directo al fallback sin reintentarlo
+    # (no se refresca el timestamp — así el primario se reintenta tras el cooldown).
+    if fallback_on and _breaker_open(backend):
+        fb = _fallback_backend(backend)
+        if fb is not None:
+            logger.debug("insights: breaker abierto para '%s', usando fallback '%s' directo", backend, fb)
+            result = _dispatch(fb, messages, task=task, json_mode=json_mode,
+                               temperature=temperature, max_tokens=max_tokens, reasoning=reasoning)
+            _last_error = None
+            return result
+
+    try:
+        result = _dispatch(backend, messages, task=task, json_mode=json_mode,
+                           temperature=temperature, max_tokens=max_tokens, reasoning=reasoning)
+        _last_error = None
+        return result
+    except InsightsUnavailable as exc:
+        _last_error = str(exc)
+        fb = _fallback_backend(backend) if fallback_on else None
+        _breaker_trip(backend, fb, exc)
+        if fb is None:
+            raise
+        # Única llamada al fallback; si también falla, se propaga tal cual.
+        result = _dispatch(fb, messages, task=task, json_mode=json_mode,
+                           temperature=temperature, max_tokens=max_tokens, reasoning=reasoning)
+        _last_error = None
+        return result
 
 
 def _chat_endpoint(messages: list, *, task: str = "live", json_mode: bool,
@@ -254,7 +385,7 @@ def _chat_endpoint(messages: list, *, task: str = "live", json_mode: bool,
     # tokens "pensando" y devuelven vacío. Los no-razonadores paran antes igualmente.
     floor = int(os.getenv("INSIGHTS_ENDPOINT_MAX_TOKENS", "2500"))
     payload = {
-        "model": _model(task),
+        "model": _model(task, "endpoint"),
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max(max_tokens, floor),
@@ -296,7 +427,7 @@ def _chat_openrouter(messages: list, *, task: str = "live", json_mode: bool,
         raise InsightsUnavailable("Falta OPENROUTER_API_KEY para el backend OpenRouter")
     base = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
     payload = {
-        "model": _model(task),
+        "model": _model(task, "openrouter"),
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -379,7 +510,7 @@ def _chat_anthropic(messages: list, *, task: str = "live", json_mode: bool = Fal
     try:
         client = _get_anthropic_client()
         resp = client.messages.create(
-            model=_model(task),
+            model=_model(task, "anthropic"),
             max_tokens=effective_max_tokens,
             system=system or None,
             messages=user_messages,
