@@ -295,6 +295,22 @@ HTML_TEMPLATE = """
         /* Acciones de fila discretas hasta el hover (U3) */
         td.actions-cell { opacity: 0.3; transition: opacity 0.15s; }
         tr:hover td.actions-cell, tr.selected-row td.actions-cell { opacity: 1; }
+        /* Command palette Ctrl+K (U4) */
+        #palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 300;
+            display: flex; align-items: flex-start; justify-content: center; padding-top: 14vh; }
+        #palette-box { width: min(620px, calc(100vw - 32px)); background: #16161a;
+            border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; overflow: hidden;
+            box-shadow: 0 16px 48px rgba(0,0,0,0.6); }
+        #palette-input { width: 100%; background: transparent; border: none; outline: none;
+            color: var(--txt); font-size: 15px; padding: 14px 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.08); }
+        #palette-list { max-height: 46vh; overflow-y: auto; padding: 6px; }
+        .palette-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+            border-radius: 8px; font-size: 13.5px; color: var(--txt-2); cursor: pointer; }
+        .palette-item .pal-sub { font-size: 11.5px; color: var(--txt-3); margin-left: auto; white-space: nowrap; }
+        .palette-item.sel, .palette-item:hover { background: var(--accent-soft); color: var(--txt); }
+        .palette-hint { padding: 8px 14px; font-size: 11px; color: var(--txt-3);
+            border-top: 1px solid rgba(255,255,255,0.06); display: flex; gap: 14px; }
         tr.row-hover { user-select: text; }
         tr.row-hover td:not(.text-cell) { user-select: none; -webkit-user-select: none; }
         .dict-entry-dimmed { opacity: 0.4; }
@@ -903,8 +919,11 @@ HTML_TEMPLATE = """
                 <tbody id="tbody"></tbody>
             </table>
             </div>
-            <div id="empty" class="hidden text-center py-12 text-white/45 text-sm">
-                No hay transcripciones aún
+            <div id="empty" class="hidden text-center py-16 px-6">
+                <div class="text-white/25 mb-3" style="font-size: 28px;" data-icon="mic"></div>
+                <p class="text-white/80 text-base font-medium mb-1">Graba tu primer dictado</p>
+                <p class="text-white/50 text-sm mb-4">Mantén <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/30 bg-white/[0.07]">Ctrl</kbd> + <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/30 bg-white/[0.07]">Alt</kbd> mientras hablas y suelta para pegar donde esté el cursor.</p>
+                <p class="text-white/40 text-xs">Reuniones: <kbd class="px-1.5 py-0.5 text-xs font-mono rounded border border-white/25 bg-white/[0.05]">AltGr</kbd>+<kbd class="px-1.5 py-0.5 text-xs font-mono rounded border border-white/25 bg-white/[0.05]">R</kbd> · Todos los atajos en la sección <a href="#/atajos" class="text-purple-300/80 hover:text-purple-200 underline">Atajos</a></p>
             </div>
         </div>
 
@@ -922,6 +941,19 @@ HTML_TEMPLATE = """
     <button class="dict-add-from-history" id="dict-from-history-btn" onclick="addSelectedTextToDict()">
         📖 Añadir al diccionario
     </button>
+
+    <!-- Command palette (Ctrl+K) -->
+    <div id="palette-overlay" class="hidden" role="dialog" aria-label="Paleta de comandos">
+        <div id="palette-box">
+            <input id="palette-input" type="text" placeholder="Buscar en todo el historial o saltar a una sección…"
+                autocomplete="off" spellcheck="false">
+            <div id="palette-list"></div>
+            <div class="palette-hint">
+                <span>↑↓ navegar</span><span>Enter seleccionar</span><span>Esc cerrar</span>
+                <span style="margin-left:auto">Las transcripciones se copian al portapapeles</span>
+            </div>
+        </div>
+    </div>
 
     <!-- Network / toast containers -->
     <div id="offline-banner">Sin conexión con el servidor — reintentando…</div>
@@ -1415,6 +1447,113 @@ HTML_TEMPLATE = """
             if (panel && route !== 'dictados') _focusPanel(panel);
         }
         window.addEventListener('hashchange', _applyRoute);
+
+        // --- Command palette Ctrl+K (U4) ---
+        let _palSel = 0, _palItems = [], _palTimer = null;
+        const _PAL_NAV = [
+            { label: 'Ir a Dictados', icon: 'mic', run: () => navigate('dictados') },
+            { label: 'Ir a Reuniones', icon: 'chat', run: () => navigate('reunion') },
+            { label: 'Ir a Diccionario', icon: 'book', run: () => navigate('diccionario') },
+            { label: 'Ir a Transcribir desde URL', icon: 'play', run: () => navigate('url') },
+            { label: 'Ir a Atajos de teclado', icon: 'keyboard', run: () => navigate('atajos') },
+            { label: 'Ir a Ajustes', icon: 'settings', run: () => navigate('ajustes') },
+            { label: 'Abrir ventana de reunión completa', icon: 'mic', run: () => window.open('/reunion', '_blank') },
+            { label: 'Actualizar historial', icon: 'play', run: () => loadData() },
+        ];
+
+        function _palNorm(s) { return (s || '').toLowerCase(); }
+
+        function openPalette() {
+            document.getElementById('palette-overlay').classList.remove('hidden');
+            const input = document.getElementById('palette-input');
+            input.value = '';
+            _renderPalette([]);
+            _palQuery('');
+            setTimeout(() => input.focus(), 0);
+        }
+        function closePalette() {
+            document.getElementById('palette-overlay').classList.add('hidden');
+        }
+        function _paletteOpen() {
+            return !document.getElementById('palette-overlay').classList.contains('hidden');
+        }
+
+        async function _palQuery(q) {
+            const nq = _palNorm(q);
+            let items = _PAL_NAV.filter(n => !nq || _palNorm(n.label).includes(nq))
+                .map(n => ({ label: n.label, icon: n.icon, sub: '', run: n.run }));
+            if (nq.length >= 2) {
+                try {
+                    const rows = await fetch('/api/transcriptions/search?q=' + encodeURIComponent(q)).then(r => r.json());
+                    rows.forEach(t => {
+                        const date = new Date(t.created_at + 'Z');
+                        items.push({
+                            label: (t.text || '').slice(0, 90),
+                            icon: 'mic',
+                            sub: date.toLocaleDateString('es-MX', { month: 'short', day: 'numeric' }),
+                            run: () => {
+                                navigator.clipboard.writeText(t.text || '');
+                                toast('Transcripción copiada al portapapeles', 'ok');
+                            },
+                        });
+                    });
+                } catch (e) { /* búsqueda es best-effort */ }
+            }
+            _renderPalette(items);
+        }
+
+        function _renderPalette(items) {
+            _palItems = items;
+            _palSel = 0;
+            const list = document.getElementById('palette-list');
+            if (!items.length) {
+                list.innerHTML = '<div class="palette-item" style="cursor:default">Sin resultados</div>';
+                return;
+            }
+            list.innerHTML = items.map((it, i) =>
+                '<div class="palette-item' + (i === 0 ? ' sel' : '') + '" data-i="' + i + '">' +
+                (ICONS[it.icon] || '') + '<span class="truncate">' + escapeHtml(it.label) + '</span>' +
+                (it.sub ? '<span class="pal-sub">' + escapeHtml(it.sub) + '</span>' : '') + '</div>'
+            ).join('');
+            list.querySelectorAll('.palette-item[data-i]').forEach(el => {
+                el.addEventListener('click', () => { closePalette(); _palItems[parseInt(el.dataset.i)].run(); });
+            });
+        }
+
+        function _palMove(delta) {
+            if (!_palItems.length) return;
+            _palSel = (_palSel + delta + _palItems.length) % _palItems.length;
+            const els = document.querySelectorAll('#palette-list .palette-item[data-i]');
+            els.forEach((el, i) => el.classList.toggle('sel', i === _palSel));
+            if (els[_palSel]) els[_palSel].scrollIntoView({ block: 'nearest' });
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+                e.preventDefault();
+                _paletteOpen() ? closePalette() : openPalette();
+            }
+        });
+        // El overlay maneja sus propias teclas ANTES que el listener global de Escape
+        // (bubbling elemento→document): stopPropagation evita que Escape navegue a Dictados.
+        document.getElementById('palette-overlay').addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { e.stopPropagation(); closePalette(); }
+            else if (e.key === 'ArrowDown') { e.preventDefault(); _palMove(1); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); _palMove(-1); }
+            else if (e.key === 'Enter') {
+                e.preventDefault();
+                const it = _palItems[_palSel];
+                if (it) { closePalette(); it.run(); }
+            }
+        });
+        document.getElementById('palette-overlay').addEventListener('click', (e) => {
+            if (e.target.id === 'palette-overlay') closePalette();
+        });
+        document.getElementById('palette-input').addEventListener('input', (e) => {
+            clearTimeout(_palTimer);
+            const q = e.target.value;
+            _palTimer = setTimeout(() => _palQuery(q), 180);
+        });
 
         // Arranque del shell (aquí los const del router ya están inicializados).
         _applyRoute();
@@ -3017,6 +3156,15 @@ def get_transcriptions():
 def get_stats():
     """Agregados de uso para las metric cards del dashboard (read-only, indexado)."""
     return jsonify(_db.stats())
+
+
+@app.route("/api/transcriptions/search")
+def search_transcriptions():
+    """Búsqueda para la command palette (LIKE sobre todo el historial, no solo las 200 recientes)."""
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 2:
+        return jsonify([])
+    return jsonify(_db.search(q, limit=8))
 
 
 @app.route("/api/transcriptions/<int:tid>", methods=["DELETE"])
