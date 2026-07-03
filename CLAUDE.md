@@ -1,5 +1,9 @@
 # CLAUDE.md — Vflow Development Instructions
 
+## ## Contexto OPS (padre)
+
+@C:/OPS/_CONTEXTO-OPS.md
+
 ## What is Vflow?
 
 Vflow is a Windows voice-to-text desktop tool that replaces Wispr Flow ($15/month). It captures audio via global hotkeys, transcribes using Groq Whisper API (~$0.02/hour), and auto-pastes text wherever the cursor is. It includes a floating pill UI overlay, real-time audio visualization, SQLite history, and a web dashboard.
@@ -46,6 +50,7 @@ build.bat
 The built app is in `dist\Vflow\Vflow.exe`. On first launch, if no API key exists in `%APPDATA%\Vflow\.env`, a dialog asks for it.
 
 ### Build Requirements
+
 - Python 3.12+ with venv (build.bat validates activation and aborts if PyInstaller fails — no silent build errors)
 - PyInstaller (installed automatically by build.bat)
 - Optional: Vflow.ico (256x256 icon file for the .exe)
@@ -56,14 +61,17 @@ The built app is in `dist\Vflow\Vflow.exe`. On first launch, if no API key exist
 - **`requirements.in`** — fuente de verdad con las dependencias top-level (sin versiones fijas). Edita este archivo al añadir o quitar una dependencia.
 - **`requirements.lock`** — lock file generado con pip-tools, incluye hashes SHA-256 para todas las dependencias (directas y transitivas). Commiteado en el repo.
 - **Instalar desde el lock** (máxima seguridad, para CI o entornos limpios):
+  
   ```bash
   pip install --require-hashes -r requirements.lock
   ```
 - **Regenerar el lock** al añadir una dependencia:
+  
   ```bash
   pip install pip-tools          # una sola vez
   pip-compile --generate-hashes --allow-unsafe --output-file requirements.lock requirements.in
   ```
+  
   Actualiza también `requirements.txt` con la versión pinneada final si vas a distribuir dev-setup sin lock.
 - **Política de versiones**: no añadir paquetes con menos de 30 días en PyPI (riesgo de typosquatting / supply-chain). Verifica la fecha de publicación en https://pypi.org/project/<paquete>/#history antes de añadir una dependencia nueva.
 - **Auditoría**: `build.bat` ejecuta `pip-audit` como paso previo (solo warning, no aborta). Para auditoría manual: `pip-audit -r requirements.lock`.
@@ -127,48 +135,61 @@ Hotkey Release (pynput thread)
 ## Critical Implementation Details
 
 ### 1. Qt Signal Threading (MUST use QueuedConnection)
+
 pynput emits signals from its own thread. Both QObjects live in the main thread, so Qt's `AutoConnection` incorrectly chooses `DirectConnection`. But since `emit()` comes from pynput's thread, UI modifications happen on the wrong thread — undefined behavior. **Always use explicit `Qt.ConnectionType.QueuedConnection`.**
 
 ### 2. Floating Window (Qt Window Flags)
+
 The pill uses `FramelessWindowHint | WindowStaysOnTopHint | Tool | WindowDoesNotAcceptFocus` to float above all windows without stealing focus. The pill automatically detects the monitor where the cursor is located and appears there; it can be dragged between monitors and will reposition itself if a monitor is disconnected or changes resolution.
 
 ### 3. Auto-Paste (Win32 API + pynput)
+
 - `save_frontmost_app()` saves the foreground window handle via `GetForegroundWindow()`
 - `_set_clipboard_text()` copies text using Win32 API directly (GlobalAlloc, GlobalLock, SetClipboardData, CF_UNICODETEXT) via ctypes — no subprocess/PowerShell
 - `SetForegroundWindow()` to restore focus
 - pynput `Controller` to simulate Ctrl+V
 
 ### 4. Audio Pipeline (thread-safe)
+
 sounddevice callback runs in audio thread — NEVER touch Qt widgets from it. Use `queue.Queue` as bridge:
+
 - Callback → puts audio chunks in queue
 - QTimer on main thread → polls queue → updates visualizer
 - **Microphone device caching**: Audio device resolution is cached on first access; device list is not re-scanned on each recording unless the configured device changes. This eliminates O(n) enumeration overhead per recording.
 - **Queue memory cleanup**: Visualization queue is cleared when recording stops, preventing memory bloat from long sessions.
 
 ### 5. Short Recording Filter
+
 Recordings under 0.3 seconds are accidental taps — skip transcription and return to idle.
 
 ### 6. Microphone Watchdog
+
 If the microphone is disconnected during recording (e.g., Bluetooth headphones unplugged), the app detects silence after ~2 seconds with no audio data, automatically stops recording, shows an error state on the pill, and displays a system tray notification "Micrófono desconectado durante la grabación". This prevents the pill from hanging indefinitely. The watchdog monitors audio callback invocations; if no data arrives within the timeout window, recording terminates gracefully.
 
 ### 7. Bundle vs Dev Mode (config.py)
+
 `config.py` detects `sys.frozen` to switch between dev and .exe bundle:
+
 - **Dev mode**: assets and data live in the project root directory
 - **Bundle mode**: read-only assets (logo) come from `sys._MEIPASS`, writable data (DB, .env) goes to `%APPDATA%\Vflow\`
 
 ### 8. Desktop App Features (main.py)
+
 - **System Tray**: QSystemTrayIcon with dashboard link, "Iniciar con Windows" toggle, quit; tray icon tooltip shows app version (from `APP_VERSION` in config.py)
 - **Version Display**: Current app version (e.g., "1.0.0") displayed in tray menu and tooltip
 - **First-Run Dialog**: If GROQ_API_KEY is empty, shows a QDialog to enter it (saves to %APPDATA%\Vflow)
 - **Launch at Login**: Uses Windows Registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`); .exe path is quoted to handle spaces in folder names. Registry entry auto-repairs on startup if exe was moved.
 
 ### 9. Port Selection (web/server.py)
+
 Default port is 5678. Auto-scans for free port if occupied.
 
 ### 10. Dashboard Panels (web/server.py)
+
 The header contains four icon-button panels: **Configuración** (⚙), **Diccionario** (📖), **Atajos de teclado** (⌨, `id="shortcuts-panel"`), and **Transcribir desde URL** (▶, `id="url-queue-panel"`). The shortcuts panel is static HTML — no API endpoint required — and renders all four hotkey modes as `<kbd>`-styled cards.
 
 ### 11. Transcribir desde URL — motor unificado + cola bulk (`core/url_transcribe.py`, `web/server.py`)
+
 Permite transcribir YouTube / TikTok / Instagram (individual o en lote) sin grabar audio en tiempo real. El audio del sistema (WASAPI loopback, `AUDIO_SOURCE=system`) se conserva como **fallback** para cuando yt-dlp se rompa (las plataformas pelean contra los extractores; `yt-dlp` pinneado se vuelve obsoleto — requiere `pip install -U yt-dlp` periódico) y para **directos en vivo** que no se pueden descargar.
 
 - **Motor** `core/url_transcribe.py`: `detect_platform(url)` y `transcribe_url(url, *, allow_instagram=False, on_progress=None) -> dict` (claves: `ok, title, source, method, language, text, duration, error, error_kind`). Decide subtítulos-o-audio: YouTube con subtítulos → fast-path **gratis** (subtítulos vía yt-dlp, VTT→texto con dedup de cues rolling, `dictionary.apply_replacements`); cualquier otra cosa → **descarga audio-only con yt-dlp SIN ffmpeg** (`format="bestaudio/best"`, sin postprocessors) → decodifica con **PyAV** (`av`, ya incluido con faster-whisper) y `av.AudioResampler` a WAV 16k mono → chunking de ~240s con solape y carryover de prompt → `Transcriber` (filtro de alucinaciones + diccionario). **No requiere binario ffmpeg de sistema** (PyAV trae las libs embebidas), lo que mantiene la portabilidad a Mac/Linux. Instagram es experimental (`allow_instagram=True` usa `cookiesfrombrowser`; sin cookies → `error_kind="needs_auth"`).
@@ -177,39 +198,50 @@ Permite transcribir YouTube / TikTok / Instagram (individual o en lote) sin grab
 - **UI**: panel "Transcribir desde URL" con campo único + textarea bulk + checkbox Instagram experimental + botón "Sincronizar cookies de Instagram" + lista de progreso en vivo. La cola usa el backend de transcripción actual (nota en UI: usar backend `local` para que el lote sea gratis). History rows muestran badge de fuente (▶ youtube/url, 🔊 system, none para mic).
 
 #### Cookies de Instagram (autenticación)
+
 Instagram requiere la sesión del usuario. yt-dlp lee las cookies del navegador con `cookiesfrombrowser` (barrido Opera→chrome→edge→brave→firefox→vivaldi; **Opera es el más compatible en Windows** — Chrome bloquea su base abierta, Edge/Brave usan App-Bound Encryption que no se descifra). **Bug crítico resuelto**: `core/secrets.py` fija `CryptUnprotectData.argtypes` en el crypt32 global del proceso (para cifrar la API key con DPAPI), lo que rompía la extracción de cookies de yt-dlp (que pasa su propia `DATA_BLOB`) con "expected LP__DATA_BLOB...". El context manager `_clean_crypt32_argtypes()` limpia esos argtypes mientras yt-dlp lee cookies y los restaura al salir. Por defecto Instagram funciona leyendo el navegador **en vivo** (sin archivo). Como **fallback duradero**, el botón del dashboard (`POST /api/instagram-cookies/sync` → `sync_instagram_cookies()`) extrae solo las cookies de instagram y las guarda **cifradas con DPAPI** en `instagram_cookies.dat` (mismo mecanismo que la API key; nunca texto plano en reposo); en la descarga, `_resolve_cookiefile()` las descifra a un temporal efímero dentro del tempdir de la descarga. `*_cookies.txt` y `*_cookies.dat` están en `.gitignore` (sesión privada).
 
 ## Security & Privacy
 
 ### 1. API Key Encryption (DPAPI)
+
 The GROQ_API_KEY is encrypted with Windows Data Protection API (DPAPI) via crypt32.dll and stored as base64 in `%APPDATA%\Vflow\GROQ_API_KEY_ENC`. Only the same Windows user on the same machine can decrypt it. Plaintext keys are automatically migrated to encrypted format on startup. This replaces the ineffective `os.chmod()` approach (which doesn't work on Windows).
 
 ### 2. History Privacy Mode
+
 Configure history saving with `SAVE_HISTORY` in `.env` (default: `true`). Set to `false` to disable database recording — transcriptions paste normally but are never stored. Togglable from the dashboard Settings panel without restarting.
 
 ### 3. Automatic History Retention
+
 Set `HISTORY_RETENTION_DAYS` in `.env` (default: `0` = keep forever). If > 0, the app automatically deletes transcriptions older than N days on startup. Configurable from the dashboard without code changes.
 
 ### 4. CSRF Hardening
+
 The dashboard validates exact Origin/Referer hosts (`localhost`, `127.0.0.1`, or `::1` only) instead of prefix matching. This closes bypasses like `localhost.evil.com`.
 
 ## Customization
 
 ### App Version
+
 Edit `config.py`:
+
 - `APP_VERSION` (default: "1.0.0") — Version string displayed in system tray menu and tooltip
 
 ### Hotkeys
+
 Edit `core/hotkey.py`:
+
 - **Mode 1 (Ctrl+Alt hold)**: Press and hold Ctrl+Alt to transcribe; release to stop. Transcribed text auto-pastes.
-- **Mode 2 (Triple-tap Shift)**: Press Shift three times within 400ms to start hands-free transcription; press Shift once to stop.
+- **Mode 2 (Triple-tap Shift)**: Press Shift three times within 400ms to start hands-free transcription; press Shift once to stop. Only *clean* taps count (press and release Shift with no other key in between): Shift used as part of a chord (Shift+A for a capital, Shift+Enter) neither starts nor stops recording, and any non-Shift key resets an in-progress tap sequence. The tap decision happens on Shift *release*.
 - **Mode 3 (Ctrl+Shift+Alt hold)**: Press and hold Ctrl+Shift+Alt (Shift before Alt) to translate from any language to target language.
 - **Mode 4 (AltGr+T toggle)**: Press AltGr+T once to start translation hands-free; press again to stop.
 - To customize intervals, edit `DOUBLE_TAP_INTERVAL` in `config.py`.
 - **Arming Delay** — Edit `ARMING_DELAY` in `config.py` (default: 0.15s). Modes 1 and 3 (hold keys) require the hotkey combination to be pressed for this duration *without other keys* before recording starts. This prevents accidental triggers when using IDE shortcuts like Ctrl+Alt+L. Set to 0 for immediate activation (at the cost of possible misfires).
 
 ### UI Dimensions
+
 Edit `config.py`:
+
 - `PILL_WIDTH_IDLE` (34) — width when just showing logo
 - `PILL_WIDTH_RECORDING` (100) — width during recording with bars
 - `PILL_WIDTH_STATUS` (52) — width for checkmark/spinner/error
@@ -217,13 +249,16 @@ Edit `config.py`:
 - `PILL_MARGIN_BOTTOM` (14) — distance from bottom of screen
 
 ### Audio
+
 Edit `config.py`:
+
 - `SAMPLE_RATE` (16000) — 16kHz is optimal for speech
 - `NUM_BARS` (20) — number of visualizer bars
 - `BAR_GAIN` (8.0) — sensitivity of bars
 - `BAR_DECAY` (0.85) — how quickly bars fall
 
 ### Environment Variables (`.env`)
+
 - `GROQ_API_KEY` — Your Groq API key (automatically encrypted)
 - `SAVE_HISTORY` (default: `true`) — Set to `false` to disable recording transcriptions to database
 - `HISTORY_RETENTION_DAYS` (default: `0`) — Auto-delete transcriptions older than N days; `0` keeps forever
@@ -241,6 +276,7 @@ Edit `config.py`:
 - `AUDIO_SOURCE` (default: `mic`) — Fuente de captura: `"mic"` (micrófono) o `"system"` (audio del sistema vía WASAPI loopback con pyaudiowpatch, para transcribir videos/cursos que suenan en el PC). Cambiable desde el tray ("Fuente: …") o el dashboard sin reiniciar: se relee al inicio de cada grabación. En modo `system`: no hay auto-pegado (el texto va al portapapeles + notificación del tray + historial), el watchdog de micrófono se desactiva (WASAPI loopback no entrega buffers en silencio total), y `LoopbackSource` (core/recorder.py) captura a la frecuencia nativa del dispositivo de salida con downmix a mono y resample a 16kHz, por lo que el resto del pipeline no cambia. Cada transcripción guarda su fuente en la columna `source` de la DB (migración idempotente). Script de diagnóstico: `test_loopback.py` en la raíz.
 
 ### Backend Local (faster-whisper)
+
 - Los modelos se descargan desde Hugging Face en `%APPDATA%\Vflow\models\` (bundle) o `<proyecto>/models/` (dev).
 - **Limitación de traducción**: el backend local solo traduce a inglés (task="translate" nativa de Whisper). Para traducir a otros idiomas, usa el backend Groq.
 - **Sin fallback a internet**: si el modelo no está descargado y se intenta transcribir, la app muestra un mensaje accionable ("ábrelo desde el dashboard") en lugar de llamar a Groq.
@@ -248,25 +284,25 @@ Edit `config.py`:
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| Pill doesn't appear | Try running as Administrator |
-| Audio not captured | Check Microphone permissions in Windows Settings → Privacy |
-| Paste doesn't work | Run as Administrator for global hotkey/paste access |
-| Ctrl+C doesn't kill the process | This is handled by `signal.signal(signal.SIGINT, signal.SIG_DFL)` in main.py |
-| Short taps trigger transcription | Adjust the 0.3s threshold in `main.py` `_on_hotkey_released` |
-| Web dashboard not loading | Port auto-selects from 5678. Check: `netstat -an \| findstr 5678` |
-| Transcription hangs forever | API timeout is 10s. Check your GROQ_API_KEY is valid |
-| Only one instance should run | Single-instance mutex (Win32 `Local\VflowSingleInstance`) prevents multiple launches; second instance shows warning and exits |
-| Text doesn't paste after recording | If window verification fails, text is left in clipboard with tray notification; paste manually via Ctrl+V |
-| Transcription failed — audio saved | Failed recordings saved to `%APPDATA%\Vflow\last_failed_recording.wav` for debugging (API/network errors) |
-| Logs not showing up | Dev mode logs to project directory; bundled app logs to `%APPDATA%\Vflow\vflow.log` (RotatingFileHandler, 5 MB per file) |
-| Clipboard content changed after paste | By default, clipboard is not restored. Set `RESTORE_CLIPBOARD=true` in `.env` to keep original clipboard content |
-| Accidental recording with IDE shortcuts | Increase `ARMING_DELAY` in `config.py` (default 0.15s) to require longer hold before recording starts in Ctrl+Alt/Ctrl+Shift+Alt modes |
-| Microphone disconnected mid-recording | App detects silence within ~2s, stops recording, shows error state on pill, and displays tray notification. Audio watchdog prevents hanging. |
-| Pill appears on wrong monitor | Pill auto-detects current monitor based on cursor position. If dragged between monitors and one disconnects, pill repositions to nearest active monitor. Check monitor layout in Windows Display Settings. |
-| "Modelo local no descargado" en la notificación | El backend está en "local" pero el modelo no se ha descargado. Abre el dashboard → Configuración → activa "Local sin internet" → pulsa "Descargar modelo". |
-| El modelo local traduce a un idioma distinto del inglés | El backend local solo soporta traducción a inglés. Para otros idiomas de destino, cambia el backend a Groq en el dashboard. |
-| La primera transcripción con backend local es lenta | CTranslate2 hace lazy-alloc en la primera inferencia. El warmup automático (al activar el backend) mitiga esto; si no se lanzó, espera unos segundos en la primera transcripción. |
-| Backend local falla y no quiero perder el dictado | Activa `GROQ_FALLBACK=true` (dashboard → Configuración → checkbox "Permitir Groq como respaldo"). Requiere `GROQ_API_KEY`. Advertencia: el audio saldrá a internet cuando el local falle. |
-| VAD recorta palabras al inicio o final | Aumenta `speech_pad_ms` en `core/vad.py` (default 400 ms) o desactiva con `VAD_ENABLED=false` en `.env`. |
+| Problem                                                 | Solution                                                                                                                                                                                                   |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pill doesn't appear                                     | Try running as Administrator                                                                                                                                                                               |
+| Audio not captured                                      | Check Microphone permissions in Windows Settings → Privacy                                                                                                                                                 |
+| Paste doesn't work                                      | Run as Administrator for global hotkey/paste access                                                                                                                                                        |
+| Ctrl+C doesn't kill the process                         | This is handled by `signal.signal(signal.SIGINT, signal.SIG_DFL)` in main.py                                                                                                                               |
+| Short taps trigger transcription                        | Adjust the 0.3s threshold in `main.py` `_on_hotkey_released`                                                                                                                                               |
+| Web dashboard not loading                               | Port auto-selects from 5678. Check: `netstat -an \| findstr 5678`                                                                                                                                          |
+| Transcription hangs forever                             | API timeout is 10s. Check your GROQ_API_KEY is valid                                                                                                                                                       |
+| Only one instance should run                            | Single-instance mutex (Win32 `Local\VflowSingleInstance`) prevents multiple launches; second instance shows warning and exits                                                                              |
+| Text doesn't paste after recording                      | If window verification fails, text is left in clipboard with tray notification; paste manually via Ctrl+V                                                                                                  |
+| Transcription failed — audio saved                      | Failed recordings saved to `%APPDATA%\Vflow\last_failed_recording.wav` for debugging (API/network errors)                                                                                                  |
+| Logs not showing up                                     | Dev mode logs to project directory; bundled app logs to `%APPDATA%\Vflow\vflow.log` (RotatingFileHandler, 5 MB per file)                                                                                   |
+| Clipboard content changed after paste                   | By default, clipboard is not restored. Set `RESTORE_CLIPBOARD=true` in `.env` to keep original clipboard content                                                                                           |
+| Accidental recording with IDE shortcuts                 | Increase `ARMING_DELAY` in `config.py` (default 0.15s) to require longer hold before recording starts in Ctrl+Alt/Ctrl+Shift+Alt modes                                                                     |
+| Microphone disconnected mid-recording                   | App detects silence within ~2s, stops recording, shows error state on pill, and displays tray notification. Audio watchdog prevents hanging.                                                               |
+| Pill appears on wrong monitor                           | Pill auto-detects current monitor based on cursor position. If dragged between monitors and one disconnects, pill repositions to nearest active monitor. Check monitor layout in Windows Display Settings. |
+| "Modelo local no descargado" en la notificación         | El backend está en "local" pero el modelo no se ha descargado. Abre el dashboard → Configuración → activa "Local sin internet" → pulsa "Descargar modelo".                                                 |
+| El modelo local traduce a un idioma distinto del inglés | El backend local solo soporta traducción a inglés. Para otros idiomas de destino, cambia el backend a Groq en el dashboard.                                                                                |
+| La primera transcripción con backend local es lenta     | CTranslate2 hace lazy-alloc en la primera inferencia. El warmup automático (al activar el backend) mitiga esto; si no se lanzó, espera unos segundos en la primera transcripción.                          |
+| Backend local falla y no quiero perder el dictado       | Activa `GROQ_FALLBACK=true` (dashboard → Configuración → checkbox "Permitir Groq como respaldo"). Requiere `GROQ_API_KEY`. Advertencia: el audio saldrá a internet cuando el local falle.                  |
+| VAD recorta palabras al inicio o final                  | Aumenta `speech_pad_ms` en `core/vad.py` (default 400 ms) o desactiva con `VAD_ENABLED=false` en `.env`.                                                                                                   |
