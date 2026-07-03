@@ -5,7 +5,14 @@
 - Kickoff activo: **Ola 1a — unidad 1.1 Servidor MCP local** (stdio, read-only sobre SQLite, tools search_meetings / get_minutes / get_transcript). Detalle: docs/PLAN-OLAS.md Ola 1.
 
 ## En curso
-- (nada — siguiente: Kickoff 1b en ventana propia)
+- (nada en esta sesión — Kickoff 1b corre EN PARALELO en otra ventana: commit 450fd77 "U1 tokens de diseño". OJO: esa sesión edita web/server.py; no tocar ese archivo desde otras sesiones mientras trabaje)
+
+## Completado (fuera de olas, cont.)
+- [x] Presets de backend + fallback automático con circuit breaker  (@sonnet-5 ejecutó, @fable-5 dirigió/verificó, 2026-07-03, commit 966128c; los cambios de UI quedaron absorbidos en 450fd77 por colisión con la sesión 1b — verificado línea a línea que están intactos)
+  - Qué: botones "Usar mi suscripción" (ambos→claude-cli) y "Usar APIs (benchmark)" (live=groq, batch=openrouter) con validación de CLI/keys y toasts + INSIGHTS_FALLBACK (default true): si el backend primario falla, _chat reintenta con groq→openrouter (nunca endpoint/anthropic/claude-cli) y abre breaker por backend (INSIGHTS_FALLBACK_COOLDOWN=300s).
+  - Debate Opus (APROBAR CON CAMBIOS): breaker por backend, is_available con task, retry dentro de _chat, endpoint excluido del fallback, validación en presets. Refutada: preset suscripción-en-vivo (decisión explícita de Johann, plan Max).
+  - Verificado: 5 escenarios de fallback con monkeypatch (fallo→fallback, breaker salta directo, reintento tras cooldown, propagación con fallback off, endpoint excluido) · app viva reiniciada: settings devuelven insights_fallback=true, claude_cli_available=true, has_groq/openrouter_key=true; HTML servido contiene los presets.
+  - Config activa de Johann: live=claude-cli (Haiku) + batch=claude-cli (Sonnet) con fallback armado hacia groq/openrouter.
 
 ## Completado (fuera de olas)
 - [x] Backends Claude para insights/acta (pedido de Johann 2026-07-03)  (@sonnet-5 ejecutó, @fable-5 dirigió/verificó, 2026-07-03, commits 4e1f88c + 208b56a)
