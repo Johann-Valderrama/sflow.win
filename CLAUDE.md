@@ -105,7 +105,10 @@ vflow/
 │   ├── vad.py              # Silero VAD wrapper: recorta silencios antes de enviar a Groq (VAD_ENABLED)
 │   └── clipboard.py        # Focus save/restore + Ctrl+V paste via Win32 API (GlobalAlloc/SetClipboardData/ctypes)
 ├── db/
-│   └── database.py         # SQLite CRUD
+│   └── database.py         # SQLite CRUD (WAL + busy_timeout; modo read_only para lectores externos)
+├── mcp_server/
+│   ├── __main__.py         # python -m mcp_server (stdio)
+│   └── server.py           # Servidor MCP local read-only: search_meetings, get_minutes, get_transcript
 ├── web/
 │   ├── server.py           # Flask dashboard at localhost:5678 (auto-finds free port)
 │   └── static/vendor/      # Assets auto-hospedados (tailwind.js Play + inter-variable.woff2) → dashboard offline, sin CDN
@@ -200,6 +203,26 @@ Permite transcribir YouTube / TikTok / Instagram (individual o en lote) sin grab
 #### Cookies de Instagram (autenticación)
 
 Instagram requiere la sesión del usuario. yt-dlp lee las cookies del navegador con `cookiesfrombrowser` (barrido Opera→chrome→edge→brave→firefox→vivaldi; **Opera es el más compatible en Windows** — Chrome bloquea su base abierta, Edge/Brave usan App-Bound Encryption que no se descifra). **Bug crítico resuelto**: `core/secrets.py` fija `CryptUnprotectData.argtypes` en el crypt32 global del proceso (para cifrar la API key con DPAPI), lo que rompía la extracción de cookies de yt-dlp (que pasa su propia `DATA_BLOB`) con "expected LP__DATA_BLOB...". El context manager `_clean_crypt32_argtypes()` limpia esos argtypes mientras yt-dlp lee cookies y los restaura al salir. Por defecto Instagram funciona leyendo el navegador **en vivo** (sin archivo). Como **fallback duradero**, el botón del dashboard (`POST /api/instagram-cookies/sync` → `sync_instagram_cookies()`) extrae solo las cookies de instagram y las guarda **cifradas con DPAPI** en `instagram_cookies.dat` (mismo mecanismo que la API key; nunca texto plano en reposo); en la descarga, `_resolve_cookiefile()` las descifra a un temporal efímero dentro del tempdir de la descarga. `*_cookies.txt` y `*_cookies.dat` están en `.gitignore` (sesión privada).
+
+### 12. Servidor MCP local de reuniones (`mcp_server/`)
+
+Expone la memoria de reuniones a agentes locales (Claude Code, Levy) por MCP stdio, sin abrir
+el dashboard. Feature dev/local: corre con el venv del proyecto (`python -m mcp_server` desde la
+raíz), autodescubierto por Claude Code vía `.mcp.json`; NO se bundlea en el .exe.
+
+- **Tools (read-only)**: `search_meetings(query, limit)` (FTS5 `match="or"` + bm25, o recientes
+  si query vacía; coincidencias del snippet entre «»), `get_minutes(meeting_id)` (acta completa
+  passthrough de `minutes_json` + capítulos de `chapters_json`), `get_transcript(meeting_id,
+  offset, max_chars)` (paginado por segmentos `{t, time, speaker, text}`; `next_offset` para
+  continuar).
+- **Read-only garantizado a nivel SQLite**: `TranscriptionDB(read_only=True)` abre TODAS sus
+  conexiones con URI `mode=ro` y se salta DDL/migraciones/backfill. Si la DB no existe aún, las
+  tools devuelven error accionable (no crashea).
+- **Concurrencia**: la DB principal corre en `journal_mode=WAL` (activado incondicionalmente en
+  `_init_db` en cada arranque) + `busy_timeout` 5s en todas las conexiones (helper `_connect()`),
+  así el MCP lee mientras la app escribe sin "database is locked".
+- **Limitación documentada**: el índice FTS lo mantiene el proceso escritor; el lector RO nunca
+  hace backfill. stdout es del protocolo: nada de `print()` en `mcp_server/`.
 
 ## Security & Privacy
 

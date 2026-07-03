@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "vflow-meetings": {
+      "command": "venv\\Scripts\\python.exe",
+      "args": ["-m", "mcp_server"]
+    }
+  }
+}

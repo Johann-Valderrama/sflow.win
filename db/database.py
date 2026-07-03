@@ -11,10 +11,50 @@ logger = logging.getLogger(__name__)
 class TranscriptionDB:
     """Gestiona el almacenamiento SQLite de transcripciones."""
 
-    def __init__(self, db_path: str = DB_PATH):
-        """Inicializa la conexión a la base de datos y crea las tablas si no existen."""
+    def __init__(self, db_path: str = DB_PATH, read_only: bool = False):
+        """Inicializa la conexión a la base de datos y crea las tablas si no existen.
+
+        read_only=True: para procesos lectores externos (p. ej. el servidor MCP).
+        No ejecuta DDL, migraciones ni backfill FTS (la DB la administra la app);
+        todas las conexiones se abren con URI mode=ro, así que este objeto no puede
+        escribir aunque un bug lo intente. Si el archivo no existe, cada conexión
+        falla con FileNotFoundError (SQLite en mode=ro no crea el archivo).
+        """
         self.db_path = db_path
-        self._init_db()
+        self.read_only = read_only
+        self._fts_enabled = False
+        self._fts_tokenizer = None
+        self._fts_probed = False
+        if not read_only:
+            self._init_db()
+
+    def _connect(self, check_same_thread: bool = True) -> sqlite3.Connection:
+        """Abre una conexión con busy_timeout (5s). En read_only usa URI mode=ro.
+
+        En modo lector, la disponibilidad de FTS se detecta en la primera conexión
+        (el backfill/creación del índice solo corre en el proceso escritor, por lo
+        que el índice puede estar desincronizado hasta que la app lo reconstruya).
+        """
+        if self.read_only:
+            if not os.path.exists(self.db_path):
+                raise FileNotFoundError(
+                    f"No existe la base de datos: {self.db_path} "
+                    "(abre Vflow al menos una vez para crearla)"
+                )
+            uri = "file:" + self.db_path.replace("\\", "/") + "?mode=ro"
+            conn = sqlite3.connect(uri, uri=True, timeout=5.0,
+                                   check_same_thread=check_same_thread)
+            if not self._fts_probed:
+                try:
+                    self._fts_enabled = bool(conn.execute(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE name='meetings_fts'"
+                    ).fetchone()[0])
+                    self._fts_probed = True
+                except sqlite3.Error:
+                    pass
+            return conn
+        return sqlite3.connect(self.db_path, timeout=5.0,
+                               check_same_thread=check_same_thread)
 
     _DDL = [
         """CREATE TABLE IF NOT EXISTS transcriptions (
@@ -85,8 +125,16 @@ class TranscriptionDB:
     def _init_db(self):
         """Crea la tabla de transcripciones y el índice por fecha si no existen."""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._connect()
             try:
+                # WAL incondicional (sticky en el archivo): permite lectores
+                # concurrentes (servidor MCP) sin "database is locked" mientras
+                # la app escribe. Corre en cada arranque para cubrir DBs creadas
+                # por versiones previas en journal_mode=delete.
+                try:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                except sqlite3.OperationalError as e:
+                    logger.warning("No se pudo activar WAL: %s", e)
                 for ddl in self._DDL:
                     conn.execute(ddl)
                 conn.execute(self._URL_QUEUE_DDL)
@@ -138,14 +186,18 @@ class TranscriptionDB:
                     os.remove(self.db_path)
                 except OSError:
                     pass
-            with sqlite3.connect(self.db_path) as conn:
+            with self._connect() as conn:
+                try:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                except sqlite3.OperationalError:
+                    pass
                 for ddl in self._DDL:
                     conn.execute(ddl)
                 conn.execute(self._URL_QUEUE_DDL)
                 conn.execute(self._MEETINGS_DDL)
     def insert(self, text: str, language: str = None, duration_seconds: float = None, model: str = "whisper-large-v3-turbo", source: str = "mic") -> int:
         """Inserta una transcripción y retorna su ID."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO transcriptions (text, language, duration_seconds, model, source) VALUES (?, ?, ?, ?, ?)",
                 (text, language, duration_seconds, model, source),
@@ -154,7 +206,7 @@ class TranscriptionDB:
 
     def get_recent(self, limit: int = 20) -> list:
         """Retorna las transcripciones más recientes, ordenadas por fecha descendente."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM transcriptions ORDER BY created_at DESC LIMIT ?",
@@ -164,7 +216,7 @@ class TranscriptionDB:
 
     def search(self, query: str, limit: int = 20) -> list:
         """Busca transcripciones cuyo texto contenga la consulta (LIKE %query%)."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM transcriptions WHERE text LIKE ? ORDER BY created_at DESC LIMIT ?",
@@ -174,36 +226,36 @@ class TranscriptionDB:
 
     def count(self) -> int:
         """Retorna el número total de transcripciones almacenadas."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM transcriptions").fetchone()[0]
 
     def delete_by_id(self, transcription_id: int) -> int:
         """Elimina una transcripción por su ID. Retorna el número de filas eliminadas."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute("DELETE FROM transcriptions WHERE id = ?", (transcription_id,))
             return cursor.rowcount
 
     def delete_before_date(self, date_str: str) -> int:
         """Elimina transcripciones creadas en o antes de la fecha indicada."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute("DELETE FROM transcriptions WHERE date(created_at) <= date(?)", (date_str,))
             return cursor.rowcount
 
     def delete_by_date(self, date_str: str) -> int:
         """Elimina transcripciones de una fecha específica (YYYY-MM-DD)."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute("DELETE FROM transcriptions WHERE date(created_at) = date(?)", (date_str,))
             return cursor.rowcount
 
     def delete_since(self, date_str: str) -> int:
         """Elimina transcripciones creadas desde la fecha indicada en adelante."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute("DELETE FROM transcriptions WHERE created_at >= ?", (date_str,))
             return cursor.rowcount
 
     def delete_all(self) -> int:
         """Elimina todas las transcripciones. Retorna el número de filas eliminadas."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute("DELETE FROM transcriptions")
             return cursor.rowcount
 
@@ -212,13 +264,13 @@ class TranscriptionDB:
         if not ids:
             return 0
         placeholders = ",".join("?" for _ in ids)
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(f"DELETE FROM transcriptions WHERE id IN ({placeholders})", ids)
             return cursor.rowcount
 
     def update_text(self, transcription_id: int, new_text: str) -> int:
         """Actualiza el texto de una transcripción existente."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute("UPDATE transcriptions SET text = ? WHERE id = ?", (new_text, transcription_id))
             return cursor.rowcount
 
@@ -228,7 +280,7 @@ class TranscriptionDB:
 
     def list_dictionary(self) -> list:
         """Retorna todas las entradas del diccionario, ordenadas por pinned desc, hit_count desc, created_at desc."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM dictionary ORDER BY pinned DESC, hit_count DESC, created_at DESC"
@@ -241,7 +293,7 @@ class TranscriptionDB:
         Si replace_from es None, inserta una nueva entrada de vocabulario.
         Si replace_from ya existe, actualiza replace_to y enabled=1.
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             if replace_from is not None:
                 # Intentar UPDATE primero; si no afecta filas, INSERT
                 cursor = conn.execute(
@@ -267,13 +319,13 @@ class TranscriptionDB:
 
     def delete_dictionary_entry(self, entry_id: int) -> int:
         """Elimina una entrada del diccionario por ID. Retorna filas eliminadas."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute("DELETE FROM dictionary WHERE id = ?", (entry_id,))
             return cursor.rowcount
 
     def set_dictionary_pinned(self, entry_id: int, pinned: bool) -> int:
         """Fija o desfija una entrada del diccionario. Retorna filas actualizadas."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "UPDATE dictionary SET pinned = ? WHERE id = ?",
                 (1 if pinned else 0, entry_id),
@@ -285,7 +337,7 @@ class TranscriptionDB:
         if not ids:
             return 0
         placeholders = ",".join("?" for _ in ids)
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 f"UPDATE dictionary SET hit_count = hit_count + 1 WHERE id IN ({placeholders})",
                 ids,
@@ -294,7 +346,7 @@ class TranscriptionDB:
 
     def set_dictionary_enabled(self, entry_id: int, enabled: bool) -> int:
         """Activa o desactiva una entrada del diccionario. Retorna filas actualizadas."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "UPDATE dictionary SET enabled = ? WHERE id = ?",
                 (1 if enabled else 0, entry_id),
@@ -307,7 +359,7 @@ class TranscriptionDB:
 
     def url_queue_enqueue(self, url: str, platform: str = None, allow_instagram: bool = False) -> int:
         """Añade una URL a la cola con status 'pending'. Devuelve el id insertado."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO url_queue (url, platform, status, allow_instagram) VALUES (?, ?, 'pending', ?)",
                 (url, platform, 1 if allow_instagram else 0),
@@ -316,7 +368,7 @@ class TranscriptionDB:
 
     def url_queue_next_pending(self) -> dict | None:
         """Devuelve el item 'pending' más antiguo (FIFO) o None si no hay ninguno."""
-        with sqlite3.connect(self.db_path, check_same_thread=False) as conn:
+        with self._connect(check_same_thread=False) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT * FROM url_queue WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1"
@@ -325,7 +377,7 @@ class TranscriptionDB:
 
     def url_queue_set_processing(self, item_id: int, stage: str = "iniciando") -> None:
         """Marca un item como 'processing' con una etapa inicial."""
-        with sqlite3.connect(self.db_path, check_same_thread=False) as conn:
+        with self._connect(check_same_thread=False) as conn:
             conn.execute(
                 "UPDATE url_queue SET status = 'processing', stage = ? WHERE id = ?",
                 (stage, item_id),
@@ -333,7 +385,7 @@ class TranscriptionDB:
 
     def url_queue_update_stage(self, item_id: int, stage: str) -> None:
         """Actualiza la etapa descriptiva de un item 'processing'."""
-        with sqlite3.connect(self.db_path, check_same_thread=False) as conn:
+        with self._connect(check_same_thread=False) as conn:
             conn.execute(
                 "UPDATE url_queue SET stage = ? WHERE id = ?",
                 (stage, item_id),
@@ -341,7 +393,7 @@ class TranscriptionDB:
 
     def url_queue_set_done(self, item_id: int, title: str = None) -> None:
         """Marca un item como 'done'."""
-        with sqlite3.connect(self.db_path, check_same_thread=False) as conn:
+        with self._connect(check_same_thread=False) as conn:
             conn.execute(
                 "UPDATE url_queue SET status = 'done', stage = 'listo', title = ? WHERE id = ?",
                 (title, item_id),
@@ -349,7 +401,7 @@ class TranscriptionDB:
 
     def url_queue_set_error(self, item_id: int, error: str) -> None:
         """Marca un item como 'error' con mensaje."""
-        with sqlite3.connect(self.db_path, check_same_thread=False) as conn:
+        with self._connect(check_same_thread=False) as conn:
             conn.execute(
                 "UPDATE url_queue SET status = 'error', stage = 'error', error = ? WHERE id = ?",
                 (error, item_id),
@@ -357,7 +409,7 @@ class TranscriptionDB:
 
     def url_queue_list(self) -> list:
         """Devuelve todos los items de la cola ordenados por created_at DESC."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM url_queue ORDER BY created_at DESC, id DESC"
@@ -366,7 +418,7 @@ class TranscriptionDB:
 
     def url_queue_clear_finished(self) -> int:
         """Elimina filas con status 'done' o 'error'. Devuelve filas eliminadas."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "DELETE FROM url_queue WHERE status IN ('done', 'error')"
             )
@@ -374,7 +426,7 @@ class TranscriptionDB:
 
     def url_queue_cancel_pending(self) -> int:
         """Elimina filas con status 'pending' (no toca 'processing'). Devuelve filas eliminadas."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "DELETE FROM url_queue WHERE status = 'pending'"
             )
@@ -382,7 +434,7 @@ class TranscriptionDB:
 
     def url_queue_summary(self) -> dict:
         """Devuelve un resumen de conteos por status."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 "SELECT status, COUNT(*) as cnt FROM url_queue GROUP BY status"
             ).fetchall()
@@ -401,7 +453,7 @@ class TranscriptionDB:
                        insights_json: str = None, minutes_json: str = None,
                        chapters_json: str = None) -> int:
         """Inserta una reunión finalizada y devuelve su id."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO meetings (title, transcript, segments_json, insights_json, "
                 "minutes_json, chapters_json, duration_seconds, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -419,7 +471,7 @@ class TranscriptionDB:
 
     def meetings_recent(self, limit: int = 20) -> list:
         """Devuelve las reuniones más recientes (sin el transcript completo, para listar)."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT id, title, duration_seconds, started_at, created_at "
@@ -430,7 +482,7 @@ class TranscriptionDB:
 
     def meeting_get(self, meeting_id: int) -> dict | None:
         """Devuelve una reunión completa (con transcript y segmentos) por id."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT * FROM meetings WHERE id = ?", (meeting_id,)
@@ -439,7 +491,7 @@ class TranscriptionDB:
 
     def meeting_set_chapters(self, meeting_id: int, chapters_json: str) -> int:
         """Actualiza los capítulos de una reunión. Devuelve rowcount."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "UPDATE meetings SET chapters_json=? WHERE id=?",
                 (chapters_json, meeting_id),
@@ -449,7 +501,7 @@ class TranscriptionDB:
 
     def meeting_delete(self, meeting_id: int) -> int:
         """Elimina una reunión por id. Devuelve filas eliminadas."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             rowcount = conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,)).rowcount
             if self._fts_enabled:
                 try:
@@ -460,7 +512,7 @@ class TranscriptionDB:
 
     def meetings_delete_all(self) -> int:
         """Elimina todas las reuniones. Devuelve filas eliminadas."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             rowcount = conn.execute("DELETE FROM meetings").rowcount
             if self._fts_enabled:
                 try:
@@ -581,7 +633,7 @@ class TranscriptionDB:
 
     def meetings_index(self, limit: int = 200) -> list:
         """Devuelve índice liviano de reuniones (id, title, started_at, resumen) para el Asistente de reuniones."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT id, title, started_at, minutes_json FROM meetings ORDER BY id DESC LIMIT ?",
@@ -601,7 +653,8 @@ class TranscriptionDB:
             })
         return result
 
-    def meetings_search(self, query: str, limit: int = 50, match: str = "and") -> list:
+    def meetings_search(self, query: str, limit: int = 50, match: str = "and",
+                        raise_errors: bool = False) -> list:
         """Busca reuniones por texto completo (FTS5) o LIKE si FTS no está disponible.
 
         Devuelve lista de dicts con: id, title, started_at, duration_seconds, snippet.
@@ -612,6 +665,9 @@ class TranscriptionDB:
         match="or"   → los tokens se unen con OR (para el Asistente de reuniones, que
                        recibe preguntas en lenguaje natural donde no todos los tokens
                        son términos clave).
+        raise_errors → si True, un OperationalError de FTS se propaga en vez de
+                       devolver [] (permite al llamante distinguir "sin resultados"
+                       de "la consulta rompió FTS"; lo usa el servidor MCP).
         """
         query = (query or "").strip()
         if not query:
@@ -629,7 +685,7 @@ class TranscriptionDB:
                 fts_query = " ".join(escaped_tokens)
 
             try:
-                with sqlite3.connect(self.db_path) as conn:
+                with self._connect() as conn:
                     conn.row_factory = sqlite3.Row
                     rows = conn.execute(
                         """
@@ -649,11 +705,13 @@ class TranscriptionDB:
                     return [dict(row) for row in rows]
             except sqlite3.OperationalError as exc:
                 logger.debug("FTS query error (query=%r): %s", query, exc)
+                if raise_errors:
+                    raise
                 return []
         else:
             # Fallback LIKE
             like = f"%{query}%"
-            with sqlite3.connect(self.db_path) as conn:
+            with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute(
                     "SELECT id, title, started_at, duration_seconds, "
@@ -673,7 +731,7 @@ class TranscriptionDB:
         if days <= 0:
             return 0
         cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "DELETE FROM transcriptions WHERE date(created_at) < date(?)",
                 (cutoff,),

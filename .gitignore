@@ -1,5 +1,7 @@
 .env
 transcriptions.db
+transcriptions.db-shm
+transcriptions.db-wal
 __pycache__/
 *.pyc
 .DS_Store
