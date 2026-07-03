@@ -187,9 +187,9 @@ If the microphone is disconnected during recording (e.g., Bluetooth headphones u
 
 Default port is 5678. Auto-scans for free port if occupied.
 
-### 10. Dashboard Panels (web/server.py)
+### 10. Dashboard Shell (web/server.py)
 
-The header contains four icon-button panels: **Configuración** (⚙), **Diccionario** (📖), **Atajos de teclado** (⌨, `id="shortcuts-panel"`), and **Transcribir desde URL** (▶, `id="url-queue-panel"`). The shortcuts panel is static HTML — no API endpoint required — and renders all four hotkey modes as `<kbd>`-styled cards.
+The dashboard is a hash-routed SPA (rediseño jul 2026): a fixed left **sidebar** (icon+label nav, collapses to icons under 1100px, footer shows live system status: backend + audio source) navigates between **views** — `#/dictados` (home: usage metric cards via `GET /api/stats` + transcription table with per-source badges mic/system/youtube), `#/reunion` (embedded meeting panel), `#/diccionario`, `#/url` (`id="url-queue-panel"`), `#/atajos` (`id="shortcuts-panel"`, static HTML), `#/ajustes` (settings accordion). The hash router is the single source of truth for visibility (replaces the old toggle-panel accordion; legacy `toggle*()` functions are `navigate()` wrappers); polls (URL queue, meeting) start/stop on view enter/leave. **Ctrl+K** opens a command palette (view jumps + full-history search via `GET /api/transcriptions/search`; selecting a transcription copies it). Design tokens + component classes (`.btn-*`, `.card`, `.badge-*`, `.metric-card`) live at the top of the inline `<style>` block. Contract: the selection→dictionary flow stores pending text in JS state and prefills on view mount (table and dictionary no longer coexist in the visible DOM).
 
 ### 11. Transcribir desde URL — motor unificado + cola bulk (`core/url_transcribe.py`, `web/server.py`)
 

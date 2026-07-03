@@ -64,7 +64,7 @@ Dependencias duras: 2 requiere 1(CSS) · 5 requiere 2 y 3 · el resto es secuenc
 | Unidad | Qué | Dificultad | Ejecutar con | Por qué |
 |---|---|---|---|---|
 | 1.1 | **Servidor MCP local** (stdio): tools `search_meetings` (FTS5 existente), `get_minutes`, `get_transcript`, read-only sobre la SQLite. Conexión con URI `mode=ro` + activar `journal_mode=WAL` y `busy_timeout` en la DB principal (hoy no está configurado: riesgo de "database is locked" con la app corriendo, objeción #4) | Delicada-frontera | Fable 5 `low→med` (rég. B: Opus 4.8 `high`) | Contrato público nuevo multi-módulo; diseño de superficie (qué se expone, paginación, límites). Debate adversarial de 1 ronda sobre el contrato ANTES de codear |
-| 1.2 | **Jerarquía tipográfica/contraste** en dashboard y /reunion: base 14px, white/85 contenido, white/50 solo metadatos, acentos Yo=violeta / Ellos=cian, badges por fuente | Mecánica con juicio de diseño | Sonnet 5 `med` | Solo CSS/clases en web/server.py; verificable por screenshot; error barato de revertir |
+| 1.2 | ~~Jerarquía tipográfica/contraste~~ **HECHA y AMPLIADA (2026-07-03)**: absorbida por el rediseño completo del shell del dashboard (plan propio con debate adversarial: sidebar con etiquetas, vistas por hash, tokens+componentes, metric cards vía /api/stats, badges reales por fuente, command palette Ctrl+K, estados vacíos; absorbe también la 6.4). Commits 450fd77, 280afc0, 424eea6, 643b98c. Nota: /reunion (la página) sigue pendiente de la Ola 2 | — | — | Ejecutada inline por Fable con verificación en navegador real |
 | 1.3 | **Highlight AltGr+H** (marca timestamp en vivo; los momentos salen destacados en el acta). CORRECCIÓN del debate (#2): el acta instantánea YA existe (`stop()` en core/meeting.py llama `generate_minutes` incondicionalmente); esta unidad es SOLO el highlight | Estándar | Sonnet 5 `med→high` | Radio contenido (core/hotkey.py, meeting.py, server.py) pero toca hotkeys globales (side cases: probar con IDE abierto, ARMING_DELAY) |
 
 Tras el debate (objeción #5, aceptada): DOS kickoffs en vez de uno. 1a = solo el MCP (la
@@ -108,6 +108,10 @@ escala a Johann. No toques: core/, el flujo de dictado, la UI.
 ```
 
 ### Kickoff Ola 1b — Base visual + highlight
+
+> **ACTUALIZACIÓN 2026-07-03:** la unidad 1.2 ya se ejecutó (rediseño completo del shell,
+> ver fila 1.2). De este kickoff queda SOLO la unidad 1.3 (Highlight AltGr+H). Al lanzarlo,
+> ignora las instrucciones de 1.2.
 
 ```
 Lee primero: CLAUDE.md; docs/PENDIENTES.md secciones "UX/UI — benchmarks Granola/Fathom/
@@ -306,7 +310,7 @@ default y se deja tras flag (mejor que ruido: lección de la v1).
 | 6.1 | Webhook genérico saliente al generar acta (POST JSON configurable, patrón Fireflies con firma HMAC) + oferta "pendientes → tareas OPS" (markdown/dead-drop). Manejar `meeting_id=None` (objeción #10: `stop()` puede fallar al persistir y el acta queda solo en RAM): el webhook solo dispara con reunión persistida | Estándar | Opus 4.8 `high` | Sale contenido del equipo local: superficie de seguridad pequeña pero real (URL config, firma, opt-in) |
 | 6.2 | Dictado: toggle "ver crudo / Undo AI edit" por transcripción + diccionario que sugiere entrada al detectar corrección manual (source='suggested', bandeja de revisión: NUNCA auto-aplicar) | Estándar | Sonnet 5 `high` | El esquema ya lo prevé (diccionario v2 en PENDIENTES); radio contenido |
 | 6.3 | Modos de dictado por app activa: 3 presets (email formal / chat casual / código), reformateo LLM post-dictado opt-in | Estándar | Sonnet 5 `high`, prompts revisados por L0 | Lección superwhisper: 3 presets sensatos, CERO builder de modos |
-| 6.4 | Dashboard: navegación lateral (Dictados/Reuniones/Diccionario/URL/Ajustes), command palette Ctrl+K, estados vacíos con onboarding | Mecánica | Sonnet 5 `med` | Reorganización de UI verificable visualmente |
+| 6.4 | ~~Navegación lateral + command palette + estados vacíos~~ **HECHA (2026-07-03)**: absorbida por el rediseño del shell (ver 1.2). La Ola 6 queda con 6.1-6.3 | — | — | — |
 
 ### Kickoff Ola 6
 
