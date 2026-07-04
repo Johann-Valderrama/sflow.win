@@ -1072,7 +1072,8 @@ def _attach_pendiente_times(raw: object, segments: list | None) -> list:
 
 def generate_minutes(transcript: str, insights: dict | None = None,
                      reasoning: bool = False, *, highlights: list | None = None,
-                     notes: list | None = None, segments: list | None = None) -> dict:
+                     notes: list | None = None, segments: list | None = None,
+                     template: str | None = None) -> dict:
     """Genera el acta de la reunión (una sola llamada LLM). Fail-safe.
 
     Recibe opcionalmente el análisis en vivo (temas/pendientes/propuestas) para que el
@@ -1086,14 +1087,29 @@ def generate_minutes(transcript: str, insights: dict | None = None,
     speaker, text}], la misma que usa ``generate_chapters``), cada decisión y cada
     pendiente con un "time" mm:ss válido recibe un campo "t" (segundos) snapeado al
     segmento real más cercano — mismo patrón anti-alucinación que los capítulos, nunca
-    se confía en un t crudo del LLM. Devuelve un dict con claves
+    se confía en un t crudo del LLM. Si se pasa ``template`` (uno de los 4 nombres de
+    ``core.meeting_templates.TEMPLATES``: general/ventas/one_on_one/clase) y la plantilla
+    trae ``acta_extra``, ese bloque se añade al FINAL del system prompt (nunca lo
+    reemplaza) como énfasis de la reunión; cuenta como parte FIJA del presupuesto (no
+    se trunca, igual que el resto de bloques "extra"). La plantilla "ventas" puede hacer
+    que el resultado incluya además la clave condicional "bant" (ver TEMPLATES) — el
+    post-proceso la conserva tal cual si el LLM la devuelve. Devuelve un dict con claves
     resumen/decisiones/temas/pendientes/propuestas/citas (+ momentos_destacados si hubo
-    highlights, + notas_usuario si hubo notas), o un acta vacía si el LLM falla.
+    highlights, + notas_usuario si hubo notas, + bant si la plantilla ventas la detectó),
+    o un acta vacía si el LLM falla.
     Formato de "decisiones": lista de dicts {"texto": str, "t": float opcional}.
     """
     empty = {"resumen": "", "decisiones": [], "temas": [], "pendientes": [], "propuestas": [], "citas": []}
     if not transcript.strip() or not is_available(task="batch"):
         return empty
+
+    system_content = _MINUTES_SYSTEM
+    if template:
+        from core import meeting_templates as _templates  # noqa: PLC0415 — evita ciclo de import
+        acta_extra = _templates.get(template).get("acta_extra") or ""
+        if acta_extra:
+            system_content = f"{_MINUTES_SYSTEM}\n\n{acta_extra}"
+
     extra = ""
     if insights:
         extra += f"\n\nANÁLISIS EN VIVO DETECTADO:\n{json.dumps(insights, ensure_ascii=False)}"
@@ -1124,13 +1140,16 @@ def generate_minutes(transcript: str, insights: dict | None = None,
         )
     prefix = "TRANSCRIPCIÓN:\n"
     budget = budget_chars(task="batch")
-    transcript = _truncate_transcript_to_budget(transcript, len(prefix) + len(extra), budget)
+    # El bloque de plantilla vive en el system (parte fija, no se trunca); se resta
+    # del presupuesto del transcript igual que el resto de "extra" del user.
+    fixed_len = len(extra) + max(len(system_content) - len(_MINUTES_SYSTEM), 0)
+    transcript = _truncate_transcript_to_budget(transcript, len(prefix) + fixed_len, budget)
     user = f"{prefix}{transcript}{extra}"
     minutes_max_tokens = max(1600, 2400) if reasoning else 1600
     try:
         content = _chat(
             messages=[
-                {"role": "system", "content": _MINUTES_SYSTEM},
+                {"role": "system", "content": system_content},
                 {"role": "user", "content": user},
             ],
             task="batch",
@@ -1157,6 +1176,16 @@ def generate_minutes(transcript: str, insights: dict | None = None,
             # El humano manda: las notas van SIEMPRE al acta con su texto literal,
             # aunque el LLM las reescribiera u omitiera (contexto "" en ese caso).
             result["notas_usuario"] = _reconcile_user_notes(note_items, data.get("notas_usuario"))
+        bant = data.get("bant")
+        if isinstance(bant, dict):
+            # Conserva solo campos con contenido real (fail-safe: nunca inventa
+            # claves vacías que el LLM haya devuelto por error). Si ningún campo
+            # tiene evidencia, se omite la clave "bant" por completo.
+            clean_bant = {k: str(bant.get(k) or "").strip()
+                          for k in ("budget", "authority", "need", "timeline")
+                          if str(bant.get(k) or "").strip()}
+            if clean_bant:
+                result["bant"] = clean_bant
         return result
     except InsightsUnavailable:
         return empty

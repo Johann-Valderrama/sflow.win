@@ -50,6 +50,7 @@ from core.transcriber import Transcriber
 from core import insights as _insights
 from core import meeting_export as _export
 from core import meeting_metrics as _metrics
+from core import meeting_templates as _templates
 from core import vad as _vad
 from db.database import TranscriptionDB
 
@@ -140,6 +141,10 @@ class MeetingSession:
         self._sys_available = False        # ¿el loopback arrancó? (si no, reunión solo-mic)
         self._last_error: str | None = None
         self._db: TranscriptionDB | None = None  # lazy: se crea al persistir la 1ª reunión
+        # Plantilla por tipo de reunión (unidad 4.3): persiste ENTRE reuniones del
+        # mismo proceso (no se resetea en start()). Única fuente de verdad — nunca
+        # localStorage — así el hotkey (proceso Python) y el dashboard ven lo mismo.
+        self._template: str = _templates.DEFAULT_TEMPLATE
 
         # Insight Stream con IDs estables: el LLM extrae (contrato simple), el código
         # asigna IDs, deduplica por similitud y NUNCA retira ítems (anti-flicker /
@@ -167,6 +172,22 @@ class MeetingSession:
     def is_active(self) -> bool:
         return self._active
 
+    def get_template(self) -> str:
+        """Plantilla activa (persiste entre reuniones del proceso)."""
+        with self._lock:
+            return self._template
+
+    def set_template(self, name: str) -> bool:
+        """Cambia la plantilla activa. Devuelve True si ``name`` es válida (se aplicó),
+        False si no (se conserva la plantilla previa). Efectivo de inmediato: si hay
+        una reunión activa, el resto del ciclo (acta/chips en vivo) usa la nueva
+        plantilla desde este momento."""
+        if not _templates.is_valid(name):
+            return False
+        with self._lock:
+            self._template = name
+        return True
+
     def _elapsed(self) -> float:
         """Segundos transcurridos desde el inicio, excluyendo el tiempo en pausa.
 
@@ -183,6 +204,7 @@ class MeetingSession:
         with self._lock:
             level_mic = self._level_mic if (self._active and not self._paused) else 0.0
             level_sys = self._level_sys if (self._active and not self._paused) else 0.0
+            template = self._template
             return {
                 "active": self._active,
                 "started_at": self._started_at,
@@ -194,6 +216,8 @@ class MeetingSession:
                 "error": self._last_error,
                 "paused": self._paused,
                 "levels": {"yo": level_mic, "ellos": level_sys},
+                "template": template,
+                "template_label": _templates.get(template)["label"],
             }
 
     def get_insights(self) -> dict:
@@ -478,9 +502,10 @@ class MeetingSession:
             highlights = list(self._highlights)
             notes = list(self._notes)
             feedback = list(self._feedback)
+            template = self._template
         minutes = _insights.generate_minutes(transcript, self._store_to_plain(),
                                              highlights=highlights, notes=notes,
-                                             segments=segments)
+                                             segments=segments, template=template)
         with self._lock:
             self._last_minutes = minutes  # para que el dashboard la muestre aunque se terminara por hotkey/tray
 
@@ -510,6 +535,7 @@ class MeetingSession:
                     insights_json=json.dumps(insights, ensure_ascii=False),
                     minutes_json=json.dumps(minutes, ensure_ascii=False),
                     chapters_json=json.dumps(chapters, ensure_ascii=False),
+                    template=template,
                 )
                 if highlights:
                     insert_kwargs["highlights_json"] = json.dumps(highlights, ensure_ascii=False)
@@ -562,6 +588,7 @@ class MeetingSession:
             "started_at": self._started_at,
             "meeting_id": meeting_id,
             "saved": saved,
+            "template": template,
         }
 
     def toggle(self) -> dict:

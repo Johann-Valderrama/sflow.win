@@ -134,6 +134,14 @@ def _format_acta(minutes: dict) -> str:
         if resumen:
             parts.append(f"Resumen: {resumen}")
 
+        bant = minutes.get("bant")
+        if isinstance(bant, dict):
+            labels = {"budget": "Presupuesto", "authority": "Autoridad",
+                      "need": "Necesidad", "timeline": "Plazo"}
+            blines = [f"- {labels.get(k, k)}: {v}" for k, v in bant.items() if v]
+            if blines:
+                parts.append("BANT:\n" + "\n".join(blines))
+
         notas = minutes.get("notas_usuario") or []
         if notas:
             nlines = []
@@ -570,6 +578,19 @@ def build_context_live(message: str, budget: int = None, meeting=None) -> tuple:
     return ctx, meta
 
 
+def _template_live_extra(meeting=None) -> str:
+    """1 línea de plumbing: si la reunión activa tiene una plantilla con
+    ``live_extra``, la devuelve para añadirla al system del chat en vivo.
+    Fail-safe: "" ante cualquier problema (nunca rompe el chat en vivo)."""
+    try:
+        if meeting is None:
+            from core.meeting import MEETING as meeting  # noqa: PLC0415
+        from core import meeting_templates as _templates  # noqa: PLC0415
+        return _templates.get(meeting.get_template()).get("live_extra") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 _EMPTY_LIVE_ANSWER = (
     "Aún no hay contenido transcrito de la reunión en curso. "
     "En cuanto haya intervenciones podré responder sobre lo hablado."
@@ -611,7 +632,11 @@ def answer_live(message: str, history=None, max_tokens: int = 1024,
         return {"ok": True, "answer": _EMPTY_LIVE_ANSWER, "used_meeting_ids": [],
                 "reasoned": False, "live": True, "empty": True, "truncated": False}
 
-    system_content = _SYSTEM_LIVE + "\n\n" + context
+    system_content = _SYSTEM_LIVE
+    live_extra = _template_live_extra(meeting)
+    if live_extra:
+        system_content += "\n\n" + live_extra
+    system_content += "\n\n" + context
     messages = [{"role": "system", "content": system_content}]
 
     if history:

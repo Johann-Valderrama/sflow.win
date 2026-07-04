@@ -12,6 +12,7 @@ from config import APP_DATA_DIR, MEETINGS_DIR, WEB_STATIC_DIR
 from core import dictionary as _dictionary
 from core.meeting import MEETING
 from core import meeting_export as _meeting_export
+from core import meeting_templates as _meeting_templates
 from core import insights as _insights
 from core import assistant as _assistant
 
@@ -2652,6 +2653,10 @@ MEETING_PAGE = """<!DOCTYPE html>
   <div class="flex items-center justify-between mb-5">
     <h1 class="text-2xl font-semibold" data-icon="mic">Reunión</h1>
     <div class="flex items-center gap-2">
+      <select id="mt-template-select" onchange="setMeetingTemplate(this.value)" title="Plantilla de la reunión: moldea el acta y las sugerencias del chat en vivo"
+        class="text-xs px-2 py-1.5 rounded-lg bg-white/[0.05] border border-white/10 text-white/60 hover:text-white/80 focus:outline-none focus:ring-2 focus:ring-violet-500/60">
+        __MEETING_TEMPLATE_OPTIONS_HTML__
+      </select>
       <button onclick="startMeeting()" id="mt-start" data-icon="play" class="btn bg-purple-600/30 text-purple-200 hover:bg-purple-600/50">Iniciar</button>
       <button onclick="stopMeeting()" id="mt-stop" data-icon="stop" class="btn bg-red-600/30 text-red-300 hover:bg-red-600/50 hidden">Terminar</button>
       <button onclick="openFolder()" data-icon="folder" class="btn text-white/55 hover:text-white/80 hover:bg-white/5" title="Abrir la carpeta de actas (.md)">Carpeta</button>
@@ -2932,6 +2937,11 @@ async function loadLive(){
     const startB=document.getElementById('mt-start'), stopB=document.getElementById('mt-stop');
     const liveHeader=document.getElementById('mt-live-header'), actionBar=document.getElementById('mt-action-bar');
     const tabs=document.getElementById('mt-tabs');
+    // Plantilla activa (unidad 4.3): la verdad es el server (status().template), nunca
+    // localStorage — así el dropdown refleja lo mismo que ve el hotkey AltGr+R.
+    if(s.template && s.template!==_mtTemplate){ _mtTemplate=s.template; asstSyncLiveUi(); }
+    const tplSel=document.getElementById('mt-template-select');
+    if(tplSel && document.activeElement!==tplSel && tplSel.value!==_mtTemplate) tplSel.value=_mtTemplate;
     if(s.active){ startB.classList.add('hidden'); stopB.classList.remove('hidden');
       liveHeader.classList.remove('hidden'); actionBar.classList.remove('hidden'); tabs.classList.remove('hidden');
       let t=(s.paused?'En pausa \\u00b7 ':'Grabando ')+(s.elapsed_fmt||'00:00')+' \\u00b7 '+(s.segment_count||0)+' intervenciones';
@@ -3102,9 +3112,17 @@ document.addEventListener('click', function(ev){
   const t = parseFloat(chip.dataset.t || 'NaN');
   if(!isNaN(t)) jumpToMoment(t);
 });
+function bantHtml(b){
+  if(!b||typeof b!=='object')return '';
+  const fields=[['budget','Presupuesto'],['authority','Autoridad'],['need','Necesidad'],['timeline','Plazo']];
+  const cells=fields.filter(f=>b[f[0]]).map(f=>'<div><div class="text-[10px] text-white/35 uppercase tracking-wide">'+f[1]+'</div><div class="text-xs text-white/75">'+esc(b[f[0]])+'</div></div>');
+  if(!cells.length)return '';
+  return '<div><div class="text-xs text-fuchsia-300/50 mt-2 mb-1">BANT</div><div class="grid grid-cols-2 gap-2">'+cells.join('')+'</div></div>';
+}
 function actaHtml(m){
   m=m||{}; const dec=m.decisiones||[],tem=m.temas||[],pen=m.pendientes||[],pro=m.propuestas||[],cit=m.citas||[],mom=m.momentos_destacados||[],nus=m.notas_usuario||[]; let h='';
   if(m.resumen)h+='<p class="text-white/80">'+esc(m.resumen)+'</p>';
+  h+=bantHtml(m.bant);
   if(nus.length)h+='<div><div class="text-xs text-violet-300/50 mt-2 mb-1">📝 Notas del usuario</div>'+nus.map(x=>'<div class="text-xs text-white/85 mb-0.5"><span class="text-white/50">'+esc(x.time||'')+'</span> '+esc(x.nota||'')+(x.contexto?'<div class="text-[11px] text-white/40 ml-6">IA: '+esc(x.contexto)+'</div>':'')+'</div>').join('')+'</div>';
   if(mom.length)h+='<div><div class="text-xs text-yellow-300/50 mt-2 mb-1">\\u2b50 Momentos destacados</div>'+mom.map(x=>'<div class="text-xs text-white/75">'+ICONS.spark+' <span class="text-white/50">'+esc(x.time||'')+'</span> '+esc(x.texto||'')+'</div>').join('')+'</div>';
   if(dec.length)h+='<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'+dec.map(d=>'<div class="text-xs text-white/75">\\u2022 '+esc(typeof d==='string'?d:(d.texto||''))+(typeof d==='string'?'':traceChip(d.t))+'</div>').join('')+'</div>';
@@ -3116,6 +3134,15 @@ function actaHtml(m){
 }
 function renderActa(m){ document.getElementById('mt-acta-body').innerHTML=actaHtml(m); document.getElementById('mt-acta').classList.remove('hidden'); }
 
+async function setMeetingTemplate(name){
+  const prev=_mtTemplate; _mtTemplate=name;  // optimista; se corrige en el próximo loadLive() si falla
+  try{
+    const r=await fetch('/api/meeting/template',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({template:name})});
+    const d=await r.json();
+    if(!d.ok){ _mtTemplate=prev; const sel=document.getElementById('mt-template-select'); if(sel)sel.value=prev; mtoast('Plantilla inválida.','err'); return; }
+    if(_asstLive) asstSyncLiveUi();  // refresca los chips en vivo si el chat está en modo vivo
+  }catch(e){ _mtTemplate=prev; const sel=document.getElementById('mt-template-select'); if(sel)sel.value=prev; mtoast('Error de red al cambiar la plantilla.','err'); }
+}
 async function startMeeting(){ _seen=new Set(); _segCount=0; _actaShown=false; _mtNotes=[]; renderMtNotes();
   document.getElementById('mt-acta').classList.add('hidden'); document.getElementById('mt-transcript').innerHTML='';
   const btn=document.getElementById('mt-start'); btn.disabled=true;
@@ -3293,13 +3320,15 @@ const ASST_CHIPS_MEETING = [
   '\\u00bfQu\\u00e9 se decidi\\u00f3?',
   'Redacta email de seguimiento'
 ];
-// Chips fijos del chat EN VIVO (unidad 2.3 — textos cerrados en debate, no cambiar)
-const ASST_CHIPS_LIVE = [
-  '\\u00bfPuntos clave hasta ahora?',
-  '\\u00bfQu\\u00e9 me falta preguntar?',
-  'Pendientes y responsables'
-];
+// Chips del chat EN VIVO por plantilla de reunión (unidad 4.3): generados desde
+// core.meeting_templates.TEMPLATES (Python) para no duplicar los textos a mano —
+// ver __MEETING_TEMPLATES_CHIPS_JSON__ sustituido en meeting_page() antes de servir.
+const MEETING_TEMPLATE_CHIPS = __MEETING_TEMPLATES_CHIPS_JSON__;
+function currentLiveChips(){
+  return MEETING_TEMPLATE_CHIPS[_mtTemplate] || MEETING_TEMPLATE_CHIPS['general'];
+}
 let _asstLive = false;
+let _mtTemplate = 'general';  // plantilla activa (unidad 4.3) — la verdad vive en el server, se refleja aquí desde loadLive()
 // Modo vivo de la pestaña Preguntar: chips fijos + nota "reunión en curso".
 // Lo alimenta loadLive() con el estado del polling de /api/meeting.
 function asstSetLive(active){
@@ -3318,7 +3347,7 @@ function asstSyncLiveUi(){
   const liveNow = _asstLive && !asstMeetingId;
   const note = document.getElementById('asst-live-note');
   if(note) note.classList.toggle('hidden', !liveNow);
-  if(liveNow) asstRenderChips(ASST_CHIPS_LIVE);
+  if(liveNow) asstRenderChips(currentLiveChips());
 }
 
 function asstRenderChips(chips){
@@ -3438,10 +3467,25 @@ def index():
     return render_template_string(HTML_TEMPLATE)
 
 
+def _meeting_page_html() -> str:
+    """Sustituye los placeholders de plantillas (unidad 4.3) por el HTML/JSON generado
+    desde ``core.meeting_templates.TEMPLATES`` — una sola fuente de verdad para los
+    textos de las 4 plantillas, sin duplicarlos a mano en el JS."""
+    import json as _json  # noqa: PLC0415 — import local (mismo patrón que el resto del módulo)
+    options_html = "\n        ".join(
+        f'<option value="{name}">{tpl["label"]}</option>'
+        for name, tpl in _meeting_templates.TEMPLATES.items()
+    )
+    chips_json = _json.dumps(_meeting_templates.chips_map(), ensure_ascii=False)
+    html = MEETING_PAGE.replace("__MEETING_TEMPLATE_OPTIONS_HTML__", options_html)
+    html = html.replace("__MEETING_TEMPLATES_CHIPS_JSON__", chips_json)
+    return html
+
+
 @app.route("/reunion")
 def reunion():
     """Ventana dedicada al modo reunión: en vivo (transcript + análisis + acta) + historial."""
-    return render_template_string(MEETING_PAGE)
+    return render_template_string(_meeting_page_html())
 
 
 @app.route("/logo")
@@ -4046,6 +4090,19 @@ def meeting_start():
     res = MEETING.start()
     code = 200 if res.get("ok") else 500
     return jsonify(res), code
+
+
+@app.route("/api/meeting/template", methods=["POST"])
+def meeting_set_template():
+    """Cambia la plantilla activa (general/ventas/one_on_one/clase, unidad 4.3).
+
+    Única fuente de verdad en el servidor (MEETING._template): el hotkey AltGr+R
+    (proceso Python) y el dropdown del dashboard ven siempre el mismo estado.
+    """
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("template", "")).strip()
+    ok = MEETING.set_template(name)
+    return jsonify({"ok": ok, "template": MEETING.get_template()}), (200 if ok else 400)
 
 
 @app.route("/api/meeting/stop", methods=["POST"])

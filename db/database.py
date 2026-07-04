@@ -102,6 +102,8 @@ class TranscriptionDB:
         "ALTER TABLE meetings ADD COLUMN feedback_json TEXT",
         # Métricas de conversación Yo/Ellos: talk-time, pct, monólogo, WPM, preguntas (unidad 3.1)
         "ALTER TABLE meetings ADD COLUMN metrics_json TEXT",
+        # Plantilla por tipo de reunión (unidad 4.3): general/ventas/one_on_one/clase
+        "ALTER TABLE meetings ADD COLUMN template TEXT",
     ]
 
     # DDL adicional para la cola de URLs (Fase 3, paso 2)
@@ -127,6 +129,7 @@ class TranscriptionDB:
         minutes_json TEXT,
         duration_seconds REAL,
         started_at TEXT,
+        template TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     )"""
 
@@ -488,17 +491,17 @@ class TranscriptionDB:
                        insights_json: str = None, minutes_json: str = None,
                        chapters_json: str = None, highlights_json: str = None,
                        notes_json: str = None, feedback_json: str = None,
-                       metrics_json: str = None) -> int:
+                       metrics_json: str = None, template: str = None) -> int:
         """Inserta una reunión finalizada y devuelve su id."""
         with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO meetings (title, transcript, segments_json, insights_json, "
                 "minutes_json, chapters_json, highlights_json, notes_json, feedback_json, "
-                "metrics_json, duration_seconds, started_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "metrics_json, duration_seconds, started_at, template) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (title, transcript, segments_json, insights_json, minutes_json,
                  chapters_json, highlights_json, notes_json, feedback_json,
-                 metrics_json, duration_seconds, started_at),
+                 metrics_json, duration_seconds, started_at, template),
             )
             meeting_id = cursor.lastrowid
             self._fts_index_meeting(conn, meeting_id, {

@@ -115,6 +115,14 @@ def meeting_markdown(meeting: dict) -> str:
     if resumen:
         body += ["## Resumen", resumen, ""]
 
+    bant = minutes.get("bant")
+    if isinstance(bant, dict):
+        labels = {"budget": "Presupuesto", "authority": "Autoridad",
+                  "need": "Necesidad", "timeline": "Plazo"}
+        blines = [f"- **{labels.get(k, k)}**: {v}" for k, v in bant.items() if v]
+        if blines:
+            body += ["## BANT"] + blines + [""]
+
     notas = minutes.get("notas_usuario") or []
     if notas:
         body += ["## 📝 Notas del usuario"] + [_fmt_nota(n) for n in notas] + [""]

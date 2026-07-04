@@ -97,7 +97,10 @@ def get_minutes(meeting_id: int) -> dict:
     pct_ellos, talk_to_listen, longest_monologue_*, turns_approx (aproximado por
     alternancia de speaker en el transcript, no solapes reales), questions_*,
     wpm_* y duration_s. Passthrough de metrics_json; null en reuniones antiguas
-    o sin voz detectada."""
+    o sin voz detectada. Si la reunión usó la plantilla "ventas" (unidad 4.3) y se
+    detectó calificación BANT, el acta puede incluir además "bant": objeto
+    {"budget", "authority", "need", "timeline"} con lo detectado textualmente
+    (solo los campos con evidencia explícita; ausente si no se detectó ninguno)."""
     meeting = _get_meeting_or_fail(meeting_id)
 
     minutes = _parse_json(meeting.get("minutes_json"))
