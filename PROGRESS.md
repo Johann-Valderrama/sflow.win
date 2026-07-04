@@ -12,9 +12,7 @@
 - **G4 Ola 3 — Recorte de alcance (decisión técnica, revisable async):** el plan prometía "turnos e interrupciones (solape)" pero el debate adversarial probó contra el código que el solape entre canales NO es computable de forma fiable: el loopback WASAPI se salta silencios, así que los ejes de tiempo de "Yo" (mic continuo) y "Ellos" (muestras discontinuas) divergen sin mapa común. v1 entrega: talk-time %, talk-to-listen, monólogo más largo por canal, WPM, preguntas por canal, y "turnos" aproximados por alternancia de speaker en el texto. "Interrupciones" queda fuera (necesitaría timestamps de pared por buffer del loopback: posible v2 anotando el instante de llegada de cada buffer). Si quieres esa v2, pídela; no bloquea nada de lo demás.
 
 ## En curso
-- [ ] Ola 3 — Conversation intelligence Yo/Ellos (3.1 motor de métricas VAD-en-flush, 3.2 UI dona+stats)  (@fable-5 orquestador, IN_PROGRESS 2026-07-03)
-  - Last checkpoint: destilado hecho; plan formulado (speech_timestamps helper en vad.py con singleton+lock, VAD en _process_window con offset window_start, funciones puras en core/meeting_metrics.py, metrics_json, fixture TTS SAPI ±5%); debate Opus high EN CURSO.
-  - Next action: reconciliar veredicto en Decisiones → ejecutar 3.1 (subagente Fable low→med) con fixture obligatorio antes de UI → 3.2 (Sonnet med).
+- (nada — Ola 3 COMPLETA; siguiente: debate y ejecución de la Ola 4)
 
 ## Completado (fuera de olas, cont.)
 - [x] Presets de backend + fallback automático con circuit breaker  (@sonnet-5 ejecutó, @fable-5 dirigió/verificó, 2026-07-03, commit 966128c; los cambios de UI quedaron absorbidos en 450fd77 por colisión con la sesión 1b — verificado línea a línea que están intactos)
@@ -33,6 +31,7 @@
   - Next action: agente Sonnet 5 implementando (brief completo enviado); al retorno: revisar diff real + verificación c (llamada real claude-cli) → commit único.
 
 ## Completado
+- [x] Ola 3 COMPLETA (2026-07-03): 3.1 motor de métricas (@fable-5-med ejecutó, commit 946b710: Silero cacheado a nivel módulo + speech_timestamps en segundos, anclaje por muestras POR CANAL, funciones puras meeting_metrics, metrics_json en DB/API/MCP, pause() reordenado; fixture TTS con dropout simulado: talk-time error 0.0%, VAD ~100ms/ventana; interrupciones fuera de v1 → G4) · fix colateral 56b3852 (@fable-5 orquestador: onnxruntime debe importarse antes que PyQt6; el VAD del dictado estaba en fail-open silencioso en dev — hallado por el ejecutor, reproducido y verificado) · 3.2 UI (@sonnet-5 ejecutó, commit 19c4b6d: mini-dona en tarjeta + sección Estadísticas en visor; corrección del orquestador en navegador: badge "largo" anclado al canal que cruza 90s, no a Yo fijo; verificado con filas sintéticas con/sin metrics, null paths, overlays cero, consola limpia, filas y FTS limpiados).
 - [x] Ola 2 COMPLETA (2.1 + 2.2 + 2.3 + hotfix paleta). G2 ampliado en PARA JOHANN.
 - [x] 2.3 Chat "Esta reunión" EN VIVO  (@fable-5-low ejecutó, @fable-5 dirigió/verificó, 2026-07-03, commit 19a50bc)
   - Qué: MEETING.snapshot() (foto atómica bajo lock), build_context_live/answer_live en core/assistant.py (recorte por el principio con aviso, _SYSTEM_LIVE cita mm:ss sin IDs, transcript vacío responde sin LLM), endpoint /api/meetings/chat rutea vivo/DB (flag live explícito o auto si activa+sin meeting_id), pestaña Preguntar con chips fijos + nota "reunión en curso".
