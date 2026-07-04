@@ -45,6 +45,19 @@ def _fmt_cita(c: dict) -> str:
     return f"- {c.get('texto', '')}" + (f" — 📅 {fh}" if fh else "")
 
 
+def _fmt_nota(n) -> str:
+    """Nota del usuario: texto literal en primer plano, contexto de la IA en línea anidada."""
+    if isinstance(n, str):
+        return f"- {n}"
+    time = n.get("time", "")
+    nota = n.get("nota", "")
+    line = f"- **{time}** {nota}" if time else f"- {nota}"
+    ctx = (n.get("contexto") or "").strip()
+    if ctx:
+        line += f"\n  - _IA: {ctx}_"
+    return line
+
+
 def _fmt_momento(m: dict) -> str:
     if isinstance(m, str):
         return f"- {m}"
@@ -89,6 +102,10 @@ def meeting_markdown(meeting: dict) -> str:
     resumen = minutes.get("resumen", "")
     if resumen:
         body += ["## Resumen", resumen, ""]
+
+    notas = minutes.get("notas_usuario") or []
+    if notas:
+        body += ["## 📝 Notas del usuario"] + [_fmt_nota(n) for n in notas] + [""]
 
     momentos = minutes.get("momentos_destacados") or []
     if momentos:

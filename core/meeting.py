@@ -478,7 +478,8 @@ class MeetingSession:
             highlights = list(self._highlights)
             notes = list(self._notes)
             feedback = list(self._feedback)
-        minutes = _insights.generate_minutes(transcript, self._store_to_plain(), highlights=highlights)
+        minutes = _insights.generate_minutes(transcript, self._store_to_plain(),
+                                             highlights=highlights, notes=notes)
         with self._lock:
             self._last_minutes = minutes  # para que el dashboard la muestre aunque se terminara por hotkey/tray
 

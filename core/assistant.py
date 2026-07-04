@@ -122,6 +122,21 @@ def _format_acta(minutes: dict) -> str:
         if resumen:
             parts.append(f"Resumen: {resumen}")
 
+        notas = minutes.get("notas_usuario") or []
+        if notas:
+            nlines = []
+            for n in notas:
+                if isinstance(n, dict):
+                    line = f"- {n.get('time', '')} {n.get('nota', '')}".strip()
+                    ctx = (n.get("contexto") or "").strip()
+                    if ctx:
+                        line += f" (IA: {ctx})"
+                    nlines.append(line)
+                elif isinstance(n, str):
+                    nlines.append(f"- {n}")
+            if nlines:
+                parts.append("Notas del usuario:\n" + "\n".join(nlines))
+
         momentos = minutes.get("momentos_destacados") or []
         if momentos:
             mlines = []

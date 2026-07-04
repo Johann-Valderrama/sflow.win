@@ -766,6 +766,15 @@ _MINUTES_SYSTEM = (
     "Si la transcripción no da contexto suficiente para un instante concreto, usa el texto genérico "
     "'Momento marcado por el usuario' para ese ítem — NUNCA inventes contenido que no esté en la "
     "transcripción. Si no se te proporcionan momentos destacados, omite esta clave por completo.\n\n"
+    "Si el mensaje del usuario incluye una lista de NOTAS DEL USUARIO (apuntes que el usuario "
+    "escribió en vivo durante la reunión, cada uno con su instante mm:ss), añade además la clave:\n"
+    '  "notas_usuario": lista de objetos {"time": "mm:ss", "nota": string, "contexto": string} — '
+    "una por cada nota del usuario, en el mismo orden. 'nota' es el texto LITERAL del usuario, "
+    "copiado tal cual: prohibido reescribirlo, resumirlo o corregirlo. 'contexto' describe qué se "
+    "estaba diciendo o decidiendo alrededor de ese instante, según la transcripción cercana a ese "
+    "timestamp; si la transcripción no da contexto para una nota, usa '' (cadena vacía) — NUNCA "
+    "inventes contexto que no esté en la transcripción. Si no se te proporcionan notas del usuario, "
+    "omite esta clave por completo.\n\n"
     "REGLAS:\n"
     "- Básate en la transcripción y el análisis en vivo; no inventes.\n"
     "- Conserva los pendientes y propuestas detectados en vivo si la transcripción los respalda.\n"
@@ -955,16 +964,60 @@ def generate_chapters(transcript: str, segments: list | None = None) -> list:
         return []
 
 
+def _normalize_note_text(s: str) -> str:
+    """Normaliza el texto de una nota para compararla (espacios colapsados, minúsculas)."""
+    return re.sub(r"\s+", " ", str(s or "").strip()).lower()
+
+
+def _reconcile_user_notes(note_items: list, raw: object) -> list:
+    """Reconstruye ``notas_usuario`` desde las notas ORIGINALES del usuario (el humano manda).
+
+    ``note_items``: las notas reales [{"t", "time", "text"}]. ``raw``: lo que devolvió el
+    LLM (o cualquier basura). Para cada nota original se busca el ítem del LLM que le
+    corresponde (por texto normalizado; si el LLM la reescribió, por timestamp) y se toma
+    SOLO su 'contexto'; la 'nota' final es siempre el texto literal original. Notas que el
+    LLM omitió entran con contexto "". Ítems del LLM que no corresponden a ninguna nota
+    real se descartan (inventados).
+    """
+    items = raw if isinstance(raw, list) else []
+    by_norm: dict = {}
+    by_time: dict = {}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        ctx = str(it.get("contexto") or "").strip()
+        norm = _normalize_note_text(it.get("nota"))
+        if norm and norm not in by_norm:
+            by_norm[norm] = ctx
+        t = str(it.get("time") or "").strip()
+        if t and t not in by_time:
+            by_time[t] = ctx
+    result = []
+    for n in note_items:
+        text = str(n.get("text") or "").strip()
+        time_s = str(n.get("time") or "").strip()
+        ctx = by_norm.get(_normalize_note_text(text))
+        if ctx is None:
+            ctx = by_time.get(time_s, "")
+        result.append({"time": time_s, "nota": text, "contexto": ctx})
+    return result
+
+
 def generate_minutes(transcript: str, insights: dict | None = None,
-                     reasoning: bool = False, *, highlights: list | None = None) -> dict:
+                     reasoning: bool = False, *, highlights: list | None = None,
+                     notes: list | None = None) -> dict:
     """Genera el acta de la reunión (una sola llamada LLM). Fail-safe.
 
     Recibe opcionalmente el análisis en vivo (temas/pendientes/propuestas) para que el
-    acta sea consistente con lo que vio el usuario, y opcionalmente los ``highlights``
+    acta sea consistente con lo que vio el usuario, opcionalmente los ``highlights``
     (momentos marcados en vivo por el usuario con AltGr+H: [{"t": float, "time": "mm:ss"}])
-    para que el acta incluya una sección "momentos_destacados". Devuelve un dict con
-    claves resumen/decisiones/temas/pendientes/propuestas/citas (+ momentos_destacados
-    si hubo highlights), o un acta vacía si el LLM falla.
+    para que el acta incluya una sección "momentos_destacados", y opcionalmente las
+    ``notes`` (notas escritas en vivo: [{"t": float, "time": "mm:ss", "text": str}]) para
+    que el acta incluya "notas_usuario" con el texto LITERAL de cada nota + contexto de la
+    IA (patrón Granola: la IA añade contexto alrededor, nunca reescribe lo humano; el
+    post-proceso lo garantiza en Python). Devuelve un dict con claves
+    resumen/decisiones/temas/pendientes/propuestas/citas (+ momentos_destacados si hubo
+    highlights, + notas_usuario si hubo notas), o un acta vacía si el LLM falla.
     """
     empty = {"resumen": "", "decisiones": [], "temas": [], "pendientes": [], "propuestas": [], "citas": []}
     if not transcript.strip() or not is_available(task="batch"):
@@ -977,6 +1030,25 @@ def generate_minutes(transcript: str, insights: dict | None = None,
         extra += (
             "\n\nMOMENTOS DESTACADOS POR EL USUARIO (marcó estos instantes como importantes): "
             f"{times}"
+        )
+    note_items = [n for n in (notes or [])
+                  if isinstance(n, dict) and str(n.get("text") or "").strip()]
+    if note_items:
+        # Este bloque NO se trunca: es pequeño y cuenta en other_len del presupuesto.
+        # La instrucción de prioridad viaja SOLO cuando hay notas (si viviera en el
+        # system permanente sesgaría las actas sin notas).
+        notes_lines = "\n".join(
+            f"- [{str(n.get('time') or '').strip()}] {str(n.get('text') or '').strip()}"
+            for n in note_items
+        )
+        extra += (
+            "\n\nNOTAS DEL USUARIO (escritas en vivo durante la reunión):\n"
+            f"{notes_lines}\n"
+            "Los temas tocados por las notas del usuario son los que él consideró "
+            "importantes: dales prioridad en el resumen y las decisiones. Para cada nota, "
+            "añade en 'contexto' lo que la transcripción diga alrededor de ese instante; "
+            "si la transcripción no da contexto, deja 'contexto' vacío. NUNCA modifiques, "
+            "resumas ni corrijas el texto literal de las notas."
         )
     prefix = "TRANSCRIPCIÓN:\n"
     budget = budget_chars(task="batch")
@@ -1009,6 +1081,10 @@ def generate_minutes(transcript: str, insights: dict | None = None,
         momentos = data.get("momentos_destacados")
         if momentos:
             result["momentos_destacados"] = momentos
+        if note_items:
+            # El humano manda: las notas van SIEMPRE al acta con su texto literal,
+            # aunque el LLM las reescribiera u omitiera (contexto "" en ese caso).
+            result["notas_usuario"] = _reconcile_user_notes(note_items, data.get("notas_usuario"))
         return result
     except InsightsUnavailable:
         return empty
