@@ -281,6 +281,56 @@ raíz), autodescubierto por Claude Code vía `.mcp.json`; NO se bundlea en el .e
   inventada), los chips del chat en vivo, y el rol/tono del Asistente de reuniones. Endpoint
   `POST /api/meeting/template`.
 
+### 15. Proactivo v2 — gating, HUD y memoria cruzada (Ola 5, jul 2026)
+
+Panel proactivo rediseñado sobre el principio "la barra no es esto es interesante sino esto
+cambia lo que el humano hará en los próximos 2 minutos": pocas clases de alerta, timing en
+lulls, caducidad. Tres unidades del mismo objetivo, mismo módulo `core/proactive.py` (puro,
+sin Qt/I-O, testeable) + instancia única `PROACTIVE`.
+
+- **5.3 — Gating + HUD flotante** (`core/proactive.py`, `ui/hud_widget.py`): `ProactiveGate`
+  decide SI y CUÁNDO empujar una tarjeta (no el contenido). Tres modos vía `PROACTIVE_MODE`
+  (default `copilot`): `silent` (solo pendientes), `copilot` (+ detecciones + memoria cruzada),
+  `trainer` (+ coaching de monólogo, `MonologueWatch`: ~90 ticks de 1s hablando yo sin que
+  "Ellos" hable activa nudge; ceder la palabra ≥5 ticks reinicia el contador). Presupuesto
+  ~1 push no-pendiente cada 5 min (`_PUSH_BUDGET_SECONDS`); los pendientes SIEMPRE se muestran
+  (contrato desde la unidad 2.2). Cola de lull: una tarjeta espera hasta 60s una pausa natural
+  (RMS por canal, mismo umbral que `MEETING_SILENCE_RMS`) antes de forzarse; expira sin
+  mostrarse a los 180s si nadie atiende. El **HUD** es una ventana Qt nativa frameless
+  always-on-top que no roba foco (`WindowDoesNotAcceptFocus` salvo cuando el usuario interactúa
+  deliberadamente con el mini-input; Esc devuelve el foco), desplegable con **AltGr+A** o clic
+  derecho del pill; badge de 1 palabra en el pill (`ui/pill_widget.py`) avisa sin abrir el HUD.
+  **AltGr+M ("me perdí")** dispara `answer_live` en un worker thread para un resumen instantáneo
+  de los últimos ~2 minutos. El panel web (`web/server.py`) tiene un renderer genérico de
+  tarjetas por clase con el mismo gating por modo; setting `proactive_mode` en Ajustes.
+- **5.1 — Detecciones proactivas** (`core/insights.py`, `core/meeting.py`): tres clases
+  (pregunta sin responder, compromiso adquirido, acuerdo vago sin fecha/dueño) detectadas como
+  **segunda intención de la MISMA llamada** del insight stream — cero cuota LLM extra. Kill-switch
+  por clase vía `PROACTIVE_DETECT_PREGUNTAS` / `PROACTIVE_DETECT_COMPROMISOS` /
+  `PROACTIVE_DETECT_ACUERDOS` (default `true`, lectura perezosa — se apagan sin reiniciar).
+  Dedup LLM+local, gating por modo/flag/presupuesto (vía `PROACTIVE`), rastro persistido en
+  `detections_json` (tabla `meetings`, migración idempotente). Calibrado contra 12 ventanas de
+  transcripts reales: 0 falsos positivos.
+- **5.2 — Memoria cruzada en vivo** (`core/meeting.py` `_cross_memory_check()`): retrieval
+  **puro, cero LLM**, enganchado a cada consolidación (~240s) del insight stream (best-effort:
+  un fallo aquí jamás rompe la consolidación). Pipeline: temas del rolling state → términos de
+  búsqueda → `meetings_search` (FTS, ahora proyecta `bm25 AS score`, campo aditivo solo en la
+  ruta FTS) contra actas pasadas → gate por overlap real ≥2 tokens significativos con un tema →
+  tarjeta tipo `"cruzada"` **"El dd/mm se acordó: …"** vía `PROACTIVE` → dedup máx. 1 tarjeta por
+  reunión pasada por sesión (`_cross_emitted`). Excluye siempre la reunión activa y reuniones sin
+  acta; tolera actas viejas (bullets string) y nuevas (`{texto, t}`). Kill-switch:
+  `PROACTIVE_DETECT_CRUZADA` (default `true`). El estilo de la tarjeta (`CARD_STYLES`, web + HUD)
+  ya existía de la unidad 5.3.
+
+**Invariantes clave**: (a) lo único que se empuja sin que el usuario lo pida es
+pendientes + detecciones 5.1 + memoria cruzada 5.2, todo con caducidad y bajo el mismo
+presupuesto de `ProactiveGate`; (b) las detecciones 5.1 no cuestan una llamada LLM adicional
+(viven dentro del insight stream existente); (c) la memoria cruzada 5.2 es retrieval puro —
+si algún día se quisiera resumir/comparar con LLM, sería una unidad nueva, no una modificación
+de esta. Fuera de v1 (backlog, no implementado): interrupciones/solape (Ola 3, no computable sin
+eje temporal común entre canales), agenda con reloj, bandeja pasiva de datos duros, diff
+"qué viste tú vs qué vio la IA" post-reunión, y exportar pendientes al ecosistema OPS.
+
 ## Security & Privacy
 
 ### 1. API Key Encryption (DPAPI)
@@ -316,6 +366,8 @@ Edit `core/hotkey.py`:
 - **Mode 3 (Ctrl+Shift+Alt hold)**: Press and hold Ctrl+Shift+Alt (Shift before Alt) to translate from any language to target language.
 - **AltGr+H (highlight)**: during an active meeting (AltGr+R), press AltGr+H to mark the current timestamp as a highlight (auto-repeat suppressed); feedback = beep + tray notification "✓ Momento destacado (mm:ss)".
 - **Mode 4 (AltGr+T toggle)**: Press AltGr+T once to start translation hands-free; press again to stop.
+- **AltGr+A (HUD proactivo, Ola 5)**: toggles the floating proactive HUD open/closed (same action as a right-click on the pill). Auto-repeat suppressed.
+- **AltGr+M ("me perdí", Ola 5)**: opens the HUD if closed and triggers an instant summary of the last ~2 minutes via `answer_live` (worker thread, non-blocking). Auto-repeat suppressed.
 - To customize intervals, edit `DOUBLE_TAP_INTERVAL` in `config.py`.
 - **Arming Delay** — Edit `ARMING_DELAY` in `config.py` (default: 0.15s). Modes 1 and 3 (hold keys) require the hotkey combination to be pressed for this duration *without other keys* before recording starts. This prevents accidental triggers when using IDE shortcuts like Ctrl+Alt+L. Set to 0 for immediate activation (at the cost of possible misfires).
 

@@ -404,39 +404,62 @@ los próximos 2 minutos". Tres palancas: selectividad (pocas clases de alerta), 
 (cuándo mostrar) y caducidad (las sugerencias expiran, el muro era un problema de
 persistencia). Presupuesto de atención explícito: máximo ~1 push cada 5 min salvo pendientes.
 
+**HECHO 2026-07-03** (commits 4395425/cd77946/2c30480, Ola 5 — gating+HUD / detecciones /
+memoria cruzada): items 1-4 de abajo implementados y el timing completo (lulls, caducidad,
+badge del pill, AltGr+M, tres modos de intensidad). Detalle técnico en `CLAUDE.md` sección
+"15. Proactivo v2". Quedan fuera de v1 (ver lista al final): interrupciones/solape (Ola 3),
+agenda con reloj, bandeja pasiva de datos duros, y ambos ítems de "Post-reunión".
+
 Detecciones que SÍ ganan el derecho (usan la asimetría Yo/Ellos, computable sin ML extra):
-1. **Pregunta sin responder**: "Ellos" preguntaron algo y ningún segmento tuyo posterior lo
-   respondió en N turnos. "Te preguntaron X hace 4 min y quedó abierta."
-2. **Compromiso adquirido**: detectar cuando YO me comprometo ("te lo envío mañana") y
-   contarlo. Tarjeta discreta + contador; al final "hiciste 5 promesas" va al acta.
-3. **Acuerdo vago**: se cerró un tema sin fecha/responsable ("quedamos en eso") → nudge
-   "sin fecha ni dueño".
-4. **Memoria cruzada en vivo** ⭐ (nadie lo tiene local): FTS del rolling state contra actas
+1. ~~**Pregunta sin responder**: "Ellos" preguntaron algo y ningún segmento tuyo posterior lo
+   respondió en N turnos. "Te preguntaron X hace 4 min y quedó abierta."~~
+   **HECHO 2026-07-03** (commit cd77946, unidad 5.1).
+2. ~~**Compromiso adquirido**: detectar cuando YO me comprometo ("te lo envío mañana") y
+   contarlo. Tarjeta discreta + contador; al final "hiciste 5 promesas" va al acta.~~
+   **HECHO 2026-07-03** (commit cd77946, unidad 5.1).
+3. ~~**Acuerdo vago**: se cerró un tema sin fecha/responsable ("quedamos en eso") → nudge
+   "sin fecha ni dueño".~~ **HECHO 2026-07-03** (commit cd77946, unidad 5.1).
+4. ~~**Memoria cruzada en vivo** ⭐ (nadie lo tiene local): FTS del rolling state contra actas
    pasadas; si el tema actual matchea algo previo, tarjeta "El 12/6 se acordó X; esto lo
-   contradice / lo retoma". Prerequisito barato: FTS ya existe.
+   contradice / lo retoma". Prerequisito barato: FTS ya existe.~~
+   **HECHO 2026-07-03** (commit 2c30480, unidad 5.2): retrieval puro cero LLM, tarjeta
+   "El dd/mm se acordó: …", gate por overlap de tokens, dedup por reunión pasada.
 5. **Agenda con reloj**: si hay agenda/plantilla cargada, checklist que se auto-marca por
-   tema cubierto; UN solo nudge cuando queda ~20% del tiempo con ítems sin tocar.
+   tema cubierto; UN solo nudge cuando queda ~20% del tiempo con ítems sin tocar. **Pendiente
+   (fuera de v1).**
 6. **Bandeja pasiva de datos duros**: montos, fechas, plazos, nombres que dicen "Ellos" se
    fijan solos en una tray lateral (pull visual, cero interrupción, nadie retiene números).
+   **Pendiente (fuera de v1).**
 
 Timing (fuera de la caja, usa lo que ya tenemos):
-- **Sugerir en los silencios**: el VAD por canal detecta lulls en tiempo real (aunque el
+- ~~**Sugerir en los silencios**: el VAD por canal detecta lulls en tiempo real (aunque el
   transcript llegue con ~20s de lag). Las sugerencias tipo "podrías preguntar…" se muestran
   SOLO en pausas de conversación, cuando el humano puede leer. Interrumpir mientras hablan
-  es tirar la sugerencia.
-- **Caducidad**: cada sugerencia expira (~3 min) y desaparece sola. El panel nunca acumula.
-- **Susurro en el pill**: el pill flotante (ya existe, always-on-top) muestra un badge de
-  1 palabra cuando hay algo interrupt-worthy; el detalle se lee en el panel. Glanceable.
-- **Botón "me perdí" (AltGr+M)**: resumen instantáneo de los últimos 2 min para cuando te
-  desconcentraste. Pull, pero resuelve el caso real del 90% de "me estoy perdiendo algo".
-- **Modos de intensidad**: Silencioso (solo pendientes) / Copiloto (todo lo de arriba) /
-  Entrenador (añade coaching: monólogos >2 min, ratio de habla, preguntas hechas).
+  es tirar la sugerencia.~~ **HECHO 2026-07-03** (commit 4395425, unidad 5.3: cola de lull con
+  RMS por canal, fuerza a los 60s, expira a los 180s).
+- ~~**Caducidad**: cada sugerencia expira (~3 min) y desaparece sola. El panel nunca acumula.~~
+  **HECHO 2026-07-03** (commit 4395425, unidad 5.3).
+- ~~**Susurro en el pill**: el pill flotante (ya existe, always-on-top) muestra un badge de
+  1 palabra cuando hay algo interrupt-worthy; el detalle se lee en el panel. Glanceable.~~
+  **HECHO 2026-07-03** (commit 4395425, unidad 5.3).
+- ~~**Botón "me perdí" (AltGr+M)**: resumen instantáneo de los últimos 2 min para cuando te
+  desconcentraste. Pull, pero resuelve el caso real del 90% de "me estoy perdiendo algo".~~
+  **HECHO 2026-07-03** (commit 4395425, unidad 5.3).
+- ~~**Modos de intensidad**: Silencioso (solo pendientes) / Copiloto (todo lo de arriba) /
+  Entrenador (añade coaching: monólogos >2 min, ratio de habla, preguntas hechas).~~
+  **HECHO 2026-07-03** (commit 4395425, unidad 5.3: `PROACTIVE_MODE` silent/copilot/trainer +
+  `MonologueWatch` para el coaching de monólogo del modo trainer).
 
-Post-reunión (cero costo de atención en vivo):
+Post-reunión (cero costo de atención en vivo) — **pendiente, fuera de v1**:
 - **"Qué viste tú vs qué vio la IA"**: diff entre mis notas y los insights; enseña qué se
   te escapa y calibra confianza en el panel.
 - **Pendientes → OPS**: los compromisos detectados se ofrecen como tareas exportables
   (markdown/webhook/MCP) al ecosistema OPS. Vflow como sensor del sistema de tareas.
+
+**Fuera de v1 / descartado explícitamente**:
+- **Interrupciones/solape** (Ola 3): no computable sin un eje temporal común entre canales (el
+  loopback se salta silencios); ver `CLAUDE.md` sección 12.
+- Agenda con reloj y bandeja pasiva de datos duros (ítems 5-6 arriba): no implementados.
 
 NO perseguir: sugerencias de "AI Advice" genéricas cada N segundos (ruido, lo que mató al
 panel v1), TTS al oído en vivo (peligroso, distrae), investigación web en vivo (rompe el
