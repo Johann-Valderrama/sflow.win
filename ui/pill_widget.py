@@ -75,6 +75,7 @@ class PillWidget(QWidget):
         self._meeting_mode = False
         self._meeting_paused = False
         self._meeting_elapsed_fmt = "00:00"
+        self._meeting_level_yo = 0.0
         self._meeting_level_ellos = 0.0
         self._meeting_source_system = False  # AUDIO_SOURCE=system: matiz/glifo levemente distinto
         self._meeting_badge: str | None = None  # badge compacto (unidad 5.3): tarjeta del HUD sin ver
@@ -185,7 +186,7 @@ class PillWidget(QWidget):
 
     def set_meeting_state(self, active: bool, paused: bool = False, elapsed_fmt: str = "00:00",
                            level_ellos: float = 0.0, source_system: bool = False,
-                           badge: "str | None" = None):
+                           badge: "str | None" = None, level_yo: float = 0.0):
         """Actualiza el estado de reunión mostrado en la pill (llamado desde main.py ~1/s).
 
         No cambia self._state (idle/recording/...): la reunión pinta un acento propio
@@ -198,6 +199,7 @@ class PillWidget(QWidget):
         self._meeting_mode = active
         self._meeting_paused = paused
         self._meeting_elapsed_fmt = elapsed_fmt
+        self._meeting_level_yo = max(0.0, min(1.0, level_yo))
         self._meeting_level_ellos = max(0.0, min(1.0, level_ellos))
         self._meeting_source_system = source_system
         self._meeting_badge = badge
@@ -384,15 +386,22 @@ class PillWidget(QWidget):
                 if self._meeting_badge:
                     label = f"{label} {self._meeting_badge}"
                 painter.drawText(text_x, 0, text_w - 10, h, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label)
-                # Indicador "Ellos": punto cian cuya opacidad sigue el nivel del canal.
+                # Indicadores de captura: dos puntos apilados a la derecha — "Yo"
+                # (violeta, mic) arriba y "Ellos" (cian, sistema) abajo — cuya
+                # opacidad sigue el nivel del canal. Baseline siempre visible (~90)
+                # para que se lea "en reunión, escuchando" aunque haya silencio; se
+                # avivan con la voz. El detalle grande vive en el HUD (AltGr+A).
                 dot_r = 3
-                dot_cx = w - 10
-                dot_cy = h // 2
-                alpha = int(60 + 180 * self._meeting_level_ellos)
+                dot_cx = w - 9
+                cy = h // 2
+                yo_alpha = int(90 + 165 * self._meeting_level_yo)
+                el_alpha = int(90 + 165 * self._meeting_level_ellos)
                 painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(167, 139, 250, min(yo_alpha, 255)))       # Yo (violeta)
+                painter.drawEllipse(dot_cx - dot_r, cy - dot_r - 4, dot_r * 2, dot_r * 2)
                 painter.setBrush(QColor(self._meeting_cyan.red(), self._meeting_cyan.green(),
-                                         self._meeting_cyan.blue(), min(alpha, 255)))
-                painter.drawEllipse(dot_cx - dot_r, dot_cy - dot_r, dot_r * 2, dot_r * 2)
+                                         self._meeting_cyan.blue(), min(el_alpha, 255)))  # Ellos (cian)
+                painter.drawEllipse(dot_cx - dot_r, cy + 4 - dot_r, dot_r * 2, dot_r * 2)
 
         painter.end()
 

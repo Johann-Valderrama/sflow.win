@@ -112,6 +112,9 @@ def _feedback_btn_css(rgb: str) -> str:
     )
 
 
+_LEVEL_INTERVAL_MS = 80  # cadencia del VU del indicador de captura (~12.5 Hz)
+
+
 class _SectionLabel(QLabel):
     """Etiqueta de sección tipo "AHORA" / "REGISTRO DE LA REUNIÓN"."""
 
@@ -121,6 +124,91 @@ class _SectionLabel(QLabel):
             "color: rgba(255,255,255,0.35); font-size: 10.5px; font-weight: 600; "
             "letter-spacing: 0.7px; border: none; background: transparent;"
         )
+
+
+class _ListeningStrip(QWidget):
+    """Indicador de captura en vivo: estado "Escuchando / Sin señal" + dos barras
+    VU por canal (Yo violeta / Ellos cian).
+
+    Responde a la pregunta "¿me está escuchando?" de un vistazo. Si AMBOS canales
+    llevan ~4s planos, pasa a "⚠ Sin señal" (avisa de una fuente de audio mal
+    enrutada sin que el usuario tenga que darle a "Me perdí" para enterarse).
+    Se alimenta desde un timer del HUD que lee los niveles lock-free (get_levels).
+    """
+
+    _SIGNAL_THRESHOLD = 0.05   # nivel RMS (0..1) por debajo del cual el canal se considera mudo
+    _COLOR_YO = (167, 139, 250)
+    _COLOR_ELLOS = (34, 211, 238)
+
+    def __init__(self, silent_limit: int, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(50)
+        self._disp_yo = 0.0      # nivel mostrado (con decaimiento suave, tipo VU)
+        self._disp_ellos = 0.0
+        self._silent_updates = 0
+        self._silent_limit = max(1, silent_limit)
+
+    def set_levels(self, yo: float, ellos: float):
+        yo = max(0.0, min(1.0, yo or 0.0))
+        ellos = max(0.0, min(1.0, ellos or 0.0))
+        # Peak-hold con decaimiento: sube al instante, baja suave (sensación VU).
+        self._disp_yo = yo if yo > self._disp_yo else self._disp_yo * 0.82
+        self._disp_ellos = ellos if ellos > self._disp_ellos else self._disp_ellos * 0.82
+        if max(yo, ellos) < self._SIGNAL_THRESHOLD:
+            self._silent_updates = min(self._silent_updates + 1, self._silent_limit + 1)
+        else:
+            self._silent_updates = 0
+        self.update()
+
+    @property
+    def _silent(self) -> bool:
+        return self._silent_updates >= self._silent_limit
+
+    def _draw_bar(self, painter, x, y, w, h, level, rgb):
+        track = QPainterPath()
+        track.addRoundedRect(QRectF(x, y, w, h), h / 2, h / 2)
+        painter.fillPath(track, QColor(255, 255, 255, 20))
+        fill_w = max(0.0, min(1.0, level)) * w
+        if fill_w > 1:
+            fp = QPainterPath()
+            fp.addRoundedRect(QRectF(x, y, fill_w, h), h / 2, h / 2)
+            painter.fillPath(fp, QColor(rgb[0], rgb[1], rgb[2], 230))
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = self.width()
+        font = painter.font()
+
+        # Fila 1: estado (dot + texto), verde si hay señal, ámbar si mudo.
+        if self._silent:
+            col = QColor(245, 158, 11)   # ámbar
+            txt = "⚠ Sin señal — revisa la fuente de audio"
+        else:
+            col = QColor(74, 222, 128)   # verde
+            txt = "● Escuchando"
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(col)
+        painter.drawEllipse(14, 9, 7, 7)
+        font.setPointSizeF(8.0)
+        font.setBold(False)
+        painter.setFont(font)
+        painter.setPen(col)
+        painter.drawText(27, 3, w - 40, 14, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, txt)
+
+        # Fila 2: dos barras VU con etiqueta.
+        by, bh = 30, 8
+        mid = w // 2
+        painter.setFont(font)
+        # Yo
+        painter.setPen(QColor(self._COLOR_YO[0], self._COLOR_YO[1], self._COLOR_YO[2], 220))
+        painter.drawText(14, by - 3, 24, 14, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "Yo")
+        self._draw_bar(painter, 40, by, mid - 50, bh, self._disp_yo, self._COLOR_YO)
+        # Ellos
+        painter.setPen(QColor(self._COLOR_ELLOS[0], self._COLOR_ELLOS[1], self._COLOR_ELLOS[2], 220))
+        painter.drawText(mid, by - 3, 34, 14, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "Ellos")
+        self._draw_bar(painter, mid + 38, by, w - mid - 52, bh, self._disp_ellos, self._COLOR_ELLOS)
+        painter.end()
 
 
 class _Card(QFrame):
@@ -412,6 +500,31 @@ class HudWidget(QWidget):
         root.addWidget(self.header)
 
         # ------------------------------------------------------------
+        # (1.5) INDICADOR DE CAPTURA EN VIVO (¿me está escuchando?)
+        # ------------------------------------------------------------
+        listen_wrap = QFrame()
+        listen_wrap.setObjectName("HudListen")
+        listen_wrap.setStyleSheet(
+            "QFrame#HudListen { border-bottom: 1px solid rgba(255,255,255,0.07); background: transparent; }"
+        )
+        listen_layout = QVBoxLayout(listen_wrap)
+        listen_layout.setContentsMargins(2, 4, 2, 6)
+        listen_layout.setSpacing(0)
+        # ~4s de silencio en AMBOS canales antes de avisar "Sin señal" (el timer
+        # de niveles corre a _LEVEL_INTERVAL_MS).
+        self.listening = _ListeningStrip(silent_limit=int(4000 / _LEVEL_INTERVAL_MS))
+        listen_layout.addWidget(self.listening)
+        root.addWidget(listen_wrap)
+
+        # Provider de niveles (inyectado por main.py: MEETING.get_levels) + timer
+        # propio del HUD: lee los floats lock-free ~cada 80ms para un VU fluido sin
+        # depender del tick de 1s de main.py. Solo corre con el HUD visible.
+        self._level_provider = None
+        self._level_timer = QTimer(self)
+        self._level_timer.setInterval(_LEVEL_INTERVAL_MS)
+        self._level_timer.timeout.connect(self._poll_levels)
+
+        # ------------------------------------------------------------
         # (2) ZONA "AHORA"
         # ------------------------------------------------------------
         now_section = QFrame()
@@ -684,14 +797,31 @@ class HudWidget(QWidget):
         except Exception as exc:  # noqa: BLE001
             logger.warning("hud: force_topmost falló: %s", exc)
 
+    def set_level_provider(self, fn):
+        """Inyecta la fuente de niveles de audio: fn() -> (nivel_yo, nivel_ellos),
+        ambos 0..1. main.py pasa MEETING.get_levels (lock-free). Desacopla el HUD
+        de core/ (no importa MEETING)."""
+        self._level_provider = fn
+
+    def _poll_levels(self):
+        yo, ellos = 0.0, 0.0
+        if self._level_provider is not None:
+            try:
+                yo, ellos = self._level_provider()
+            except Exception:  # noqa: BLE001 — un fallo de lectura no debe tumbar el HUD
+                yo, ellos = 0.0, 0.0
+        self.listening.set_levels(yo, ellos)
+
     def showEvent(self, event):
         super().showEvent(event)
         QTimer.singleShot(0, self.force_topmost)
         self._topmost_timer.start()
+        self._level_timer.start()
 
     def hideEvent(self, event):
         super().hideEvent(event)
         self._topmost_timer.stop()
+        self._level_timer.stop()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

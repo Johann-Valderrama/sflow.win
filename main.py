@@ -415,6 +415,10 @@ class VflowApp(QObject):
         self.hotkey = HotkeyListener()
         self.pill = PillWidget()
         self.hud = HudWidget()
+        # Indicador de captura en vivo del HUD (¿me está escuchando?): el HUD lee
+        # los niveles por canal lock-free con su propio timer. get_levels() no toca
+        # el lock de MEETING (floats atómicos), así que el VU no genera contención.
+        self.hud.set_level_provider(MEETING.get_levels)
 
         # Referencia al tray para mostrar mensajes; se asigna desde main()
         self.tray: QSystemTrayIcon | None = None
@@ -1051,6 +1055,7 @@ class VflowApp(QObject):
             try:
                 status = MEETING.status()
                 levels = status.get("levels") or {}
+                level_yo = float(levels.get("yo", 0.0) or 0.0)
                 level_ellos = float(levels.get("ellos", 0.0) or 0.0)
                 self._tick_proactive(levels)
                 badge = "!" if (self._hud_has_unseen_card and not self._hud_visible) else None
@@ -1059,6 +1064,7 @@ class VflowApp(QObject):
                     paused=bool(status.get("paused")),
                     elapsed_fmt=status.get("elapsed_fmt", "00:00"),
                     level_ellos=level_ellos,
+                    level_yo=level_yo,
                     source_system=(os.getenv("AUDIO_SOURCE", "mic") == "system"),
                     badge=badge,
                 )
