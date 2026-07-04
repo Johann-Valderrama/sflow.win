@@ -704,7 +704,10 @@ class TranscriptionDB:
                         raise_errors: bool = False) -> list:
         """Busca reuniones por texto completo (FTS5) o LIKE si FTS no está disponible.
 
-        Devuelve lista de dicts con: id, title, started_at, duration_seconds, snippet.
+        Devuelve lista de dicts con: id, title, started_at, duration_seconds, snippet
+        y (solo en la ruta FTS) score = bm25 proyectado (negativo; más negativo =
+        mejor match). Campo ADITIVO: los llamadores previos siguen funcionando y
+        deben leerlo con .get("score") (el fallback LIKE no lo incluye).
 
         match="and"  → los tokens se unen con AND (comportamiento por defecto, para la
                        caja de búsqueda del dashboard: busca reuniones que contengan
@@ -740,7 +743,8 @@ class TranscriptionDB:
                                m.title AS title,
                                m.started_at AS started_at,
                                m.duration_seconds AS duration_seconds,
-                               snippet(meetings_fts, -1, char(2), char(3), '…', 12) AS snippet
+                               snippet(meetings_fts, -1, char(2), char(3), '…', 12) AS snippet,
+                               bm25(meetings_fts, 8.0, 1.0, 6.0, 5.0, 3.0, 4.0, 2.0) AS score
                         FROM meetings_fts f
                         JOIN meetings m ON m.id = f.rowid
                         WHERE meetings_fts MATCH ?

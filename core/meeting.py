@@ -48,6 +48,7 @@ from config import (
     MEETINGS_DIR,
 )
 from core.recorder import MicSource, LoopbackSource
+from core.assistant import _search_terms as _assistant_search_terms
 from core.transcriber import Transcriber
 from core import insights as _insights
 from core import meeting_export as _export
@@ -77,6 +78,22 @@ def _fmt_mmss(seconds: float) -> str:
     """Formatea segundos como mm:ss."""
     s = int(seconds)
     return f"{s // 60:02d}:{s % 60:02d}"
+
+
+# ---------------------------------------------------------------------------
+# Memoria cruzada en vivo (unidad 5.2) — retrieval puro (cero LLM) sobre actas
+# pasadas en cada consolidación. Umbrales del gating anti falsos positivos:
+# ---------------------------------------------------------------------------
+# Mínimo de tokens significativos (según _tokens) en común entre UN tema del
+# rolling state y el texto de la decisión/pendiente del acta pasada. Umbral
+# conservador: prefiere callar a avisar en falso.
+CROSS_MEMORY_MIN_OVERLAP = 2
+# El bm25 de SQLite es negativo para todo match (más negativo = mejor); el score
+# debe quedar POR DEBAJO de este techo. El gate decisivo es el overlap de tokens;
+# este techo solo descarta filas sin score real (p. ej. fallback LIKE, sin FTS).
+CROSS_MEMORY_BM25_MAX = 0.0
+# Candidatos FTS a considerar por consolidación (ya vienen ordenados por bm25).
+CROSS_MEMORY_MAX_RESULTS = 5
 
 
 class MeetingSession:
@@ -119,6 +136,9 @@ class MeetingSession:
         # (a) deduplica entre ciclos, (b) alimenta ya_reportadas del LLM, (c) se
         # persiste como detections_json al stop() (insumo del bucle de mejora).
         self._detections: list = []
+        # Memoria cruzada en vivo (unidad 5.2): ids de reuniones PASADAS por las
+        # que ya se emitió tarjeta en ESTA sesión (dedup: máx 1 por reunión pasada).
+        self._cross_emitted: set = set()
         # Niveles por canal (RMS 0..1 del último chunk de audio) para los VU del dashboard.
         # Escritura de float simple: atómica bajo el GIL, no necesita el lock (barato,
         # se recalcula en cada callback de audio; decisión de debate: nada de _tail_rms aquí).
@@ -430,6 +450,7 @@ class MeetingSession:
             self._notes = []
             self._feedback = []
             self._detections = []
+            self._cross_emitted = set()
             self._level_mic = 0.0
             self._level_sys = 0.0
             self._paused = False
@@ -892,6 +913,14 @@ class MeetingSession:
             self._last_insight_at = time.monotonic()
         logger.info("Reunión: consolidación aplicada con transcript completo.")
 
+        # Memoria cruzada en vivo (unidad 5.2): retrieval puro (cero LLM) sobre
+        # actas pasadas, fuera del lock. Best-effort total: un fallo aquí JAMÁS
+        # rompe la consolidación.
+        try:
+            self._cross_memory_check()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Reunión: error en memoria cruzada (se ignora): %s", exc)
+
     def _run_insight_update(self, plain_prev: dict, delta: str):
         """Llama al LLM (texto plano) y fusiona el resultado en el store con IDs.
 
@@ -1036,6 +1065,135 @@ class MeetingSession:
                         "t": round(t, 1),
                         "time": _fmt_mmss(t),
                     })
+
+    # ------------------------------------------------------------------
+    # Memoria cruzada en vivo (unidad 5.2)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _cross_memory_enabled() -> bool:
+        """Kill-switch PROACTIVE_DETECT_CRUZADA (env, default on). Mismo patrón
+        que los flags PROACTIVE_DETECT_* de 5.1: lectura perezosa en cada uso,
+        así se puede apagar sin reiniciar la app (y monkeypatchear en tests)."""
+        return (os.getenv("PROACTIVE_DETECT_CRUZADA", "true") or "true").strip().lower() == "true"
+
+    @staticmethod
+    def _fmt_ddmm(started_at) -> str:
+        """'2026-06-12 10:00:00' → '12/06'. Devuelve '' si no hay fecha parseable."""
+        m = re.match(r"(\d{4})-(\d{2})-(\d{2})", str(started_at or ""))
+        return f"{m.group(3)}/{m.group(2)}" if m else ""
+
+    @staticmethod
+    def _minutes_past_items(minutes: dict) -> list:
+        """Decisiones y pendientes de un acta pasada como textos planos.
+
+        Tolera los DOS formatos históricos de bullets: str plano (actas viejas)
+        y dict {texto, t?} (trazabilidad de la Ola 4). Nunca lanza excepción.
+        """
+        items = []
+        if not isinstance(minutes, dict):
+            return items
+        for key in ("decisiones", "pendientes"):
+            seq = minutes.get(key)
+            if not isinstance(seq, list):
+                continue
+            for it in seq:
+                if isinstance(it, str):
+                    text = it.strip()
+                elif isinstance(it, dict):
+                    text = str(it.get("texto") or "").strip()
+                else:
+                    continue
+                if text:
+                    items.append(text)
+        return items
+
+    def _cross_memory_check(self):
+        """Memoria cruzada en vivo: si los temas del rolling state ya se trataron
+        en reuniones PASADAS (actas en la DB), emite una tarjeta push tipo
+        "El 12/06 se acordó: <decisión/pendiente>". Retrieval puro: CERO LLM.
+
+        Corre en cada consolidación (~240s), nunca en cada update_state. Gating
+        en orden (anti falsos positivos, v1):
+          1. Flag PROACTIVE_DETECT_CRUZADA (kill-switch, default on).
+          2. Modo: solo copilot/trainer (silent = cero proactividad extra).
+          3. FTS bm25 (score proyectado por meetings_search) para candidatear.
+          4. Overlap REAL de tokens (≥ CROSS_MEMORY_MIN_OVERLAP significativos,
+             helper _tokens) entre UN tema actual y el texto del acta pasada.
+          5. Dedup: máx 1 tarjeta por reunión pasada por sesión (_cross_emitted).
+          6. Presupuesto should_push("cruzada") de la máquina 5.3 — si está
+             agotado NO se registra el dedup: si el tema sigue vivo, re-entra
+             en una consolidación posterior (mejor tarde que perdida).
+        Se excluyen SIEMPRE la reunión activa y las reuniones sin acta.
+        """
+        if not self._cross_memory_enabled():
+            return
+        if _proactive.get_mode() not in ("copilot", "trainer"):
+            return
+        if not self._active:
+            return
+        with self._lock:
+            temas = [t["text"] for t in self._insights["temas"]]
+            emitted = set(self._cross_emitted)
+            own_started_at = self._started_at
+        if not temas:
+            return
+        temas_tokens = [toks for toks in (self._tokens(t) for t in temas) if toks]
+        if not temas_tokens:
+            return
+        query = _assistant_search_terms(" ".join(temas)).strip()
+        if not query:
+            return
+
+        if self._db is None:
+            self._db = TranscriptionDB()
+        results = self._db.meetings_search(query, limit=CROSS_MEMORY_MAX_RESULTS, match="or")
+
+        for r in results:
+            mid = r.get("id")
+            if mid is None or mid in emitted:
+                continue
+            # Excluir la reunión activa. Normalmente ni existe en la DB (se
+            # inserta al stop()), pero el started_at la delata si existiera.
+            if own_started_at and r.get("started_at") == own_started_at:
+                continue
+            score = r.get("score")
+            if score is None or score >= CROSS_MEMORY_BM25_MAX:
+                continue
+            row = self._db.meeting_get(mid)
+            if not row or not row.get("minutes_json"):
+                continue  # reunión sin acta: fuera
+            try:
+                minutes = json.loads(row["minutes_json"])
+            except (ValueError, TypeError):
+                continue
+
+            # Mejor decisión/pendiente del acta por overlap de tokens con UN tema.
+            best_text, best_overlap = None, 0
+            for item_text in self._minutes_past_items(minutes):
+                item_toks = self._tokens(item_text)
+                if not item_toks:
+                    continue
+                overlap = max(len(item_toks & t_toks) for t_toks in temas_tokens)
+                if overlap > best_overlap:
+                    best_overlap, best_text = overlap, item_text
+            if best_text is None or best_overlap < CROSS_MEMORY_MIN_OVERLAP:
+                continue
+
+            # Presupuesto de atención (máquina 5.3): sin presupuesto no se emite
+            # NI se registra el dedup — puede re-entrar en la próxima consolidación.
+            if not _proactive.PROACTIVE.should_push("cruzada"):
+                return
+            fecha = self._fmt_ddmm(row.get("started_at"))
+            prefijo = f"El {fecha} se acordó" if fecha else "En una reunión pasada se acordó"
+            card = {"key": f"cruz-{mid}", "tipo": "cruzada", "texto": f"{prefijo}: {best_text}"}
+            _proactive.PROACTIVE.enqueue(card)
+            _proactive.PROACTIVE.mark_pushed("cruzada")
+            with self._lock:
+                self._cross_emitted.add(mid)
+            logger.info("Reunión: memoria cruzada emitida (reunión pasada %s, overlap=%d).",
+                        mid, best_overlap)
+            return  # máx 1 tarjeta por consolidación (el presupuesto manda igual)
 
     def _store_to_plain_locked(self) -> dict:
         """Convierte el store con IDs a texto plano. EL CALLER DEBE TENER EL LOCK."""

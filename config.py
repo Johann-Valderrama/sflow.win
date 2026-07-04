@@ -158,6 +158,16 @@ MEETING_SILENCE_RMS = float(os.getenv("MEETING_SILENCE_RMS", "0.012"))     # RMS
 # por humanos y por agentes (tu OPS puede indexarla). Default: subcarpeta del data dir.
 MEETINGS_DIR = os.getenv("MEETINGS_DIR", os.path.join(_DATA_DIR, "meetings"))
 
+# Proactividad en reunión (Ola 5) — flags de entorno de lectura PEREZOSA (se leen
+# en cada uso, en core/meeting.py y core/proactive.py, NO aquí: así se apagan sin
+# reiniciar la app). Se documentan aquí como catálogo:
+#   PROACTIVE_MODE (default "copilot")            — silent | copilot | trainer.
+#   PROACTIVE_DETECT_PREGUNTAS (default "true")   — 5.1: preguntas sin responder.
+#   PROACTIVE_DETECT_COMPROMISOS (default "true") — 5.1: compromisos detectados.
+#   PROACTIVE_DETECT_ACUERDOS (default "true")    — 5.1: acuerdos vagos (sin fecha/dueño).
+#   PROACTIVE_DETECT_CRUZADA (default "true")     — 5.2: memoria cruzada en vivo
+#       (tarjeta "El dd/mm se acordó: …" desde actas pasadas; retrieval puro, cero LLM).
+
 # Capa inteligente del modo reunión (Insight Stream + acta LLM)
 # INSIGHTS_ENABLED: activa/desactiva temas-pendientes-propuestas en vivo + acta final.
 # INSIGHTS_BACKEND: 'groq' (default; reutiliza GROQ_API_KEY). 'local'/'endpoint' = siguiente fase.
