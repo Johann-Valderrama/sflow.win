@@ -171,7 +171,7 @@ class Transcriber:
     # API pública (sin cambios respecto a la versión anterior)
     # ------------------------------------------------------------------
 
-    def transcribe(self, wav_buffer: io.BytesIO, prompt: str = None) -> str:
+    def transcribe(self, wav_buffer: io.BytesIO, prompt: str = None, return_raw: bool = False):
         """Envía audio WAV al backend activo y devuelve el texto transcrito.
 
         Si el backend activo es "local" y falla, y ``GROQ_FALLBACK=true`` está
@@ -182,10 +182,18 @@ class Transcriber:
         Args:
             wav_buffer: Datos de audio en formato WAV.
             prompt: Contexto opcional del chunk anterior para mejorar continuidad.
+            return_raw: Si True, devuelve la tupla ``(text, raw_text)`` donde
+                ``raw_text`` es el texto tal como salió del backend, ANTES de
+                aplicar los reemplazos del diccionario (``None`` si coincide
+                con ``text``, para no obligar al caller a comparar strings).
+                Por defecto False para no romper a los llamadores existentes
+                (main.py, core/meeting.py, core/url_transcribe.py): sin este
+                kwarg, la firma de retorno sigue siendo ``str`` sin cambios.
 
         Returns:
-            Texto transcrito.  Cadena vacía si no hay audio útil o el resultado
-            es una alucinación conocida de Whisper.
+            Texto transcrito (str), o tupla (text, raw_text) si return_raw=True.
+            Cadena vacía si no hay audio útil o el resultado es una
+            alucinación conocida de Whisper.
         """
         lang = os.getenv("WHISPER_LANGUAGE", "es")
         effective_prompt = dictionary.compose_prompt(prompt, include_vocab=True)
@@ -209,10 +217,14 @@ class Transcriber:
                 raise
 
         if _is_hallucination(text):
-            return ""
-        return dictionary.apply_replacements(text)
+            return ("", None) if return_raw else ""
+        final_text = dictionary.apply_replacements(text)
+        if not return_raw:
+            return final_text
+        raw = text if text != final_text else None
+        return final_text, raw
 
-    def translate(self, wav_buffer: io.BytesIO, target_lang: str = "en") -> str:
+    def translate(self, wav_buffer: io.BytesIO, target_lang: str = "en", return_raw: bool = False):
         """Traduce el audio al idioma destino usando el backend activo.
 
         Si el backend activo es "local" y falla, y ``GROQ_FALLBACK=true`` está
@@ -222,10 +234,13 @@ class Transcriber:
         Args:
             wav_buffer: Datos de audio en formato WAV.
             target_lang: Código ISO del idioma destino.
+            return_raw: Si True, devuelve la tupla ``(text, raw_text)`` igual
+                que ``transcribe``. Por defecto False (sin cambio de firma).
 
         Returns:
-            Texto traducido.  Cadena vacía si no hay audio útil o el resultado
-            es una alucinación.
+            Texto traducido (str), o tupla (text, raw_text) si return_raw=True.
+            Cadena vacía si no hay audio útil o el resultado es una
+            alucinación.
         """
         backend_name = os.getenv("TRANSCRIPTION_BACKEND", "groq").strip().lower()
 
@@ -273,8 +288,12 @@ class Transcriber:
                 raise
 
         if _is_hallucination(text):
-            return ""
-        return dictionary.apply_replacements(text)
+            return ("", None) if return_raw else ""
+        final_text = dictionary.apply_replacements(text)
+        if not return_raw:
+            return final_text
+        raw = text if text != final_text else None
+        return final_text, raw
 
     # ------------------------------------------------------------------
     # Helpers

@@ -974,6 +974,17 @@ HTML_TEMPLATE = """
                 </button>
             </form>
             <div id="dict-import-result" role="status" aria-live="assertive" class="text-xs mb-2 hidden"></div>
+
+            <!-- Bandeja de sugerencias (unidad 6.2): pares detectados de correcciones manuales en el historial -->
+            <div id="dict-suggested-section" class="mb-4 hidden">
+                <div class="flex items-center gap-2 mb-1">
+                    <div class="text-sm font-medium text-white/60">Sugeridas</div>
+                    <span id="dict-suggested-badge" class="text-xs px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 hidden"></span>
+                </div>
+                <p class="text-xs text-white/45 mb-2">Detectadas al corregir una transcripción en el historial. No se aplican solas: acepta o descarta cada una.</p>
+                <div id="dict-suggested-list" class="space-y-1"></div>
+            </div>
+
             <div id="dict-list" class="space-y-1">
                 <div class="text-xs text-white/20">Cargando...</div>
             </div>
@@ -1173,6 +1184,19 @@ HTML_TEMPLATE = """
                                class="text-xs px-2 py-1 rounded text-white/40 hover:text-white/60 hover:bg-white/5">Cancelar</button>
                        </div>`
                     : `<div class="text-preview" id="text-${i}">${escapeHtml(t.text)}</div>`;
+                const hasRaw = !!t.raw_text;
+                const rawRowId = 'raw-' + t.id;
+                const rawToggle = hasRaw
+                    ? `<div class="mt-1">
+                           <button onclick="event.stopPropagation(); toggleRawText(${t.id})"
+                               class="text-xs px-2 py-0.5 rounded bg-white/5 text-white/40 hover:text-white/70 hover:bg-white/10"
+                               title="Ver el texto tal como salió antes de aplicar el diccionario">Ver crudo</button>
+                           <button onclick="event.stopPropagation(); undoAiEdit(${t.id})"
+                               class="text-xs px-2 py-0.5 rounded bg-white/5 text-white/40 hover:text-amber-300 hover:bg-amber-400/10 ml-1"
+                               title="Restaurar el texto crudo pre-diccionario">Deshacer edición IA</button>
+                       </div>
+                       <div id="${rawRowId}" class="text-xs text-white/40 mt-1 hidden" style="white-space:pre-wrap">${escapeHtml(t.raw_text)}</div>`
+                    : '';
                 return `
                 <tr class="row-hover border-b border-white/[0.03] cursor-pointer ${rowClass}" data-id="${t.id}" onclick="handleRowClick(event, ${i})">
                     <td class="py-3 px-2 text-center align-top">
@@ -1180,7 +1204,7 @@ HTML_TEMPLATE = """
                             ${checked} onclick="event.stopPropagation(); handleRowSelect(event, ${i})">
                     </td>
                     <td class="py-3 px-4 text-white/45 text-xs whitespace-nowrap align-top">${time}<div class="mt-1">${srcBadge}</div></td>
-                    <td class="py-3 px-4 align-top text-cell" style="color: var(--txt); font-size: 14px;">${textCell}</td>
+                    <td class="py-3 px-4 align-top text-cell" style="color: var(--txt); font-size: 14px;">${textCell}${isEditing ? '' : rawToggle}</td>
                     <td class="py-3 px-4 text-white/40 text-xs text-right align-top">${dur}</td>
                     <td class="py-3 px-4 text-center align-top whitespace-nowrap actions-cell">
                         <button onclick="event.stopPropagation(); copyText(${i}, this)"
@@ -1281,6 +1305,32 @@ HTML_TEMPLATE = """
                 showOffline(true);
                 toast('No se pudo guardar el cambio', 'err');
                 if (btn) btn.disabled = false;
+            }
+        }
+
+        // --- Ver crudo / Deshacer edición IA (unidad 6.2) ---
+        function toggleRawText(id) {
+            const el = document.getElementById('raw-' + id);
+            if (!el) return;
+            el.classList.toggle('hidden');
+        }
+
+        async function undoAiEdit(id) {
+            const t = renderedData.find(r => r.id === id);
+            if (!t || !t.raw_text) return;
+            if (!confirm('¿Restaurar el texto crudo (pre-diccionario)? Se reemplazará el texto actual.')) return;
+            try {
+                const res = await fetch('/api/transcriptions/' + id, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({text: t.raw_text})
+                });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                showOffline(false);
+                loadData();
+            } catch (err) {
+                showOffline(true);
+                toast('No se pudo deshacer la edición', 'err');
             }
         }
 
@@ -2261,6 +2311,70 @@ HTML_TEMPLATE = """
             _dictBudget = data.budget || {included: 0, total: 0, included_ids: []};
             renderDictBudget();
             renderDictList(_dictEntries);
+            loadSuggestedDictionary();
+        }
+
+        async function loadSuggestedDictionary() {
+            try {
+                const res = await fetch('/api/dictionary/suggested');
+                const data = await res.json();
+                renderSuggestedDictList(data.entries || []);
+            } catch (ex) {
+                // Best-effort: la bandeja de sugerencias no debe romper el panel principal
+            }
+        }
+
+        function renderSuggestedDictList(entries) {
+            const section = document.getElementById('dict-suggested-section');
+            const list = document.getElementById('dict-suggested-list');
+            const badge = document.getElementById('dict-suggested-badge');
+            if (!section || !list) return;
+            if (!entries.length) {
+                section.classList.add('hidden');
+                if (badge) badge.classList.add('hidden');
+                return;
+            }
+            section.classList.remove('hidden');
+            if (badge) {
+                badge.textContent = entries.length;
+                badge.classList.remove('hidden');
+            }
+            list.innerHTML = entries.map(e => `
+                <div class="flex items-center gap-3 py-1.5 border-b border-white/[0.04]" data-suggested-id="${e.id}">
+                    <span class="text-sm flex-1">
+                        <span class="text-white/50">${escapeHtml(e.replace_from || '')}</span>
+                        <span class="text-white/50 mx-1">→</span>
+                        <span class="text-white/80">${escapeHtml(e.replace_to)}</span>
+                    </span>
+                    <button onclick="acceptSuggestedDict(${e.id})"
+                        class="text-xs px-2 py-1 rounded bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/30"
+                        title="Aceptar y activar">Aceptar</button>
+                    <button onclick="discardSuggestedDict(${e.id})"
+                        class="text-xs px-2 py-1 rounded bg-white/5 text-white/45 hover:text-red-400 hover:bg-red-500/10"
+                        title="Descartar">Descartar</button>
+                </div>`).join('');
+        }
+
+        async function acceptSuggestedDict(id) {
+            try {
+                const res = await fetch('/api/dictionary/suggested/' + id + '/accept', {method: 'POST'});
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+            } catch (ex) {
+                _showDictError('No se pudo aceptar la sugerencia');
+                return;
+            }
+            await loadDictionary();
+        }
+
+        async function discardSuggestedDict(id) {
+            try {
+                const res = await fetch('/api/dictionary/suggested/' + id, {method: 'DELETE'});
+                if (!res.ok && res.status !== 204) throw new Error('HTTP ' + res.status);
+            } catch (ex) {
+                _showDictError('No se pudo descartar la sugerencia');
+                return;
+            }
+            await loadSuggestedDictionary();
         }
 
         function renderDictBudget() {
@@ -3717,14 +3831,36 @@ def delete_transcriptions_batch():
 
 @app.route("/api/transcriptions/<int:tid>", methods=["PUT"])
 def update_transcription(tid):
-    """Actualiza el texto de una transcripción existente."""
+    """Actualiza el texto de una transcripción existente.
+
+    [O4] Al detectar una corrección manual puntual (1-2 palabras) se generan
+    sugerencias de diccionario deshabilitadas (source='suggested'); NUNCA se
+    auto-aplican. Best-effort: un fallo aquí no debe impedir guardar la edición.
+    """
     data = request.get_json()
     if not data or "text" not in data:
         return jsonify({"error": "text field required"}), 400
-    updated = _db.update_text(tid, data["text"])
+    new_text = data["text"]
+
+    existing = _db.get_by_id(tid)
+    updated = _db.update_text(tid, new_text)
     if updated == 0:
         return jsonify({"error": "not found"}), 404
-    return jsonify({"ok": True})
+
+    suggested = 0
+    if existing:
+        try:
+            old_text = existing.get("text") or ""
+            pairs = _dictionary.suggest_dictionary_pairs(old_text, new_text)
+            for replace_from, replace_to in pairs:
+                if _db.add_suggested_entry(replace_from=replace_from, replace_to=replace_to) is not None:
+                    suggested += 1
+            if suggested:
+                _dictionary.invalidate()
+        except Exception:  # noqa: BLE001 — best-effort: no debe romper el guardado
+            suggested = 0
+
+    return jsonify({"ok": True, "suggested": suggested})
 
 
 def _set_env_key(key: str, value: str):
@@ -4036,6 +4172,31 @@ def get_dictionary():
     entries = _db.list_dictionary()
     budget = _dictionary.vocab_budget_info()
     return jsonify({"entries": entries, "budget": budget})
+
+
+@app.route("/api/dictionary/suggested")
+def get_suggested_dictionary():
+    """Bandeja de revisión: entradas sugeridas (source='suggested') pendientes de aceptar/descartar."""
+    return jsonify({"entries": _db.list_suggested_dictionary()})
+
+
+@app.route("/api/dictionary/suggested/<int:eid>/accept", methods=["POST"])
+def accept_suggested_dictionary(eid):
+    """Acepta una sugerencia: enabled=1, source pasa a 'manual'."""
+    updated = _db.accept_suggested_entry(eid)
+    if updated == 0:
+        return jsonify({"error": "not found"}), 404
+    _dictionary.invalidate()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/dictionary/suggested/<int:eid>", methods=["DELETE"])
+def discard_suggested_dictionary(eid):
+    """Descarta una sugerencia (DELETE directo; no toca entradas manuales)."""
+    deleted = _db.delete_dictionary_entry(eid)
+    if deleted == 0:
+        return jsonify({"error": "not found"}), 404
+    return "", 204
 
 
 @app.route("/api/dictionary/export")

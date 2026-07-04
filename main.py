@@ -431,8 +431,15 @@ class VflowApp(QObject):
 
         # Estado de chunking con lock para acceso seguro entre hilos
         self._chunk_results: dict[int, str] = {}
+        # Crudo pre-diccionario por chunk (unidad 6.2); solo se llena cuando
+        # transcribe()/translate() detectan diferencia (raw_text no None).
+        self._chunk_raw: dict[int, str] = {}
         self._chunk_seq = 0
         self._chunk_state_lock = threading.Lock()
+        # Texto crudo pendiente de la última transcripción emitida, indexado por
+        # generación (gen). Puente entre _transcribe_final (hilo background) y
+        # _on_transcription_done (slot Qt) sin ampliar la firma de la señal.
+        self._pending_raw: dict[int, str] = {}
 
         self._translate_mode = False
         self._chunk_timer = QTimer()
@@ -511,6 +518,7 @@ class VflowApp(QObject):
             self._recording_active = True
             with self._chunk_state_lock:
                 self._chunk_results.clear()
+                self._chunk_raw.clear()
                 self._chunk_seq = 0
             self._chunk_timer.start(CHUNK_SECONDS * 1000)
             self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
@@ -551,6 +559,7 @@ class VflowApp(QObject):
             self._recording_active = True
             with self._chunk_state_lock:
                 self._chunk_results.clear()
+                self._chunk_raw.clear()
                 self._chunk_seq = 0
             # Sin chunk_timer en modo traducción — se envía audio completo al endpoint de traducción
             self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
@@ -591,13 +600,15 @@ class VflowApp(QObject):
     def _chunk_worker(self, wav_buffer, prompt, idx: int, gen: int):
         """Transcribe un chunk en background; descarta resultado si la generación cambió."""
         try:
-            text = self.transcriber.transcribe(wav_buffer, prompt=prompt)
+            text, raw = self.transcriber.transcribe(wav_buffer, prompt=prompt, return_raw=True)
             if gen != self._generation:
                 # Sesión vieja: descartar resultado
                 return
             if text:
                 with self._chunk_state_lock:
                     self._chunk_results[idx] = text
+                    if raw is not None:
+                        self._chunk_raw[idx] = raw
         except Exception as e:
             logger.error("Transcripción de chunk fallida: %s", e)
 
@@ -651,7 +662,10 @@ class VflowApp(QObject):
     def _transcribe_final(self, wav_buffer, duration, translate: bool = False, gen: int = 0):
         """Transcribe o traduce los frames restantes y emite el resultado."""
         try:
+            raw_full = None
             if translate:
+                # Modo traducción: no se captura crudo (el diccionario del usuario
+                # aplica al idioma dictado, no al idioma traducido de salida).
                 target = os.getenv("TRANSLATE_TARGET_LANG", "en")
                 text = self.transcriber.translate(wav_buffer, target_lang=target)
             else:
@@ -661,16 +675,30 @@ class VflowApp(QObject):
                         prompt = self._chunk_results[last_key][-200:]
                     else:
                         prompt = None
-                text = self.transcriber.transcribe(wav_buffer, prompt=prompt)
+                text, raw = self.transcriber.transcribe(wav_buffer, prompt=prompt, return_raw=True)
                 # Asignar el tramo final al índice siguiente en el dict de chunks
                 with self._chunk_state_lock:
                     final_idx = self._chunk_seq
                     if text:
                         self._chunk_results[final_idx] = text
+                        if raw is not None:
+                            self._chunk_raw[final_idx] = raw
                     # Ensamblar texto completo en orden
                     text = " ".join(self._chunk_results[k] for k in sorted(self._chunk_results))
+                    # Ensamblar crudo en el mismo orden; usar el texto final del
+                    # chunk como fallback cuando ese chunk no tuvo diferencia
+                    # (raw None), para no perder alineación entre tramos.
+                    if self._chunk_raw:
+                        raw_full = " ".join(
+                            self._chunk_raw.get(k, self._chunk_results[k])
+                            for k in sorted(self._chunk_results)
+                        )
 
             if text.strip():
+                if raw_full is not None and raw_full.strip() == text.strip():
+                    raw_full = None
+                if raw_full is not None:
+                    self._pending_raw[gen] = raw_full.strip()
                 self.transcription_done.emit(text.strip(), duration, gen)
             else:
                 self.transcription_error.emit("No speech detected", gen)
@@ -698,11 +726,13 @@ class VflowApp(QObject):
     def _on_transcription_done(self, text: str, duration: float, gen: int):
         """Pega el texto transcrito en la app activa y lo guarda en la base de datos."""
         if gen != self._generation:
+            self._pending_raw.pop(gen, None)
             return  # resultado de sesión vieja: descartar
         _play_sound(660)  # beep bajo = transcripción lista
+        raw_text = self._pending_raw.pop(gen, None)
         # Insertar en DB solo si el historial está habilitado (SAVE_HISTORY=true por defecto)
         if os.getenv("SAVE_HISTORY", "true").lower() == "true":
-            self.db.insert(text=text, duration_seconds=duration, source=self.recorder.source)
+            self.db.insert(text=text, duration_seconds=duration, source=self.recorder.source, raw_text=raw_text)
         # La pill permanece en STATE_PROCESSING hasta que paste_finished confirme el resultado
         threading.Thread(target=self._paste_worker, args=(text,), daemon=True).start()
 

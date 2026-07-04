@@ -107,6 +107,9 @@ class TranscriptionDB:
         # Detecciones proactivas entregadas en vivo (unidad 5.1): rastro para el
         # bucle de mejora de prompts junto a feedback_json
         "ALTER TABLE meetings ADD COLUMN detections_json TEXT",
+        # Texto crudo pre-diccionario (unidad 6.2): NULL si coincide con el texto
+        # final (nada que mostrar en el toggle "ver crudo").
+        "ALTER TABLE transcriptions ADD COLUMN raw_text TEXT",
     ]
 
     # DDL adicional para la cola de URLs (Fase 3, paso 2)
@@ -209,12 +212,31 @@ class TranscriptionDB:
                     conn.execute(ddl)
                 conn.execute(self._URL_QUEUE_DDL)
                 conn.execute(self._MEETINGS_DDL)
-    def insert(self, text: str, language: str = None, duration_seconds: float = None, model: str = "whisper-large-v3-turbo", source: str = "mic") -> int:
-        """Inserta una transcripción y retorna su ID."""
+                conn.commit()
+                # Migraciones también aquí: la DB fresca recién creada por _DDL no
+                # tiene las columnas ALTER TABLE de _MIGRATIONS (bug preexistente,
+                # expuesto por la migración raw_text de la unidad 6.2 — sin este
+                # bloque, insert() con raw_text fallaba tras una recuperación por
+                # corrupción con "no such column: raw_text").
+                for migration in self._MIGRATIONS:
+                    try:
+                        conn.execute(migration)
+                        conn.commit()
+                    except sqlite3.OperationalError as e:
+                        if "duplicate column" not in str(e).lower():
+                            raise
+
+    def insert(self, text: str, language: str = None, duration_seconds: float = None, model: str = "whisper-large-v3-turbo", source: str = "mic", raw_text: str = None) -> int:
+        """Inserta una transcripción y retorna su ID.
+
+        raw_text: texto crudo pre-diccionario (unidad 6.2). None cuando no hay
+        crudo disponible o coincide con `text` (el caller ya hace esa
+        comparación antes de llamar; aquí se guarda tal cual llega).
+        """
         with self._connect() as conn:
             cursor = conn.execute(
-                "INSERT INTO transcriptions (text, language, duration_seconds, model, source) VALUES (?, ?, ?, ?, ?)",
-                (text, language, duration_seconds, model, source),
+                "INSERT INTO transcriptions (text, language, duration_seconds, model, source, raw_text) VALUES (?, ?, ?, ?, ?, ?)",
+                (text, language, duration_seconds, model, source, raw_text),
             )
             return cursor.lastrowid
 
@@ -315,6 +337,15 @@ class TranscriptionDB:
             cursor = conn.execute("UPDATE transcriptions SET text = ? WHERE id = ?", (new_text, transcription_id))
             return cursor.rowcount
 
+    def get_by_id(self, transcription_id: int) -> dict | None:
+        """Devuelve una transcripción por ID (incluye raw_text) o None si no existe."""
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM transcriptions WHERE id = ?", (transcription_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
     # ------------------------------------------------------------------
     # Dictionary CRUD
     # ------------------------------------------------------------------
@@ -357,6 +388,64 @@ class TranscriptionDB:
                     (replace_to,),
                 )
                 return cursor.lastrowid
+
+    def list_suggested_dictionary(self) -> list:
+        """Retorna las entradas del diccionario con source='suggested' (bandeja de revisión)."""
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM dictionary WHERE source = 'suggested' ORDER BY created_at DESC"
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def dictionary_from_exists(self, replace_from: str) -> bool:
+        """True si ya existe una entrada con ese replace_from (case-insensitive)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM dictionary WHERE replace_from IS NOT NULL AND lower(replace_from) = lower(?) LIMIT 1",
+                (replace_from,),
+            ).fetchone()
+            return row is not None
+
+    def add_suggested_entry(self, replace_from: str, replace_to: str) -> int | None:
+        """Inserta una sugerencia de par (deshabilitada, source='suggested').
+
+        Devuelve el id insertado, o None si ya existe una entrada con ese
+        replace_from (dedup case-insensitive vía UNIQUE INDEX + comprobación previa).
+        """
+        if self.dictionary_from_exists(replace_from):
+            return None
+        with self._connect() as conn:
+            try:
+                cursor = conn.execute(
+                    "INSERT INTO dictionary (replace_from, replace_to, enabled, source) "
+                    "VALUES (?, ?, 0, 'suggested')",
+                    (replace_from, replace_to),
+                )
+                return cursor.lastrowid
+            except sqlite3.IntegrityError:
+                # Carrera con otra inserción concurrente del mismo replace_from
+                return None
+
+    def accept_suggested_entry(self, entry_id: int) -> int:
+        """Acepta una sugerencia: enabled=1, source pasa a 'manual' (ya no es sugerencia).
+
+        Devuelve filas actualizadas (0 si no existe o no era 'suggested').
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE dictionary SET enabled = 1, source = 'manual' "
+                "WHERE id = ? AND source = 'suggested'",
+                (entry_id,),
+            )
+            return cursor.rowcount
+
+    def count_suggested_dictionary(self) -> int:
+        """Cuenta las sugerencias pendientes (para el badge del panel)."""
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM dictionary WHERE source = 'suggested'"
+            ).fetchone()[0]
 
     def delete_dictionary_entry(self, entry_id: int) -> int:
         """Elimina una entrada del diccionario por ID. Retorna filas eliminadas."""

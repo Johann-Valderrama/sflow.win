@@ -5,6 +5,7 @@ Whisper.  La caché se reconstruye con swap atómico al llamar a invalidate().
 """
 from __future__ import annotations
 
+import difflib
 import logging
 import re
 import threading
@@ -293,3 +294,77 @@ def compose_prompt(context: Optional[str], include_vocab: bool = True) -> Option
         space_pos = raw.find(" ")
         ctx = raw[space_pos + 1:] if space_pos != -1 else raw
     return ctx + separator + vocab
+
+
+# ---------------------------------------------------------------------------
+# Sugerencias de diccionario a partir de correcciones manuales (unidad 6.2)
+# ---------------------------------------------------------------------------
+
+# Máximo de palabras por lado en un bloque de sustitución para considerarlo
+# candidato (1-a-1 o 2-a-2); más que eso ya es "reescritura", no corrección léxica.
+_SUGGEST_MAX_WORDS = 2
+# Longitud mínima de cada palabra involucrada (evita sugerir artículos/preposiciones).
+_SUGGEST_MIN_WORD_LEN = 3
+# Si el diff toca más de este número de bloques de reemplazo, se asume reescritura
+# amplia del texto (no una corrección puntual) y no se sugiere nada.
+_SUGGEST_MAX_BLOCKS = 3
+
+_WORD_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def suggest_dictionary_pairs(old_text: str, new_text: str) -> list[tuple[str, str]]:
+    """Compara una corrección manual y propone pares "escucho X → escribo Y".
+
+    Pensado para el flujo del dashboard: el usuario edita una transcripción
+    (PUT /api/transcriptions/<id>) y aquí se detecta si el cambio fue una
+    sustitución léxica puntual (1-2 palabras) en vez de una reescritura del
+    párrafo. Umbral conservador a propósito: falsos negativos (no sugerir)
+    son preferibles a falsos positivos (sugerir basura).
+
+    Returns:
+        Lista de tuplas (replace_from, replace_to), ya recortadas y en minúsculas
+        para replace_from (case-insensitive en el resto del sistema). Vacía si
+        el diff no calza con el patrón de "corrección puntual".
+    """
+    if not old_text or not new_text or old_text == new_text:
+        return []
+
+    old_words = _WORD_RE.findall(old_text)
+    new_words = _WORD_RE.findall(new_text)
+    if not old_words or not new_words:
+        return []
+
+    matcher = difflib.SequenceMatcher(a=old_words, b=new_words, autojunk=False)
+    opcodes = [op for op in matcher.get_opcodes() if op[0] != "equal"]
+
+    if not opcodes:
+        return []
+    if len(opcodes) > _SUGGEST_MAX_BLOCKS:
+        # Demasiados bloques distintos cambiaron: reescritura amplia, no corrección.
+        return []
+
+    pairs: list[tuple[str, str]] = []
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag != "replace":
+            # insert/delete puros no son sustituciones léxicas (no hay "X" que
+            # reemplazar por "Y"): fuera de alcance de esta heurística.
+            continue
+        from_words = old_words[i1:i2]
+        to_words = new_words[j1:j2]
+        if not from_words or not to_words:
+            continue
+        if len(from_words) > _SUGGEST_MAX_WORDS or len(to_words) > _SUGGEST_MAX_WORDS:
+            continue
+        if any(len(w) < _SUGGEST_MIN_WORD_LEN for w in from_words):
+            continue
+        if any(len(w) < _SUGGEST_MIN_WORD_LEN for w in to_words):
+            continue
+        replace_from = " ".join(from_words).strip()
+        replace_to = " ".join(to_words).strip()
+        if not replace_from or not replace_to:
+            continue
+        if replace_from.lower() == replace_to.lower():
+            continue
+        pairs.append((replace_from, replace_to))
+
+    return pairs
