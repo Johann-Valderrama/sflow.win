@@ -455,8 +455,35 @@ HTML_TEMPLATE = """
                     <p class="text-xs text-white/70 font-medium">Reunión — captura dual (toggle)</p>
                     <p class="text-xs text-white/55 mt-0.5">Inicia/termina una reunión capturando tu micrófono («Yo») y el audio del sistema («Ellos») a la vez. El transcript en vivo aparece en el panel 🎙.</p>
                 </div>
+                <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                    <div class="flex items-center gap-2 mb-1.5">
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">AltGr</kbd>
+                        <span class="text-white/45 text-xs">+</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">H</kbd>
+                    </div>
+                    <p class="text-xs text-white/70 font-medium">Marcar momento destacado</p>
+                    <p class="text-xs text-white/55 mt-0.5">Solo durante una reunión activa: marca el instante actual con un beep y una notificación. Los momentos marcados salen destacados en el acta.</p>
+                </div>
+                <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                    <div class="flex items-center gap-2 mb-1.5">
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">AltGr</kbd>
+                        <span class="text-white/45 text-xs">+</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">A</kbd>
+                    </div>
+                    <p class="text-xs text-white/70 font-medium">Abrir/cerrar HUD proactivo (toggle)</p>
+                    <p class="text-xs text-white/55 mt-0.5">Solo durante una reunión activa: despliega la ventana flotante con tarjetas de pendientes y detecciones, confirmación de highlight y la mini-pregunta a la IA. También se abre con clic derecho en la pill.</p>
+                </div>
+                <div class="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                    <div class="flex items-center gap-2 mb-1.5">
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">AltGr</kbd>
+                        <span class="text-white/45 text-xs">+</span>
+                        <kbd class="px-2 py-0.5 text-xs font-mono rounded border border-white/45 bg-white/[0.07] text-white/80">M</kbd>
+                    </div>
+                    <p class="text-xs text-white/70 font-medium">«Me perdí» — resumen de los últimos 2 min</p>
+                    <p class="text-xs text-white/55 mt-0.5">Solo durante una reunión activa: abre el HUD (si no está abierto) y pide a la IA un resumen breve de lo hablado recientemente.</p>
+                </div>
             </div>
-            <p class="text-xs text-white/45 mt-4">El idioma de transcripción y el idioma de destino (traducción) se configuran en el panel de Configuración.</p>
+            <p class="text-xs text-white/45 mt-4">El idioma de transcripción y el idioma de destino (traducción) se configuran en el panel de Configuración. Las tarjetas del HUD y el modo de atención (Silencioso/Copiloto/Entrenador) se ajustan en Configuración → Reuniones.</p>
         </div>
 
         <!-- URL Queue panel -->
