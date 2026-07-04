@@ -484,6 +484,17 @@ modelo local; ya descartado en el benchmark Proactor).
 
 ## Copiloto con contexto OPS — "el susurro que sabe de tus proyectos" (jul 2026, idea de Johann)
 
+> **✅ v1 IMPLEMENTADA (Ola 7, 2026-07-03, commit 9c83041).** El briefing destilado (capa 1)
+> está en producción PERO con alcance recortado por el debate adversarial: se inyecta SOLO en el
+> chat pull "Preguntar" (core/assistant.py answer_live), NO en el insight stream. Setting
+> `OPS_BRIEFING_PATH` (opt-in), módulo `core/ops_briefing.py` (TTL 60s, fail-open, guard 8KB,
+> gate silent). Detalle en CLAUDE.md §17.
+> **Backlog v1.1** (NO hecho, decisión del debate): inyectar el briefing en el insight stream
+> (update_state) para habilitar tarjetas de detección "🧭 Contexto:" — requiere RECALIBRAR las
+> detecciones 5.1 (≥12 ventanas, midiendo falsos positivos Y negativos) como gate bloqueante,
+> porque meter 8KB fijos en el prompt de detecciones (Haiku en vivo) puede descalibrarlas.
+> **v2 y v3** (chat OPS-aware con manos / cruzada contra Engram) siguen en backlog abajo sin cambio.
+
 **Deseo**: que el susurro proactivo no solo sepa de reuniones pasadas (memoria cruzada, ya
 implementada) sino de TODO el contexto de Johann/OPS: "esto conecta con el proyecto X",
 "recuerda que con este cliente quedaste en Y", como lo haría Levy si estuviera en la sala.
