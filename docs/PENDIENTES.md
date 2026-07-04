@@ -464,3 +464,29 @@ Post-reunión (cero costo de atención en vivo) — **pendiente, fuera de v1**:
 NO perseguir: sugerencias de "AI Advice" genéricas cada N segundos (ruido, lo que mató al
 panel v1), TTS al oído en vivo (peligroso, distrae), investigación web en vivo (rompe el
 modelo local; ya descartado en el benchmark Proactor).
+
+## Copiloto con contexto OPS — "el susurro que sabe de tus proyectos" (jul 2026, idea de Johann)
+
+**Deseo**: que el susurro proactivo no solo sepa de reuniones pasadas (memoria cruzada, ya
+implementada) sino de TODO el contexto de Johann/OPS: "esto conecta con el proyecto X",
+"recuerda que con este cliente quedaste en Y", como lo haría Levy si estuviera en la sala.
+Hoy el copiloto en vivo es DELIBERADAMENTE ciego a OPS: claude-cli corre con cwd neutro
+(%APPDATA%\Vflow, core/insights.py ~564) para no cargar CLAUDE.md del repo por llamada.
+
+**Diseño propuesto en capas (esbelto → profundo), pendiente de priorizar:**
+1. **v1 — Briefing destilado (barato, alto valor)**: un archivo compacto (~2-4 KB, p.ej.
+   `%APPDATA%\Vflow\contexto_ops.md` o ruta configurable a un dead-drop en C:\OPS) que OPS/Levy
+   mantiene con lo COMPARTIBLE: proyectos activos, compromisos abiertos, metas públicas.
+   Vflow lo inyecta al prompt del insight stream y del chat en vivo (cuenta en el presupuesto
+   4.0; cero latencia extra: viaja en la misma llamada; cero red). El susurro gana contexto
+   sin agentes ni tools. La frontera privado-vs-compartido la cura OPS al escribir el archivo.
+2. **v2 — "Preguntar" con manos (pull)**: el chat del panel puede correr claude-cli con un
+   workspace OPS-aware (cwd con CLAUDE.md que enruta a _CONTEXTO-OPS + MCP de reuniones) para
+   preguntas profundas on-demand. Latencia de agente aceptable porque es pull, nunca push.
+3. **v3 — Cruzada contra Engram/cerebro**: la memoria cruzada consulta también la memoria OPS
+   (requiere índice/export local consumible). Lejos; solo si v1/v2 saben a poco.
+
+**Nota de privacidad**: si Johann comparte pantalla en la reunión, un susurro con contexto
+OPS sería visible a terceros. Mitigación: el briefing solo contiene lo compartible + usar
+modo Silencioso al compartir pantalla (ya existe el modo).
+**La dirección inversa ya existe**: OPS lee las reuniones de Vflow vía el MCP server (unidad 1.1).
