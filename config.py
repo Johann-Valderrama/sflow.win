@@ -64,6 +64,19 @@ if not os.getenv("ANTHROPIC_API_KEY") and os.getenv("ANTHROPIC_API_KEY_ENC"):
         import logging as _logging
         _logging.getLogger(__name__).warning("config: no se pudo descifrar ANTHROPIC_API_KEY_ENC — %s", _e)
 
+# Igual para WEBHOOK_SECRET (secreto de firma HMAC del webhook saliente, unidad 6.1).
+# Se cifra con DPAPI exactamente como las API keys; en runtime se descifra a la variable
+# en claro para que core/webhook.py firme el body sin volver a tocar disco.
+if not os.getenv("WEBHOOK_SECRET") and os.getenv("WEBHOOK_SECRET_ENC"):
+    try:
+        from core.secrets import decrypt as _dpapi_decrypt
+        _plain = _dpapi_decrypt(os.getenv("WEBHOOK_SECRET_ENC"))
+        if _plain:
+            os.environ["WEBHOOK_SECRET"] = _plain
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("config: no se pudo descifrar WEBHOOK_SECRET_ENC — %s", _e)
+
 # Versión de la aplicación
 APP_VERSION = "1.0.0"
 
@@ -157,6 +170,21 @@ MEETING_SILENCE_RMS = float(os.getenv("MEETING_SILENCE_RMS", "0.012"))     # RMS
 # Carpeta donde se exporta un .md por reunión (acta + transcript + frontmatter), legible
 # por humanos y por agentes (tu OPS puede indexarla). Default: subcarpeta del data dir.
 MEETINGS_DIR = os.getenv("MEETINGS_DIR", os.path.join(_DATA_DIR, "meetings"))
+
+# Webhook saliente al generar el acta (unidad 6.1) — flags de entorno de lectura
+# PEREZOSA (se leen en cada uso, en core/webhook.py, NO aquí: así se apagan sin
+# reiniciar la app). OPT-IN, apagado por defecto (nada sale a internet sin decisión
+# explícita del usuario). Se documentan aquí como catálogo:
+#   WEBHOOK_ENABLED (default "false")     — enciende el POST al cerrar una reunión persistida.
+#   WEBHOOK_URL (default "")              — destino https del POST (patrón Fireflies).
+#   WEBHOOK_SCOPE (default "pendientes")  — "pendientes" (metadatos + pendientes) | "acta"
+#       (además minutes_json + capítulos). El transcript crudo NUNCA se envía.
+#   WEBHOOK_SECRET (runtime)             — secreto de firma HMAC; en disco vive cifrado como
+#       WEBHOOK_SECRET_ENC (DPAPI), descifrado arriba. Nunca se devuelve en GET /api/settings.
+#   WEBHOOK_ALLOW_LOCAL (default "false") — opt-in para permitir destinos internos (LAN,
+#       loopback) y http:// (anti-SSRF relajado, bajo riesgo del usuario).
+#   PENDING_EXPORT_DIR (default "")       — dead-drop LOCAL: si está seteado, escribe los
+#       pendientes del acta a <dir>/vflow-pendientes-<id>-<fecha>.md. Local, sin anti-SSRF.
 
 # Proactividad en reunión (Ola 5) — flags de entorno de lectura PEREZOSA (se leen
 # en cada uso, en core/meeting.py y core/proactive.py, NO aquí: así se apagan sin

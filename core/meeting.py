@@ -52,6 +52,7 @@ from core.assistant import _search_terms as _assistant_search_terms
 from core.transcriber import Transcriber
 from core import insights as _insights
 from core import meeting_export as _export
+from core import webhook as _webhook
 from core import meeting_metrics as _metrics
 from core import meeting_templates as _templates
 from core import proactive as _proactive
@@ -638,6 +639,22 @@ class MeetingSession:
                 }, MEETINGS_DIR)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Export a markdown falló: %s", exc)
+
+        # Webhook saliente + dead-drop de pendientes (unidad 6.1), fire-and-forget en
+        # hilo daemon: un fallo de red JAMÁS bloquea ni propaga a stop(). Si la reunión
+        # NO se persistió (meeting_id None) el webhook no dispara (lo loguea dentro).
+        try:
+            _webhook.dispatch_async({
+                "id": meeting_id,
+                "title": (f"Reunión {self._started_at or ''}".strip()),
+                "started_at": self._started_at,
+                "duration_seconds": duration,
+                "minutes_json": json.dumps(minutes, ensure_ascii=False),
+                "insights_json": json.dumps(insights, ensure_ascii=False),
+                "chapters_json": json.dumps(chapters, ensure_ascii=False),
+            }, meeting_id)
+        except Exception as exc:  # noqa: BLE001  (defensa extra; dispatch_async ya aísla)
+            logger.warning("No se pudo disparar el webhook: %s", exc)
 
         metrics = self._fluidity_metrics()
         logger.info("Reunión detenida: %.0fs, %d segmentos (guardada=%s).", duration, len(segments), saved)

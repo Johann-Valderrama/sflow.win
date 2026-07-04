@@ -9,6 +9,7 @@ groq
 anthropic
 python-dotenv
 flask
+requests
 faster-whisper
 pyaudiowpatch
 yt-dlp

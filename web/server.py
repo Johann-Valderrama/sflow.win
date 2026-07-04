@@ -739,7 +739,7 @@ HTML_TEMPLATE = """
                             <label for="cfg-save-history" class="text-xs text-white/55 block mb-1">Guardar historial</label>
                             <div class="flex items-center gap-2" style="height:32px">
                                 <label class="toggle-switch">
-                                    <input type="checkbox" id="cfg-save-history">
+                                    <input type="checkbox" id="cfg-save-history" onchange="updateWebhookHistoryWarn()">
                                     <span class="toggle-slider"></span>
                                 </label>
                                 <span class="text-xs text-white/55">Guardar transcripciones</span>
@@ -826,6 +826,65 @@ HTML_TEMPLATE = """
                     </div>
                     <div id="cfg-insights-claudecli-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
                         <p class="text-xs text-white/55">Usa tu suscripción de Claude vía Claude Code (requiere <code class="text-white/70">claude</code> instalado y logueado, sin API key). Sirve para acta, Asistente y análisis en vivo. <strong class="text-white/70">Consume la cuota de tu plan</strong> (Pro/Max): una reunión larga con análisis en vivo puede gastar decenas de mensajes. Modelos: <code class="text-white/70">CLAUDE_CLI_MODEL_LIVE</code> (haiku) y <code class="text-white/70">CLAUDE_CLI_MODEL_BATCH</code> (sonnet). Claude Code guarda transcripts locales propios.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sección: Webhook (unidad 6.1) -->
+            <div class="set-sec collapsed" id="sec-webhook" style="--sec-accent:rgba(56,189,248,.6)">
+                <button type="button" class="set-sec-head" onclick="toggleSetSec('webhook')" aria-expanded="false" aria-controls="sec-webhook-body">
+                    <span class="set-sec-title"><svg class="set-sec-chev ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span class="set-dot" style="background:rgba(56,189,248,.85)"></span>Webhook (al cerrar reunión)</span>
+                    <span class="set-sec-toggle"><span class="set-sec-toggle-label">Mostrar</span></span>
+                </button>
+                <div id="sec-webhook-body" class="set-sec-body space-y-3">
+                    <p class="text-xs text-white/55">Cuando una reunión se cierra y queda guardada con acta, Vflow puede hacer un <strong>POST JSON</strong> a una URL tuya (patrón Fireflies), firmado con HMAC-SHA256. <strong>Apagado por defecto</strong>: nada sale a internet sin que lo actives.</p>
+                    <div>
+                        <label class="flex items-center gap-2" style="height:32px">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="cfg-webhook-enabled" onchange="updateWebhookHistoryWarn()">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="text-xs text-white/55">Activar webhook al generar el acta</span>
+                        </label>
+                    </div>
+                    <div id="cfg-webhook-history-warn" class="text-xs text-amber-300/80 hidden">⚠ Con el historial desactivado la reunión no se guarda, así que el webhook <strong>nunca disparará</strong>. Actívalo en Historial.</div>
+                    <div>
+                        <label for="cfg-webhook-url" class="text-xs text-white/55 block mb-1">URL de destino (https)</label>
+                        <input type="text" id="cfg-webhook-url" placeholder="https://tu-servidor.com/hooks/vflow" autocomplete="off"
+                            class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-sky-500/60 focus:border-white/45 w-full">
+                    </div>
+                    <div>
+                        <label for="cfg-webhook-scope" class="text-xs text-white/55 block mb-1">Qué enviar</label>
+                        <select id="cfg-webhook-scope" class="cfg-select">
+                            <option value="pendientes">Solo pendientes (id, título, fecha, duración + pendientes)</option>
+                            <option value="acta">Acta completa (resumen, decisiones, notas + capítulos)</option>
+                        </select>
+                        <p class="text-xs text-white/40 mt-1">La transcripción cruda <strong>nunca</strong> se envía. Con "Acta completa", tus notas del usuario van <strong>literales</strong> en el payload.</p>
+                    </div>
+                    <div>
+                        <label for="cfg-webhook_secret-key" class="text-xs text-white/55 block mb-1">Secreto de firma (HMAC) <span id="webhook_secret-key-status" class="ml-1 text-xs text-white/45"></span></label>
+                        <div class="flex gap-2">
+                            <input type="password" id="cfg-webhook_secret-key" placeholder="whsec_…" autocomplete="off"
+                                class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-sky-500/60 focus:border-white/45 flex-1">
+                            <button type="button" onclick="saveApiKey('webhook_secret')" class="text-xs px-3 py-1.5 rounded bg-sky-600/30 text-sky-300 hover:bg-sky-600/50 focus:outline-none focus:ring-2 focus:ring-sky-500/60 whitespace-nowrap">Guardar</button>
+                        </div>
+                        <p class="text-xs text-white/40 mt-1">Se guarda cifrado (DPAPI) en este equipo y nunca se muestra de vuelta. El header <code class="text-white/70">X-Vflow-Signature: sha256=…</code> firma el body con este secreto.</p>
+                    </div>
+                    <div>
+                        <label class="flex items-center gap-2" style="height:32px">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="cfg-webhook-allow-local">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="text-xs text-white/55">Permitir destinos internos / http:// (LAN, localhost)</span>
+                        </label>
+                        <p class="text-xs text-white/40 mt-1">⚠ Relaja la protección anti-SSRF. Actívalo solo si integras con un servicio en tu propia red, bajo tu riesgo. Por defecto solo se permite <code class="text-white/70">https://</code> a destinos públicos.</p>
+                    </div>
+                    <div>
+                        <label for="cfg-pending-export-dir" class="text-xs text-white/55 block mb-1">Exportar pendientes a carpeta (dead-drop local)</label>
+                        <input type="text" id="cfg-pending-export-dir" placeholder="C:\\OPS\\_inbox\\pendientes" autocomplete="off"
+                            class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-sky-500/60 focus:border-white/45 w-full">
+                        <p class="text-xs text-white/40 mt-1">Si la pones, al cerrar cada reunión se escribe un <code class="text-white/70">.md</code> con los pendientes (checklist) en esa carpeta. Vacío = apagado. Es local, no usa la red.</p>
                     </div>
                 </div>
             </div>
@@ -1661,6 +1720,13 @@ HTML_TEMPLATE = """
             document.getElementById('cfg-insights-backend-batch').value = settings.insights_backend_batch || 'groq';
             document.getElementById('cfg-insights-model').value = settings.insights_endpoint_model || 'qwen/qwen2.5-vl-7b';
             document.getElementById('cfg-insights-fallback').checked = settings.insights_fallback !== false;
+            // Webhook saliente (unidad 6.1)
+            document.getElementById('cfg-webhook-enabled').checked = settings.webhook_enabled === true;
+            document.getElementById('cfg-webhook-url').value = settings.webhook_url || '';
+            document.getElementById('cfg-webhook-scope').value = settings.webhook_scope || 'pendientes';
+            document.getElementById('cfg-webhook-allow-local').checked = settings.webhook_allow_local === true;
+            document.getElementById('cfg-pending-export-dir').value = settings.pending_export_dir || '';
+            updateWebhookHistoryWarn();
             onInsightsBackendChange();
             updateLocalModelSection();
             refreshLocalModelStatus();
@@ -1685,6 +1751,11 @@ HTML_TEMPLATE = """
                 insights_backend_batch: document.getElementById('cfg-insights-backend-batch').value,
                 insights_endpoint_model: document.getElementById('cfg-insights-model').value.trim(),
                 insights_fallback: document.getElementById('cfg-insights-fallback').checked ? 'true' : 'false',
+                webhook_enabled: document.getElementById('cfg-webhook-enabled').checked ? 'true' : 'false',
+                webhook_url: document.getElementById('cfg-webhook-url').value.trim(),
+                webhook_scope: document.getElementById('cfg-webhook-scope').value,
+                webhook_allow_local: document.getElementById('cfg-webhook-allow-local').checked ? 'true' : 'false',
+                pending_export_dir: document.getElementById('cfg-pending-export-dir').value.trim(),
             };
             await fetch('/api/settings', {
                 method: 'POST',
@@ -1695,6 +1766,15 @@ HTML_TEMPLATE = """
             saved.style.opacity = '1';
             setTimeout(() => { saved.style.opacity = '0'; }, 2000);
             _refreshSidebarStatus();  // el pie del sidebar refleja backend/fuente al instante
+        }
+
+        // Muestra el aviso de que sin historial el webhook nunca dispara (O8).
+        function updateWebhookHistoryWarn() {
+            const warn = document.getElementById('cfg-webhook-history-warn');
+            if (!warn) return;
+            const enabled = document.getElementById('cfg-webhook-enabled').checked;
+            const saveHist = document.getElementById('cfg-save-history').checked;
+            warn.classList.toggle('hidden', !(enabled && !saveHist));
         }
 
         // --- Presets de un clic para el backend de insights ---
@@ -1736,7 +1816,7 @@ HTML_TEMPLATE = """
             const lbl = sec.querySelector('.set-sec-toggle-label');
             if (head) head.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
             if (lbl) lbl.textContent = collapsed ? 'Mostrar' : 'Ocultar';
-            if (!collapsed && id === 'apikeys') loadApiKeyStatus();
+            if (!collapsed && (id === 'apikeys' || id === 'webhook')) loadApiKeyStatus();
         }
 
         function setNavGo(id) {
@@ -1772,6 +1852,7 @@ HTML_TEMPLATE = """
                 set('groq-key-status', s.groq);
                 set('openrouter-key-status', s.openrouter);
                 set('anthropic-key-status', s.anthropic);
+                set('webhook_secret-key-status', s.webhook_secret);
             } catch (e) {}
         }
 
@@ -3658,6 +3739,9 @@ _SECRET_KEYS = {
     "groq": "GROQ_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
+    # Secreto de firma HMAC del webhook saliente (unidad 6.1). Mismo mecanismo DPAPI:
+    # se guarda como WEBHOOK_SECRET_ENC y NUNCA se devuelve en GET /api/settings.
+    "webhook_secret": "WEBHOOK_SECRET",
 }
 
 
@@ -3737,6 +3821,13 @@ def get_settings():
         "claude_cli_available": _insights._claude_cli_path() is not None,
         "has_groq_key": bool(os.getenv("GROQ_API_KEY", "").strip()),
         "has_openrouter_key": bool(os.getenv("OPENROUTER_API_KEY", "").strip()),
+        # Webhook saliente (unidad 6.1). El secreto NUNCA se devuelve: solo un booleano.
+        "webhook_enabled": os.getenv("WEBHOOK_ENABLED", "false").strip().lower() == "true",
+        "webhook_url": os.getenv("WEBHOOK_URL", ""),
+        "webhook_scope": (os.getenv("WEBHOOK_SCOPE", "pendientes").strip().lower() or "pendientes"),
+        "webhook_allow_local": os.getenv("WEBHOOK_ALLOW_LOCAL", "false").strip().lower() == "true",
+        "has_webhook_secret": bool(os.getenv("WEBHOOK_SECRET", "").strip()),
+        "pending_export_dir": os.getenv("PENDING_EXPORT_DIR", ""),
     })
 
 
@@ -3767,6 +3858,13 @@ def update_settings():
         "anthropic_model_live": "ANTHROPIC_MODEL_LIVE",
         "anthropic_model_batch": "ANTHROPIC_MODEL_BATCH",
         "claude_cli_model_batch": "CLAUDE_CLI_MODEL_BATCH",
+        # Webhook saliente (unidad 6.1). El secreto NO va aquí: se guarda cifrado por
+        # /api/keys (write-only). Estas son las opciones no-secretas del webhook.
+        "webhook_enabled": "WEBHOOK_ENABLED",
+        "webhook_url": "WEBHOOK_URL",
+        "webhook_scope": "WEBHOOK_SCOPE",
+        "webhook_allow_local": "WEBHOOK_ALLOW_LOCAL",
+        "pending_export_dir": "PENDING_EXPORT_DIR",
     }
     for field, env_key in allowed.items():
         if field in data:
