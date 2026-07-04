@@ -9,6 +9,7 @@ from pynput.keyboard import Controller, Key
 logger = logging.getLogger(__name__)
 
 _saved_hwnd = None
+_saved_exe = None  # basename del .exe en foco al momento de save_frontmost_app() (best-effort)
 
 # ---------------------------------------------------------------------------
 # Win32 API type annotations (critical for 64-bit Windows)
@@ -41,14 +42,83 @@ _kernel32.GlobalUnlock.restype = ctypes.wintypes.BOOL
 _kernel32.GlobalFree.argtypes = [ctypes.wintypes.HGLOBAL]
 _kernel32.GlobalFree.restype = ctypes.wintypes.HGLOBAL
 
+# ---------------------------------------------------------------------------
+# Resolución HWND → nombre de proceso (unidad 6.3, modos de dictado por app).
+# Cero dependencias nuevas: ctypes puro sobre user32/kernel32.
+# ---------------------------------------------------------------------------
+_user32.GetWindowThreadProcessId.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD)]
+_user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+_kernel32.OpenProcess.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD]
+_kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+_kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+_kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+
+# QueryFullProcessImageNameW vive en kernel32 (Vista+).
+_kernel32.QueryFullProcessImageNameW.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.LPWSTR,
+    ctypes.POINTER(ctypes.wintypes.DWORD),
+]
+_kernel32.QueryFullProcessImageNameW.restype = ctypes.wintypes.BOOL
+
+
+def _get_foreground_exe_name(hwnd) -> "str | None":
+    """Resuelve el basename del .exe en foco a partir de su HWND. Best-effort:
+    cualquier fallo (proceso protegido, API no disponible, etc.) devuelve None
+    sin lanzar, y el caller trata eso como "sin reformateo" (unidad 6.3)."""
+    try:
+        pid = ctypes.wintypes.DWORD(0)
+        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if not pid.value:
+            return None
+        h_process = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+        if not h_process:
+            return None
+        try:
+            buf_len = ctypes.wintypes.DWORD(260)
+            buf = ctypes.create_unicode_buffer(buf_len.value)
+            ok = _kernel32.QueryFullProcessImageNameW(h_process, 0, buf, ctypes.byref(buf_len))
+            if not ok:
+                return None
+            full_path = buf.value
+            return os.path.basename(full_path) if full_path else None
+        finally:
+            _kernel32.CloseHandle(h_process)
+    except Exception as e:
+        logger.debug("No se pudo resolver el exe de la ventana en foco: %s", e)
+        return None
+
 
 def save_frontmost_app():
-    """Save the currently focused window before recording starts."""
-    global _saved_hwnd
+    """Save the currently focused window before recording starts.
+
+    También captura (best-effort, unidad 6.3) el nombre del .exe en foco en
+    este mismo instante — mientras la ventana destino AÚN tiene el foco, antes
+    de que empiece la grabación. Si falla, ``_saved_exe`` queda en None y
+    simplemente no habrá reformateo de dictado para esta grabación.
+    """
+    global _saved_hwnd, _saved_exe
     try:
         _saved_hwnd = _user32.GetForegroundWindow()
     except Exception as e:
         logger.warning("Failed to save foreground window: %s", e)
+        _saved_hwnd = None
+    _saved_exe = _get_foreground_exe_name(_saved_hwnd) if _saved_hwnd else None
+
+
+def get_saved_exe() -> "str | None":
+    """Devuelve el basename del .exe capturado en el último ``save_frontmost_app()``.
+
+    NO lo consume/limpia (a diferencia de ``_saved_hwnd``, que ``paste_text``
+    resetea a None tras usarlo): el flujo de reformateo de 6.3 lo lee en el hilo
+    background de transcripción, en un momento distinto a cuando ``paste_text``
+    consume el HWND. Se sobrescribe en el próximo ``save_frontmost_app()``.
+    """
+    return _saved_exe
 
 
 def _set_clipboard_text(text: str):

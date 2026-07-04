@@ -186,6 +186,14 @@ MEETINGS_DIR = os.getenv("MEETINGS_DIR", os.path.join(_DATA_DIR, "meetings"))
 #   PENDING_EXPORT_DIR (default "")       — dead-drop LOCAL: si está seteado, escribe los
 #       pendientes del acta a <dir>/vflow-pendientes-<id>-<fecha>.md. Local, sin anti-SSRF.
 
+# Modos de dictado por app activa (unidad 6.3) — flags de entorno de lectura
+# PEREZOSA (se leen en cada dictado, en core/dictation_modes.py, NO aquí: así se
+# apagan sin reiniciar la app). OPT-IN, apagado por defecto.
+#   DICTATION_MODES_ENABLED (default "false") — activa el reformateo LLM post-dictado.
+#   DICTATION_MODE_MAP (default: ver core/dictation_modes.DEFAULT_MODE_MAP) —
+#       mapa "exe:preset,exe:preset,..." (presets: email | chat | codigo). App no
+#       mapeada → sin reformateo (pega el texto tal cual, comportamiento actual).
+
 # Proactividad en reunión (Ola 5) — flags de entorno de lectura PEREZOSA (se leen
 # en cada uso, en core/meeting.py y core/proactive.py, NO aquí: así se apagan sin
 # reiniciar la app). Se documentan aquí como catálogo:

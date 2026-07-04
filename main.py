@@ -55,7 +55,8 @@ from core.recorder import AudioRecorder
 from core.transcriber import Transcriber
 from core.hotkey import HotkeyListener
 from core.meeting import MEETING
-from core.clipboard import paste_text, copy_text, save_frontmost_app
+from core.clipboard import paste_text, copy_text, save_frontmost_app, get_saved_exe
+from core import dictation_modes
 from core.secrets import encrypt
 from core import proactive as _proactive
 from core.proactive import PROACTIVE, LullDetector, MonologueWatch
@@ -695,11 +696,38 @@ class VflowApp(QObject):
                         )
 
             if text.strip():
-                if raw_full is not None and raw_full.strip() == text.strip():
+                text = text.strip()
+                if raw_full is not None and raw_full.strip() == text:
                     raw_full = None
+
+                # Modos de dictado por app activa (unidad 6.3) — opt-in, apagado por
+                # defecto. Solo aplica al dictado normal (modo 1/2): NO en traducción
+                # (translate=True) ni en modo reunión/AUDIO_SOURCE=system (no hay app
+                # destino con foco real; el HUD/panel de reunión usa su propio flujo).
+                if (
+                    not translate
+                    and self.recorder.source != "system"
+                    and dictation_modes.modes_enabled()
+                ):
+                    exe_name = get_saved_exe()
+                    preset = dictation_modes.preset_for_exe(exe_name)
+                    if preset:
+                        reformatted = dictation_modes.reformat_text(text, preset)
+                        if reformatted and reformatted != text:
+                            # El texto MÁS crudo va a raw_full: si el diccionario ya
+                            # había producido un raw_full (crudo pre-diccionario),
+                            # ese sigue siendo más crudo que el post-diccionario/
+                            # pre-reformateo — se conserva. Si no había raw_full aún
+                            # (diccionario no cambió nada), el pre-reformateo pasa a
+                            # ser el crudo, para que el Undo (6.2) revierta también
+                            # el reformateo del LLM.
+                            if raw_full is None:
+                                raw_full = text
+                            text = reformatted
+
                 if raw_full is not None:
                     self._pending_raw[gen] = raw_full.strip()
-                self.transcription_done.emit(text.strip(), duration, gen)
+                self.transcription_done.emit(text, duration, gen)
             else:
                 self.transcription_error.emit("No speech detected", gen)
         except Exception as e:

@@ -16,6 +16,7 @@ from core import meeting_templates as _meeting_templates
 from core import insights as _insights
 from core import assistant as _assistant
 from core import proactive as _proactive
+from core import dictation_modes as _dictation_modes
 
 # ---------------------------------------------------------------------------
 # Estado de descarga del modelo local (compartido entre endpoints)
@@ -885,6 +886,32 @@ HTML_TEMPLATE = """
                         <input type="text" id="cfg-pending-export-dir" placeholder="C:\\OPS\\_inbox\\pendientes" autocomplete="off"
                             class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-sky-500/60 focus:border-white/45 w-full">
                         <p class="text-xs text-white/40 mt-1">Si la pones, al cerrar cada reunión se escribe un <code class="text-white/70">.md</code> con los pendientes (checklist) en esa carpeta. Vacío = apagado. Es local, no usa la red.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sección: Modos de dictado por app activa (unidad 6.3) -->
+            <div class="set-sec collapsed" id="sec-dictation-modes" style="--sec-accent:rgba(52,211,153,.6)">
+                <button type="button" class="set-sec-head" onclick="toggleSetSec('dictation-modes')" aria-expanded="false" aria-controls="sec-dictation-modes-body">
+                    <span class="set-sec-title"><svg class="set-sec-chev ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span class="set-dot" style="background:rgba(52,211,153,.85)"></span>Modos de dictado por app</span>
+                    <span class="set-sec-toggle"><span class="set-sec-toggle-label">Mostrar</span></span>
+                </button>
+                <div id="sec-dictation-modes-body" class="set-sec-body space-y-3">
+                    <p class="text-xs text-white/55">Reformatea el texto dictado con IA según la app donde vas a pegarlo: <strong>email</strong> (puntuación formal, párrafos), <strong>chat</strong> (casual, conciso) o <strong>código</strong> (términos técnicos intactos). <strong>Apagado por defecto</strong>: sin esto activado, el dictado se pega exactamente igual que hoy.</p>
+                    <div>
+                        <label class="flex items-center gap-2" style="height:32px">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="cfg-dictation-modes-enabled">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="text-xs text-white/55">Activar modos de dictado por app</span>
+                        </label>
+                    </div>
+                    <div>
+                        <label for="cfg-dictation-mode-map" class="text-xs text-white/55 block mb-1">Mapa app → preset</label>
+                        <textarea id="cfg-dictation-mode-map" rows="3" spellcheck="false" placeholder="outlook.exe:email,slack.exe:chat,code.exe:codigo"
+                            class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-emerald-500/60 focus:border-white/45 w-full font-mono"></textarea>
+                        <p class="text-xs text-white/40 mt-1">Formato: <code class="text-white/70">exe:preset,exe:preset,...</code>. Presets válidos: <code class="text-white/70">email</code>, <code class="text-white/70">chat</code>, <code class="text-white/70">codigo</code>. App no listada = sin reformateo (se pega tal cual). Usa el backend batch configurado arriba (análisis de reuniones) — si ese backend es "Claude (tu suscripción)", el reformateo se salta automáticamente por latencia.</p>
                     </div>
                 </div>
             </div>
@@ -1776,6 +1803,9 @@ HTML_TEMPLATE = """
             document.getElementById('cfg-webhook-scope').value = settings.webhook_scope || 'pendientes';
             document.getElementById('cfg-webhook-allow-local').checked = settings.webhook_allow_local === true;
             document.getElementById('cfg-pending-export-dir').value = settings.pending_export_dir || '';
+            // Modos de dictado por app activa (unidad 6.3)
+            document.getElementById('cfg-dictation-modes-enabled').checked = settings.dictation_modes_enabled === true;
+            document.getElementById('cfg-dictation-mode-map').value = settings.dictation_mode_map || '';
             updateWebhookHistoryWarn();
             onInsightsBackendChange();
             updateLocalModelSection();
@@ -1806,6 +1836,8 @@ HTML_TEMPLATE = """
                 webhook_scope: document.getElementById('cfg-webhook-scope').value,
                 webhook_allow_local: document.getElementById('cfg-webhook-allow-local').checked ? 'true' : 'false',
                 pending_export_dir: document.getElementById('cfg-pending-export-dir').value.trim(),
+                dictation_modes_enabled: document.getElementById('cfg-dictation-modes-enabled').checked ? 'true' : 'false',
+                dictation_mode_map: document.getElementById('cfg-dictation-mode-map').value.trim(),
             };
             await fetch('/api/settings', {
                 method: 'POST',
@@ -3964,6 +3996,9 @@ def get_settings():
         "webhook_allow_local": os.getenv("WEBHOOK_ALLOW_LOCAL", "false").strip().lower() == "true",
         "has_webhook_secret": bool(os.getenv("WEBHOOK_SECRET", "").strip()),
         "pending_export_dir": os.getenv("PENDING_EXPORT_DIR", ""),
+        # Modos de dictado por app activa (unidad 6.3)
+        "dictation_modes_enabled": os.getenv("DICTATION_MODES_ENABLED", "false").strip().lower() == "true",
+        "dictation_mode_map": os.getenv("DICTATION_MODE_MAP", _dictation_modes.DEFAULT_MODE_MAP),
     })
 
 
@@ -4001,6 +4036,9 @@ def update_settings():
         "webhook_scope": "WEBHOOK_SCOPE",
         "webhook_allow_local": "WEBHOOK_ALLOW_LOCAL",
         "pending_export_dir": "PENDING_EXPORT_DIR",
+        # Modos de dictado por app activa (unidad 6.3)
+        "dictation_modes_enabled": "DICTATION_MODES_ENABLED",
+        "dictation_mode_map": "DICTATION_MODE_MAP",
     }
     for field, env_key in allowed.items():
         if field in data:
