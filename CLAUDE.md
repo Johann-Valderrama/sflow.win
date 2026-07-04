@@ -257,6 +257,30 @@ raíz), autodescubierto por Claude Code vía `.mcp.json`; NO se bundlea en el .e
   principio con aviso si es muy largo, cita timestamps mm:ss (sin IDs) y no llama al LLM si el
   transcript está vacío.
 
+### 14. Patrón Granola — presupuesto, notas, trazabilidad y plantillas (Ola 4, jul 2026)
+
+- **Presupuesto de contexto del acta**: `generate_minutes`/`generate_chapters` truncan el
+  transcript **por el principio** (conservan el final, más relevante) cuando excede el límite del
+  backend batch activo, con aviso explícito en el acta ("[transcript truncado...: faltan los
+  primeros X minutos]"). Límite por backend: `endpoint` 18KB / `claude-cli` 40KB / resto 80KB.
+  Helper compartido `insights.budget_chars(task)`.
+- **Fusión de notas del usuario**: las notas en vivo (📝) entran al acta bajo la clave
+  `notas_usuario` (`[{time, nota, contexto}]`); `nota` es el texto LITERAL del usuario (protegido
+  por post-proceso, nunca parafraseado por el LLM) y `contexto` es la interpretación de la IA. Los
+  temas anotados reciben prioridad en el resumen (instrucción condicional al prompt, solo si hay
+  notas). Se renderiza en dashboard, export markdown, Asistente de reuniones y MCP `get_minutes`.
+- **Trazabilidad (lupa)**: `decisiones` pasó a `[{texto, t?}]` y `pendientes` gana `t` opcional; el
+  LLM da timestamp `mm:ss` y Python lo snapea al segmento del transcript más cercano. En el visor
+  de `/reunion`, cada bullet con `t` es un chip `mm:ss` clicable que salta al segmento y lo
+  flashea. Actas viejas (bullets como string plano) siguen renderizando sin romper.
+- **Plantillas por tipo de reunión** (`core/meeting_templates.py`): 4 plantillas — general, ventas,
+  1:1, clase. Selector en `/reunion` junto a "Iniciar"; el atajo global AltGr+R usa la misma
+  plantilla activa. Se persiste por reunión (columna `template` en `meetings`, migración
+  idempotente) y moldea tres cosas: énfasis del acta (ventas añade la clave condicional `"bant"`
+  solo cuando hay evidencia explícita de Budget/Authority/Need/Timeline en el transcript, nunca
+  inventada), los chips del chat en vivo, y el rol/tono del Asistente de reuniones. Endpoint
+  `POST /api/meeting/template`.
+
 ## Security & Privacy
 
 ### 1. API Key Encryption (DPAPI)

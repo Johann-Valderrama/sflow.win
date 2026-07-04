@@ -320,18 +320,25 @@ total). Fathom aporta el patrón de inmediatez; superwhisper/Wispr Flow los patr
 
 ## Patrones robables (impacto/esfuerzo, del informe de benchmarks)
 
-1. **"Mis notas" en vivo + Mejorar con IA** (Granola core): panel donde el usuario tira
+1. ~~**"Mis notas" en vivo + Mejorar con IA** (Granola core): panel donde el usuario tira
    bullets durante la reunión; al terminar, el LLM los fusiona con el transcript y el acta
-   destaca lo humano. Ya tenemos transcript + insights + LLM: esfuerzo medio, impacto máximo.
+   destaca lo humano. Ya tenemos transcript + insights + LLM: esfuerzo medio, impacto máximo.~~
+   **HECHO 2026-07-03** (commit f80986d): clave `notas_usuario` en el acta ({time, nota literal,
+   contexto de la IA}), prioridad al resumen si hay notas; ver CLAUDE.md sección 14.
 2. **Acta instantánea al colgar** (Fathom): generar el acta automáticamente al terminar la
    captura, sin botón. Cero espera percibida.
 3. ~~**Atajo Highlight en vivo** (Fathom): AltGr+H marca timestamp; los momentos marcados
    aparecen destacados en el acta. Esfuerzo bajo (es solo marcar tiempo).~~
    **HECHO 2026-07-03** (commit 37bbfd4).
-4. **Lupa de trazabilidad** (Granola): cada bullet del acta enlaza al fragmento del transcript
-   origen. Confianza barata (tenemos timestamps por segmento).
-5. **Plantillas por tipo de reunión** que definen la estructura del acta (ya estaba en el
-   backlog Proactor; Granola confirma que es de lo más valorado).
+4. ~~**Lupa de trazabilidad** (Granola): cada bullet del acta enlaza al fragmento del transcript
+   origen. Confianza barata (tenemos timestamps por segmento).~~
+   **HECHO 2026-07-03** (commit e9f1016): decisiones/pendientes con `t` opcional snapeado al
+   segmento más cercano, chip mm:ss clicable en `/reunion`; ver CLAUDE.md sección 14.
+5. ~~**Plantillas por tipo de reunión** que definen la estructura del acta (ya estaba en el
+   backlog Proactor; Granola confirma que es de lo más valorado).~~
+   **HECHO 2026-07-03** (commit e4900d5): 4 plantillas (general/ventas/1:1/clase) en
+   `core/meeting_templates.py`, columna `template` por reunión, clave condicional `bant` en
+   ventas; ver CLAUDE.md sección 14.
 6. **Undo AI Edit / ver crudo** (Wispr Flow): toggle raw/procesado en cada transcripción
    (guardamos el raw: esfuerzo mínimo).
 7. **Diccionario que aprende**: al detectar corrección manual de un dictado, sugerir entrada
