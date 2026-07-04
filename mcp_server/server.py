@@ -83,11 +83,17 @@ def search_meetings(query: str = "", limit: int = 10) -> dict:
 def get_minutes(meeting_id: int) -> dict:
     """Devuelve el acta de una reunión: resumen, decisiones, temas, pendientes,
     propuestas, citas (todo lo que contenga el acta) más los capítulos con timestamp.
-    El acta puede incluir además "momentos_destacados" (instantes que el usuario
-    marcó en vivo con AltGr+H, con su timestamp y contexto breve) cuando el usuario
-    marcó alguno durante la reunión. minutes=null si la reunión aún no tiene acta
-    generada. Incluye además "metrics" (dict o null): métricas de conversación
-    Yo/Ellos calculadas al terminar la reunión — talk_yo_s/talk_ellos_s, pct_yo/
+    "decisiones" es una lista de objetos {"texto": str, "t": float opcional} — "t" son
+    los segundos (snapeados al segmento real más cercano del transcript) del instante
+    donde se tomó la decisión, presente solo si el LLM lo identificó con confianza;
+    actas ANTIGUAS pueden traer "decisiones" como lista de strings planos (formato
+    previo a la trazabilidad, sin "t"). "pendientes" sigue la misma convención: cada
+    dict puede traer "t" opcional además de texto/responsable/fecha/hora. El acta
+    puede incluir además "momentos_destacados" (instantes que el usuario marcó en
+    vivo con AltGr+H, con su timestamp y contexto breve) cuando el usuario marcó
+    alguno durante la reunión. minutes=null si la reunión aún no tiene acta generada.
+    Incluye además "metrics" (dict o null): métricas de conversación Yo/Ellos
+    calculadas al terminar la reunión — talk_yo_s/talk_ellos_s, pct_yo/
     pct_ellos, talk_to_listen, longest_monologue_*, turns_approx (aproximado por
     alternancia de speaker en el transcript, no solapes reales), questions_*,
     wpm_* y duration_s. Passthrough de metrics_json; null en reuniones antiguas

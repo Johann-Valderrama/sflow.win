@@ -114,6 +114,18 @@ def _budget_chars() -> int:
 # Formatters
 # ---------------------------------------------------------------------------
 
+def _format_time_suffix(item: dict) -> str:
+    """Sufijo ' (mm:ss)' si el item trae un 't' snapeado (segundos); '' si no."""
+    t = item.get("t")
+    if t is None:
+        return ""
+    try:
+        secs = int(float(t))
+    except (TypeError, ValueError):
+        return ""
+    return f" ({secs // 60}:{secs % 60:02d})"
+
+
 def _format_acta(minutes: dict) -> str:
     """Convierte minutes_json (dict) a texto legible y compacto."""
     try:
@@ -150,8 +162,16 @@ def _format_acta(minutes: dict) -> str:
 
         decisiones = minutes.get("decisiones") or []
         if decisiones:
-            lines = "\n".join(f"- {d}" for d in decisiones if d)
-            parts.append(f"Decisiones:\n{lines}")
+            dlines = []
+            for d in decisiones:
+                if isinstance(d, dict):
+                    txt = d.get("texto") or d.get("text") or ""
+                    if txt:
+                        dlines.append(f"- {txt}{_format_time_suffix(d)}")
+                elif isinstance(d, str) and d:
+                    dlines.append(f"- {d}")
+            if dlines:
+                parts.append("Decisiones:\n" + "\n".join(dlines))
 
         pendientes = minutes.get("pendientes") or []
         if pendientes:
@@ -166,7 +186,7 @@ def _format_acta(minutes: dict) -> str:
                     if fecha_hora:
                         meta.append(fecha_hora)
                     suffix = f" ({', '.join(meta)})" if meta else ""
-                    plines.append(f"- {txt}{suffix}")
+                    plines.append(f"- {txt}{suffix}{_format_time_suffix(p)}")
                 elif isinstance(p, str):
                     plines.append(f"- {p}")
             if plines:

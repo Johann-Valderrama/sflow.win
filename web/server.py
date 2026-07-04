@@ -1977,9 +1977,20 @@ HTML_TEMPLATE = """
             if (mom.length) html += '<div><div class="text-xs text-yellow-300/50 mt-2 mb-1">⭐ Momentos destacados</div>'
                 + mom.map(x => '<div class="text-xs text-white/75">'+ICONS.star+' <span class="text-white/50">' + escapeHtml(String(x.time || '')) + '</span> ' + escapeHtml(String(x.texto || '')) + '</div>').join('') + '</div>';
             if (dec.length) html += '<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'
-                + dec.map(d => '<div class="text-xs text-white/75">• ' + escapeHtml(String(d)) + '</div>').join('') + '</div>';
+                + dec.map(d => {
+                    const isObj = d && typeof d === 'object';
+                    const texto = isObj ? (d.texto || '') : String(d);
+                    const t = isObj ? d.t : null;
+                    const timeStr = (t != null && !isNaN(t)) ? ' <span class="text-white/25">(' + Math.floor(t / 60) + ':' + String(Math.round(t) % 60).padStart(2, '0') + ')</span>' : '';
+                    return '<div class="text-xs text-white/75">• ' + escapeHtml(texto) + timeStr + '</div>';
+                }).join('') + '</div>';
             if (pen.length) html += '<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'
-                + pen.map(p => '<div class="text-xs text-white/75">'+ICONS.arrow+' ' + escapeHtml(String(p.texto || p)) + pendMeta(p) + '</div>').join('') + '</div>';
+                + pen.map(p => {
+                    const isObj = p && typeof p === 'object';
+                    const t = isObj ? p.t : null;
+                    const timeStr = (t != null && !isNaN(t)) ? ' <span class="text-white/25">(' + Math.floor(t / 60) + ':' + String(Math.round(t) % 60).padStart(2, '0') + ')</span>' : '';
+                    return '<div class="text-xs text-white/75">'+ICONS.arrow+' ' + escapeHtml(String(p.texto || p)) + pendMeta(p) + timeStr + '</div>';
+                }).join('') + '</div>';
             if (prop.length) html += '<div><div class="text-xs text-sky-300/50 mt-2 mb-1">Propuestas</div>'
                 + prop.map(p => '<div class="text-xs text-white/75">'+ICONS.bulb+' ' + escapeHtml(String(p.texto != null ? p.texto : p)) + '</div>').join('') + '</div>';
             if (cit.length) html += '<div><div class="text-xs text-emerald-300/50 mt-2 mb-1">Próximas reuniones</div>'
@@ -3077,13 +3088,27 @@ function metricsPanel(metrics){
   h+='</div>';
   return h;
 }
+function fmtMmss(t){ const s=Math.round(t); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function traceChip(t){
+  if(t==null||isNaN(t))return '';
+  return ' <button type="button" class="mt-trace-chip text-[10px] text-violet-300/50 hover:text-violet-200 underline decoration-dotted px-1" data-t="'+t+'" title="Ir a este momento en la transcripci\\u00f3n">'+fmtMmss(t)+'</button>';
+}
+// Delegado único: los chips de decisiones/pendientes se generan como HTML string
+// (actaHtml) sin listeners individuales; un solo listener en document cubre tanto
+// el acta en vivo (#mt-acta-body) como el visor de reuniones (#viewer-acta-body).
+document.addEventListener('click', function(ev){
+  const chip = ev.target.closest && ev.target.closest('.mt-trace-chip');
+  if(!chip) return;
+  const t = parseFloat(chip.dataset.t || 'NaN');
+  if(!isNaN(t)) jumpToMoment(t);
+});
 function actaHtml(m){
   m=m||{}; const dec=m.decisiones||[],tem=m.temas||[],pen=m.pendientes||[],pro=m.propuestas||[],cit=m.citas||[],mom=m.momentos_destacados||[],nus=m.notas_usuario||[]; let h='';
   if(m.resumen)h+='<p class="text-white/80">'+esc(m.resumen)+'</p>';
   if(nus.length)h+='<div><div class="text-xs text-violet-300/50 mt-2 mb-1">📝 Notas del usuario</div>'+nus.map(x=>'<div class="text-xs text-white/85 mb-0.5"><span class="text-white/50">'+esc(x.time||'')+'</span> '+esc(x.nota||'')+(x.contexto?'<div class="text-[11px] text-white/40 ml-6">IA: '+esc(x.contexto)+'</div>':'')+'</div>').join('')+'</div>';
   if(mom.length)h+='<div><div class="text-xs text-yellow-300/50 mt-2 mb-1">\\u2b50 Momentos destacados</div>'+mom.map(x=>'<div class="text-xs text-white/75">'+ICONS.spark+' <span class="text-white/50">'+esc(x.time||'')+'</span> '+esc(x.texto||'')+'</div>').join('')+'</div>';
-  if(dec.length)h+='<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'+dec.map(d=>'<div class="text-xs text-white/75">\\u2022 '+esc(d)+'</div>').join('')+'</div>';
-  if(pen.length)h+='<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'+pen.map(p=>'<div class="text-xs text-white/75">'+ICONS.arrow+' '+esc(p.texto||p)+pendMeta(p)+'</div>').join('')+'</div>';
+  if(dec.length)h+='<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'+dec.map(d=>'<div class="text-xs text-white/75">\\u2022 '+esc(typeof d==='string'?d:(d.texto||''))+(typeof d==='string'?'':traceChip(d.t))+'</div>').join('')+'</div>';
+  if(pen.length)h+='<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'+pen.map(p=>'<div class="text-xs text-white/75">'+ICONS.arrow+' '+esc(p.texto||p)+pendMeta(p)+(typeof p==='object'?traceChip(p.t):'')+'</div>').join('')+'</div>';
   if(pro.length)h+='<div><div class="text-xs text-sky-300/50 mt-2 mb-1">Propuestas</div>'+pro.map(p=>'<div class="text-xs text-white/75">'+ICONS.bulb+' '+esc(p.texto!=null?p.texto:p)+'</div>').join('')+'</div>';
   if(cit.length)h+='<div><div class="text-xs text-emerald-300/50 mt-2 mb-1">Próximas reuniones</div>'+cit.map(c=>'<div class="text-xs text-white/75">'+ICONS.calendar+' '+esc(c.texto||c)+pendMeta({fecha:c.fecha,hora:c.hora})+'</div>').join('')+'</div>';
   if(tem.length)h+='<div><div class="text-xs text-white/40 mt-2 mb-1">Temas tratados</div>'+tem.map(t=>'<div class="text-xs text-white/75">\\u2022 '+esc(t)+'</div>').join('')+'</div>';

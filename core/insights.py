@@ -750,10 +750,15 @@ _MINUTES_SYSTEM = (
     "EN VIVO que se detectó durante la reunión (temas, pendientes y propuestas); úsalo como "
     "guía e incorpóralo si sigue siendo válido. Devuelve un objeto JSON con exactamente estas claves:\n"
     '  "resumen": string (2-4 frases con lo esencial)\n'
-    '  "decisiones": lista de strings (decisiones tomadas; [] si no hubo)\n'
+    '  "decisiones": lista de objetos {"texto": string, "time": "mm:ss"|null} '
+    "(decisiones tomadas; [] si no hubo)\n"
     '  "temas": lista de strings (asuntos tratados; amplios, no redundantes)\n'
     '  "pendientes": lista de objetos {"texto": string, "responsable": string|null, '
-    '"fecha": string|null, "hora": string|null} — compromisos/tareas con responsable, fecha y hora si se mencionaron\n'
+    '"fecha": string|null, "hora": string|null, "time": "mm:ss"|null} — compromisos/tareas '
+    "con responsable, fecha y hora si se mencionaron\n"
+    "  Para 'decisiones' y 'pendientes', 'time' es el instante del transcript donde se dijo "
+    "o decidió, copiado LITERALMENTE de los marcadores [mm:ss] visibles en la transcripción "
+    "cercanos a ese contenido; usa null si no está claro. NUNCA inventes un timestamp.\n"
     '  "propuestas": lista de strings (sugerencias/ideas accionables planteadas)\n'
     '  "citas": lista de objetos {"texto": string, "fecha": string|null, "hora": string|null} '
     "— próximas reuniones/citas agendadas; [] si no hubo\n\n"
@@ -894,6 +899,23 @@ def _truncate_transcript_to_budget(transcript: str, other_len: int, budget: int)
     return notice + cut
 
 
+def _snap_to_segment(mmss: str | None, segments: list | None) -> float | None:
+    """Convierte un 'mm:ss' del LLM a segundos y lo ajusta ("snap") al segmento real
+    más cercano de ``segments`` (lista [{t, time, ...}]).
+
+    Devuelve ``None`` si ``mmss`` es falsy, no parsea a un tiempo válido, o no hay
+    segments para snapear contra (fail-safe: nunca inventa un t sin respaldo real).
+    Reusa la misma lógica de snap que ``generate_chapters``.
+    """
+    if not mmss or not segments:
+        return None
+    secs = _mmss_to_seconds(mmss)
+    if secs <= 0 and str(mmss).strip() not in ("0:00", "00:00"):
+        return None
+    best = min(segments, key=lambda s: abs(float(s.get("t", 0)) - secs))
+    return float(best.get("t", secs))
+
+
 def generate_chapters(transcript: str, segments: list | None = None) -> list:
     """Genera la línea de tiempo de momentos clave (capítulos) de la reunión. Fail-safe.
 
@@ -1003,9 +1025,54 @@ def _reconcile_user_notes(note_items: list, raw: object) -> list:
     return result
 
 
+def _normalize_decisiones(raw: object, segments: list | None) -> list:
+    """Normaliza 'decisiones' a lista de dicts {texto, t?}.
+
+    Tolera que el LLM devuelva strings planos (formato viejo) o dicts con 'time'.
+    'time' se convierte a 't' (segundos) snapeado al segment más cercano; se omite
+    si no parsea o no hay segments. Nunca inventa un t sin respaldo en segments.
+    """
+    items = raw if isinstance(raw, list) else []
+    result = []
+    for d in items:
+        if isinstance(d, str):
+            texto = d.strip()
+            if texto:
+                result.append({"texto": texto})
+        elif isinstance(d, dict):
+            texto = str(d.get("texto") or d.get("text") or "").strip()
+            if not texto:
+                continue
+            entry = {"texto": texto}
+            t = _snap_to_segment(d.get("time"), segments)
+            if t is not None:
+                entry["t"] = t
+            result.append(entry)
+    return result
+
+
+def _attach_pendiente_times(raw: object, segments: list | None) -> list:
+    """Añade 't' (segundos snapeados) a cada pendiente que traiga 'time', preservando
+    el resto de sus campos (texto/responsable/fecha/hora). Tolera strings planos."""
+    items = raw if isinstance(raw, list) else []
+    result = []
+    for p in items:
+        if isinstance(p, str):
+            result.append(p)
+            continue
+        if not isinstance(p, dict):
+            continue
+        entry = dict(p)
+        t = _snap_to_segment(entry.get("time"), segments)
+        if t is not None:
+            entry["t"] = t
+        result.append(entry)
+    return result
+
+
 def generate_minutes(transcript: str, insights: dict | None = None,
                      reasoning: bool = False, *, highlights: list | None = None,
-                     notes: list | None = None) -> dict:
+                     notes: list | None = None, segments: list | None = None) -> dict:
     """Genera el acta de la reunión (una sola llamada LLM). Fail-safe.
 
     Recibe opcionalmente el análisis en vivo (temas/pendientes/propuestas) para que el
@@ -1015,9 +1082,14 @@ def generate_minutes(transcript: str, insights: dict | None = None,
     ``notes`` (notas escritas en vivo: [{"t": float, "time": "mm:ss", "text": str}]) para
     que el acta incluya "notas_usuario" con el texto LITERAL de cada nota + contexto de la
     IA (patrón Granola: la IA añade contexto alrededor, nunca reescribe lo humano; el
-    post-proceso lo garantiza en Python). Devuelve un dict con claves
+    post-proceso lo garantiza en Python). Si se pasa ``segments`` (lista [{t, time,
+    speaker, text}], la misma que usa ``generate_chapters``), cada decisión y cada
+    pendiente con un "time" mm:ss válido recibe un campo "t" (segundos) snapeado al
+    segmento real más cercano — mismo patrón anti-alucinación que los capítulos, nunca
+    se confía en un t crudo del LLM. Devuelve un dict con claves
     resumen/decisiones/temas/pendientes/propuestas/citas (+ momentos_destacados si hubo
     highlights, + notas_usuario si hubo notas), o un acta vacía si el LLM falla.
+    Formato de "decisiones": lista de dicts {"texto": str, "t": float opcional}.
     """
     empty = {"resumen": "", "decisiones": [], "temas": [], "pendientes": [], "propuestas": [], "citas": []}
     if not transcript.strip() or not is_available(task="batch"):
@@ -1072,9 +1144,9 @@ def generate_minutes(transcript: str, insights: dict | None = None,
             return empty
         result = {
             "resumen": data.get("resumen", "") or "",
-            "decisiones": data.get("decisiones", []) or [],
+            "decisiones": _normalize_decisiones(data.get("decisiones"), segments),
             "temas": data.get("temas", []) or [],
-            "pendientes": data.get("pendientes", []) or [],
+            "pendientes": _attach_pendiente_times(data.get("pendientes"), segments),
             "propuestas": data.get("propuestas", []) or [],
             "citas": data.get("citas", []) or [],
         }

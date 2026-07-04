@@ -24,8 +24,20 @@ def _slug(text: str, maxlen: int = 40) -> str:
     return text[:maxlen] or "reunion"
 
 
+def _fmt_time_suffix(item: dict) -> str:
+    """Sufijo ' (mm:ss)' si el item trae un 't' snapeado (segundos); '' si no."""
+    t = item.get("t")
+    if t is None:
+        return ""
+    try:
+        secs = int(float(t))
+    except (TypeError, ValueError):
+        return ""
+    return f" ({secs // 60}:{secs % 60:02d})"
+
+
 def _fmt_pendiente(p: dict) -> str:
-    """Pendiente como checkbox markdown con responsable/fecha/hora si existen."""
+    """Pendiente como checkbox markdown con responsable/fecha/hora/mm:ss si existen."""
     if isinstance(p, str):
         return f"- [ ] {p}"
     meta = []
@@ -35,7 +47,7 @@ def _fmt_pendiente(p: dict) -> str:
     if fh:
         meta.append(f"📅 {fh}")
     suffix = f" ({' · '.join(meta)})" if meta else ""
-    return f"- [ ] {p.get('texto', '')}{suffix}"
+    return f"- [ ] {p.get('texto', '')}{suffix}{_fmt_time_suffix(p)}"
 
 
 def _fmt_cita(c: dict) -> str:
@@ -113,7 +125,10 @@ def meeting_markdown(meeting: dict) -> str:
 
     decisiones = minutes.get("decisiones") or []
     if decisiones:
-        body += ["## Decisiones"] + [f"- {d}" for d in decisiones] + [""]
+        body += ["## Decisiones"] + [
+            f"- {d}" if isinstance(d, str) else f"- {d.get('texto', '')}{_fmt_time_suffix(d)}"
+            for d in decisiones
+        ] + [""]
 
     # Pendientes/compromisos: del acta si los hay, si no del análisis en vivo
     pendientes = minutes.get("pendientes") or insights.get("pendientes") or []
