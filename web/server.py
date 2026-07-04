@@ -3002,6 +3002,79 @@ function renderTranscript(s, segs){
 // vivo — va al acta. El único push permitido es la tarjeta de pendientes (unidad 2.2,
 // contenedor #pending-cards). fcl/_seen se conservan para el fade-in de esas tarjetas.
 function fcl(id){ if(id==null)return''; if(_seen.has(id))return''; _seen.add(id); return ' mt-fade'; }
+// ---------------------------------------------------------------------------
+// Métricas de conversación (unidad 3.2) — dona SVG inline + helpers de formato.
+// Tolerante a metrics=null y a campos individuales null (reuniones viejas o sin voz).
+// ---------------------------------------------------------------------------
+function fmtMinSec(s){
+  if(s==null||isNaN(s))return '\\u2014';
+  s=Math.max(0,Math.round(s)); const m=Math.floor(s/60), r=s%60;
+  return m+':'+(r<10?'0':'')+r;
+}
+function donutSvg(pctYo, pctEllos, size, stroke){
+  size=size||28; stroke=stroke||(size>=80?10:5);
+  const r=(size-stroke)/2, c=size/2, circ=2*Math.PI*r;
+  const py=Math.max(0,Math.min(100,pctYo||0));
+  const dashYo=circ*(py/100), dashEllos=circ-dashYo;
+  // Arco "Yo" (violeta) empieza arriba (rotado -90deg); arco "Ellos" (cian) completa el resto.
+  return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'" class="ic" style="width:'+size+'px;height:'+size+'px;">'
+    +'<circle cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="var(--cyan)" stroke-width="'+stroke+'" opacity="0.85"/>'
+    +'<circle cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="var(--accent)" stroke-width="'+stroke+'" '
+    +'stroke-dasharray="'+dashYo+' '+dashEllos+'" stroke-dashoffset="0" transform="rotate(-90 '+c+' '+c+')" stroke-linecap="butt"/>'
+    +'</svg>';
+}
+function metricsStrip(metrics){
+  // Franja compacta para la tarjeta del historial. Devuelve '' si no hay metrics
+  // (la tarjeta queda exactamente como antes).
+  if(!metrics)return '';
+  const py=metrics.pct_yo, pe=metrics.pct_ellos;
+  const pyR=(py==null)?'\\u2014':Math.round(py), peR=(pe==null)?'\\u2014':Math.round(pe);
+  const ttl=metrics.talk_to_listen;
+  return '<div class="flex items-center gap-2 mt-1">'
+    +donutSvg(py||0, pe||0, 22, 4)
+    +'<span class="text-[11px] text-white/40">Yo '+pyR+'% \\u00b7 Ellos '+peR+'%</span>'
+    +(ttl!=null?'<span class="text-[11px] text-white/25">\\u00b7 T:L '+ttl.toFixed(2)+'</span>':'')
+    +'</div>';
+}
+function metricsPanel(metrics){
+  // Sección "Estadísticas" del visor de detalle. Tolerante a metrics=null y a
+  // campos individuales null.
+  if(!metrics){
+    return '<div class="text-xs text-white/40">Sin datos de conversación para esta reunión.</div>';
+  }
+  const py=metrics.pct_yo, pe=metrics.pct_ellos;
+  const pyR=(py==null)?'\\u2014':Math.round(py), peR=(pe==null)?'\\u2014':Math.round(pe);
+  const ttl=metrics.talk_to_listen;
+  // El flag global marca que ALGÚN monólogo llegó a 90s; el badge va en el canal
+  // cuyo valor lo cruza (pueden ser ambos), no en un canal fijo.
+  const monoBadge=' <span class="text-[10px] px-1.5 py-0.5 rounded-md" style="background:rgba(245,158,11,0.18);color:#fcd34d;">largo</span>';
+  const monoYoFlag=(metrics.longest_monologue_yo_s||0)>=90;
+  const monoEllosFlag=(metrics.longest_monologue_ellos_s||0)>=90;
+  const turnsStr=(metrics.turns_approx==null)?'\\u2014':(metrics.turns_approx+(metrics.approx?' (aprox.)':''));
+  const wpmYo=metrics.wpm_yo, wpmEllos=metrics.wpm_ellos;
+  function metric(label, val, note){
+    return '<div class="glass rounded-lg px-3 py-2">'
+      +'<div class="text-[10px] text-white/35 mb-0.5">'+esc(label)+'</div>'
+      +'<div class="text-sm text-white/80">'+val+'</div>'
+      +(note?'<div class="text-[10px] text-white/25 mt-0.5">'+note+'</div>':'')
+      +'</div>';
+  }
+  let h='<div class="flex items-center gap-4 mb-3">'
+    +donutSvg(py||0, pe||0, 84, 12)
+    +'<div class="text-xs space-y-1">'
+    +'<div class="text-purple-300/80">\\u25cf Yo &mdash; '+pyR+'% ('+fmtMinSec(metrics.talk_yo_s)+')</div>'
+    +'<div class="text-sky-300/80">\\u25cf Ellos &mdash; '+peR+'% ('+fmtMinSec(metrics.talk_ellos_s)+')</div>'
+    +'</div></div>';
+  h+='<div class="grid grid-cols-2 md:grid-cols-3 gap-2">';
+  h+=metric('Talk-to-listen', (ttl==null?'\\u2014':ttl.toFixed(2)), 'benchmark venta ~43/57');
+  h+=metric('Mon\\u00f3logo m\\u00e1s largo \\u2014 Yo', fmtMinSec(metrics.longest_monologue_yo_s)+(monoYoFlag?monoBadge:''));
+  h+=metric('Mon\\u00f3logo m\\u00e1s largo \\u2014 Ellos', fmtMinSec(metrics.longest_monologue_ellos_s)+(monoEllosFlag?monoBadge:''));
+  h+=metric('Turnos', turnsStr);
+  h+=metric('Preguntas \\u2014 Yo / Ellos', (metrics.questions_yo==null?'\\u2014':metrics.questions_yo)+' / '+(metrics.questions_ellos==null?'\\u2014':metrics.questions_ellos));
+  h+=metric('WPM \\u2014 Yo / Ellos', (wpmYo==null?'\\u2014':Math.round(wpmYo))+' / '+(wpmEllos==null?'\\u2014':Math.round(wpmEllos)), 'sano: 140-160');
+  h+='</div>';
+  return h;
+}
 function actaHtml(m){
   m=m||{}; const dec=m.decisiones||[],tem=m.temas||[],pen=m.pendientes||[],pro=m.propuestas||[],cit=m.citas||[],mom=m.momentos_destacados||[]; let h='';
   if(m.resumen)h+='<p class="text-white/80">'+esc(m.resumen)+'</p>';
@@ -3031,10 +3104,13 @@ async function loadHistory(){
   try{ const r=await fetch('/api/meetings'); const d=await r.json(); const el=document.getElementById('mt-history');
     const ms=d.meetings||[]; _meetingIds=new Set(ms.map(m=>m.id)); if(!ms.length){ el.innerHTML='<div class="text-xs text-white/45">Aún no hay reuniones guardadas.</div>'; return; }
     el.innerHTML=ms.map(m=>{ const dur=Math.round((m.duration_seconds||0)/60);
-      return '<div class="glass rounded-lg px-3 py-2 flex items-center gap-2 hover:bg-white/[0.04]">'
+      return '<div class="glass rounded-lg px-3 py-2 hover:bg-white/[0.04]">'
+        +'<div class="flex items-center gap-2">'
         +'<span class="text-xs text-white/70 flex-1 cursor-pointer" onclick="openMeeting('+m.id+')">'+esc(m.started_at||m.created_at||'')+'</span>'
         +'<span class="text-[11px] text-white/30">'+dur+' min</span>'
         +'<button onclick="delMeeting('+m.id+')" class="text-white/25 hover:text-red-300 text-sm px-1" title="Eliminar esta reunión">'+ICONS.trash+'</button>'
+        +'</div>'
+        +metricsStrip(m.metrics)
         +'</div>'; }).join('');
   }catch(e){} }
 function jumpToMoment(t, segs){
@@ -3107,6 +3183,7 @@ async function openMeeting(id){
       +'<button id="mt-close-btn" class="btn text-white/30 hover:text-white/60">Cerrar</button>'
       +'</div></div>'
       +'<div class="text-xs font-medium text-violet-300/50 mb-1">L\\u00ednea de tiempo</div><div id="mt-timeline" class="mb-3"></div>'
+      +'<div class="flex items-center justify-between mb-1"><span class="text-xs font-medium text-white/40">Estad\\u00edsticas</span></div><div id="viewer-metrics-body" class="mb-3">'+metricsPanel(m.metrics)+'</div>'
       +'<div class="flex items-center justify-between mb-1"><span class="text-xs font-medium text-emerald-300/70">Acta</span><button onclick="copyEl(&apos;viewer-acta-body&apos;, this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5">Copiar</button></div><div id="viewer-acta-body" class="space-y-2 mb-3">'+actaHtml(m.minutes)+'</div>'
       +'<div class="flex items-center justify-between mb-1"><span class="text-xs font-medium text-white/40">Transcripci\\u00f3n</span><button onclick="copyEl(&apos;viewer-transcript-body&apos;, this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5">Copiar</button></div><div id="viewer-transcript-body">'+transcriptHtml+'</div>';
     const _cb=document.getElementById('mt-close-btn');
