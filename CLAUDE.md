@@ -208,7 +208,25 @@ Permite transcribir YouTube / TikTok / Instagram (individual o en lote) sin grab
 
 Instagram requiere la sesión del usuario. yt-dlp lee las cookies del navegador con `cookiesfrombrowser` (barrido Opera→chrome→edge→brave→firefox→vivaldi; **Opera es el más compatible en Windows** — Chrome bloquea su base abierta, Edge/Brave usan App-Bound Encryption que no se descifra). **Bug crítico resuelto**: `core/secrets.py` fija `CryptUnprotectData.argtypes` en el crypt32 global del proceso (para cifrar la API key con DPAPI), lo que rompía la extracción de cookies de yt-dlp (que pasa su propia `DATA_BLOB`) con "expected LP__DATA_BLOB...". El context manager `_clean_crypt32_argtypes()` limpia esos argtypes mientras yt-dlp lee cookies y los restaura al salir. Por defecto Instagram funciona leyendo el navegador **en vivo** (sin archivo). Como **fallback duradero**, el botón del dashboard (`POST /api/instagram-cookies/sync` → `sync_instagram_cookies()`) extrae solo las cookies de instagram y las guarda **cifradas con DPAPI** en `instagram_cookies.dat` (mismo mecanismo que la API key; nunca texto plano en reposo); en la descarga, `_resolve_cookiefile()` las descifra a un temporal efímero dentro del tempdir de la descarga. `*_cookies.txt` y `*_cookies.dat` están en `.gitignore` (sesión privada).
 
-### 12. Servidor MCP local de reuniones (`mcp_server/`)
+### 12. Conversation intelligence Yo/Ellos (`core/meeting_metrics.py`, `core/vad.py`, jul 2026)
+
+Métricas de conversación sin ML de diarización: los 2 canales físicos (mic=Yo, loopback=Ellos)
+ya alcanzan. Al terminar cada ventana procesada, Silero VAD corre por canal (modelo cacheado a
+nivel módulo en `core/vad.py`, función `speech_timestamps`, inferencia bajo lock propio) con
+anclaje de timestamps por **muestras acumuladas por canal** (no reloj de pared: el loopback se
+salta silencios y los ejes divergen). Al cerrar la reunión, `compute_metrics` (funciones puras
+en `core/meeting_metrics.py`) vuelca `metrics_json` en la tabla `meetings` (migración idempotente):
+`talk_yo_s/talk_ellos_s`, `pct_*`, `talk_to_listen`, `longest_monologue_*_s` (flag ≥90s),
+`turns_approx` (alternancia de speaker en texto), `questions_*`, `wpm_*` (null si <1s), `duration_s`.
+**Interrupciones (solape) no existe en v1**: no es computable sin un eje temporal común entre
+canales (el loopback se salta silencios). Expuesto en `GET /api/meetings`, `GET /api/meetings/<id>`,
+MCP `get_minutes` y `MEETING.get_last_metrics()`. UI: mini-dona + "Yo N% · Ellos N%" + T:L en la
+tarjeta del historial de `/reunion`, y sección "Estadísticas" en el visor de detalle (dona grande,
+talk-to-listen con benchmark 43/57, monólogos con badge "largo" ≥90s, turnos aprox., preguntas,
+WPM con nota 140-160); tolera `metrics` null en reuniones viejas. `pause()` reordenado: `_paused`
+se marca antes del flush para que los frames pre-pausa no se cuelen en la ventana post-pausa.
+
+### 13. Servidor MCP local de reuniones (`mcp_server/`)
 
 Expone la memoria de reuniones a agentes locales (Claude Code, Levy) por MCP stdio, sin abrir
 el dashboard. Feature dev/local: corre con el venv del proyecto (`python -m mcp_server` desde la
@@ -360,3 +378,4 @@ Además de `groq` (default), `endpoint` (LM Studio local) y `openrouter`, la cap
 | La primera transcripción con backend local es lenta     | CTranslate2 hace lazy-alloc en la primera inferencia. El warmup automático (al activar el backend) mitiga esto; si no se lanzó, espera unos segundos en la primera transcripción.                          |
 | Backend local falla y no quiero perder el dictado       | Activa `GROQ_FALLBACK=true` (dashboard → Configuración → checkbox "Permitir Groq como respaldo"). Requiere `GROQ_API_KEY`. Advertencia: el audio saldrá a internet cuando el local falle.                  |
 | VAD recorta palabras al inicio o final                  | Aumenta `speech_pad_ms` en `core/vad.py` (default 400 ms) o desactiva con `VAD_ENABLED=false` en `.env`.                                                                                                   |
+| VAD no filtra / métricas de reunión vacías              | `onnxruntime` debe importarse antes que PyQt6 (con el orden inverso la DLL falla y el VAD queda en fail-open silencioso). `main.py` ya lo hace.                                                            |

@@ -248,7 +248,7 @@ Clave: cómo saben "quién habló cuánto" es consecuencia de su arquitectura (v
 plataforma y leen captions etiquetados), no de mejor tecnología. Vflow tiene los hablantes
 separados por hardware, así que puede calcular lo mismo SIN ML de diarización.
 
-## Oportunidad nueva ⭐ — Panel de conversation intelligence Yo/Ellos (sin ML)
+## Oportunidad nueva ⭐ — Panel de conversation intelligence Yo/Ellos (sin ML) — HECHO (2026-07-03, 946b710/56b3852/19c4b6d)
 
 Fireflies vende caro (estilo Gong) analítica de conversación. Con los 2 canales físicos que
 Vflow ya captura, casi toda esa analítica sale gratis con VAD por canal + regex sobre el
@@ -273,6 +273,11 @@ Métricas derivadas baratas (todas con lo que ya hay):
 
 Prioridad: junto al MCP local, es la mejora de mayor palanca. UI: bloque en la tarjeta de la
 reunión y en /reunion. Diferenciador: "Gong local y gratis" para 1:1, ventas, coaching.
+
+Implementado: talk-time por canal, pct, talk-to-listen, monólogo más largo (flag ≥90s), turnos
+aprox., preguntas y WPM, expuestos en API/MCP + UI (dona en tarjeta e historial, sección
+Estadísticas en el detalle). **Interrupciones (solape) quedó fuera de v1**: el loopback se salta
+silencios, así que no hay eje temporal común entre canales para detectar solape.
 
 Diarización multi-hablante (nombrar 3+ en "Ellos") = capa FUTURA opcional: sherpa-onnx (ONNX,
 CPU-only, ~6.6 MB) preferido sobre pyannote (PyTorch ~1.5 GB). No perseguir salvo demanda.
