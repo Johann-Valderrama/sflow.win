@@ -331,6 +331,54 @@ de esta. Fuera de v1 (backlog, no implementado): interrupciones/solape (Ola 3, n
 eje temporal común entre canales), agenda con reloj, bandeja pasiva de datos duros, diff
 "qué viste tú vs qué vio la IA" post-reunión, y exportar pendientes al ecosistema OPS.
 
+### 16. Plataforma y dictado — webhook, crudo/Undo, modos por app (Ola 6, jul 2026)
+
+Tres unidades independientes que cierran el backlog de integración externa y los patrones de
+dictado de superwhisper/Wispr Flow (ver `docs/PENDIENTES.md`).
+
+- **6.1 — Webhook saliente firmado** (`core/webhook.py`): al cerrar una reunión PERSISTIDA con
+  acta, POST JSON (patrón Fireflies) a una URL configurable con firma HMAC-SHA256 del body
+  (`X-Vflow-Signature: sha256=...`, `X-Vflow-Event: meeting.minutes`). Opt-in, apagado por
+  default. Payload minimizado por `WEBHOOK_SCOPE`: `pendientes` (metadatos + pendientes) o
+  `acta` (+ `minutes_json` + capítulos); el transcript crudo NUNCA se envía. Anti-SSRF: resuelve
+  DNS y rechaza loopback/privadas/link-local/`::1` salvo `WEBHOOK_ALLOW_LOCAL=true`; exige https
+  por default; re-valida en cada reintento (mitiga rebinding básico, sin pinning de IP al socket,
+  limitación documentada). Envío fire-and-forget en hilo daemon (timeout 10s + 3 reintentos con
+  backoff exponencial); un fallo JAMÁS propaga a `stop()`. Con `meeting_id` `None` (historial
+  apagado o insert fallido) no se envía nada. **Dead-drop local** (`PENDING_EXPORT_DIR`): escribe
+  siempre `vflow-pendientes-<id>-<fecha>.md` con checklist markdown de pendientes, webhook
+  activado o no. El secreto `WEBHOOK_SECRET` se cifra con DPAPI (mismo mecanismo que
+  `GROQ_API_KEY`), write-only (el GET de settings solo expone `has_webhook_secret`).
+- **6.2 — Crudo/Undo + diccionario sugerido**: columna `raw_text` en `transcriptions` (`NULL`
+  si coincide con el texto final; migración idempotente). `Transcriber.transcribe`/`translate`
+  ganan kwarg `return_raw=False` (con `True` devuelven `(text, raw)`; la firma `str` por defecto
+  no cambia, así que `main.py`/`core/meeting.py`/`core/url_transcribe.py` quedan intactos). Solo
+  el flujo de dictado captura crudo (`url_transcribe` y traducción quedan sin `raw_text` en v1:
+  el diccionario aplica al idioma dictado). UI del historial: toggle "Ver crudo" + botón
+  "Deshacer edición IA" (reusa el `PUT` existente), visibles solo en filas con `raw_text`.
+  **Diccionario sugerido**: `suggest_dictionary_pairs` (`core/dictionary.py`, difflib stdlib)
+  detecta sustituciones 1-a-1/2-a-2 cuando el usuario edita una transcripción en el dashboard
+  (máx. 3 bloques de diff; reescrituras amplias no sugieren nada). Las sugerencias nacen
+  `source='suggested'`, `enabled=0` — nunca se auto-aplican. Bandeja "Sugeridas" en el panel
+  Diccionario con Aceptar (→ `manual`, `enabled=1`) / Descartar.
+- **6.3 — Modos de dictado por app activa** (`core/dictation_modes.py`): 3 presets fijos
+  (email formal / chat casual / código), sin builder de modos custom. `DICTATION_MODES_ENABLED`
+  (default `false`) + `DICTATION_MODE_MAP` (mapa configurable `exe:preset`). Captura del `.exe`
+  en foco vía ctypes puro en `save_frontmost_app()` (`core/clipboard.py`:
+  `GetWindowThreadProcessId` + `OpenProcess` + `QueryFullProcessImageNameW`, best-effort).
+  `reformat_text()` llama al backend batch de insights con timeout duro de 8s
+  (`ThreadPoolExecutor`); si el backend batch resuelto es `claude-cli` el reformateo se **salta**
+  (latencia de arranque 5-15s inaceptable en el hot-path del dictado) — el fallback automático de
+  insights (groq/openrouter) sigue disponible si `INSIGHTS_FALLBACK` está activo. Se dispara en
+  el hilo background existente (`_transcribe_final`), nunca en el hot-path síncrono. Excluido en
+  modo traducción y `AUDIO_SOURCE=system`. El `raw_text` conserva el texto MÁS crudo cuando
+  diccionario y reformateo cambian ambos (el Undo de 6.2 revierte todo).
+
+**Fuera de v1 (decidido, no pendiente)**: raw_text en `url_transcribe`/traducción (el diccionario
+ya cubre esos flujos); builder visual de modos de dictado custom (3 presets fijos son
+suficientes, evita el error de settings infinitos de superwhisper); pinning de IP al socket del
+webhook (rebinding avanzado, riesgo residual documentado y aceptado).
+
 ## Security & Privacy
 
 ### 1. API Key Encryption (DPAPI)
@@ -413,6 +461,14 @@ Edit `config.py`:
 - `CLAUDE_CLI_PATH` — Ruta explícita al binario de Claude Code CLI (`claude`/`claude.cmd`) si no se resuelve solo (orden: esta variable → `PATH` → `%APPDATA%\npm\claude.cmd`). Solo aplica al backend `claude-cli`.
 - `CLAUDE_CLI_MODEL_LIVE` (default: `haiku`) — Alias de modelo para el análisis en vivo (Insight Stream) cuando el backend activo es `claude-cli`.
 - `CLAUDE_CLI_MODEL_BATCH` (default: `sonnet`) — Alias de modelo para tareas batch (acta/consolidación/chat) cuando el backend activo es `claude-cli`.
+- `WEBHOOK_ENABLED` (default: `false`) — Activa el envío del webhook saliente al cerrar una reunión persistida con acta (Ola 6).
+- `WEBHOOK_URL` — URL destino del POST JSON firmado. Debe ser https salvo `WEBHOOK_ALLOW_LOCAL=true`.
+- `WEBHOOK_SECRET` — Secreto para la firma HMAC-SHA256 (automáticamente cifrado con DPAPI, igual que `GROQ_API_KEY`); write-only, nunca se expone en `GET` settings.
+- `WEBHOOK_SCOPE` (default: `pendientes`) — Alcance del payload: `pendientes` (metadatos + pendientes) o `acta` (+ `minutes_json` + capítulos + notas literales del usuario). El transcript crudo nunca se envía.
+- `WEBHOOK_ALLOW_LOCAL` (default: `false`) — Si `true`, permite URLs loopback/privadas/link-local como destino (desactiva la protección anti-SSRF; solo para pruebas locales).
+- `PENDING_EXPORT_DIR` — Carpeta del dead-drop local de pendientes (`vflow-pendientes-<id>-<fecha>.md`); se escribe siempre al cerrar una reunión con pendientes, con o sin webhook activado.
+- `DICTATION_MODES_ENABLED` (default: `false`) — Activa el reformateo post-dictado por app activa (Ola 6).
+- `DICTATION_MODE_MAP` — Mapa `exe:preset` (p. ej. `outlook.exe:email,slack.exe:chat,code.exe:codigo`) que asigna un preset de reformateo por `.exe` en foco; parseo tolerante a espacios/mayúsculas.
 
 ### Backends de insights — Anthropic (API oficial) y claude-cli (suscripción Claude)
 

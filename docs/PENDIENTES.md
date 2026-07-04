@@ -23,7 +23,10 @@
 
 El esquema ya está preparado (`source`, `hit_count` en la tabla `dictionary`):
 - Orden por frecuencia de uso en la UI (hit_count ya se registra).
-- Sugerencias semi-automáticas: detectar candidatos y proponerlos como `source='suggested'` en una bandeja de revisión — **sugerir, nunca auto-aplicar**.
+- ~~Sugerencias semi-automáticas: detectar candidatos y proponerlos como `source='suggested'` en una bandeja de revisión — **sugerir, nunca auto-aplicar**.~~
+  **HECHO 2026-07-03** (commit b952411, Ola 6.2): `suggest_dictionary_pairs` al editar una
+  transcripción en el dashboard, bandeja "Sugeridas" con Aceptar/Descartar; ver CLAUDE.md
+  sección 16.
 - Selección múltiple / borrado en lote.
 - Decidido NUNCA: tags/categorías, selección de vocabulario por contexto/app activa.
 
@@ -198,10 +201,15 @@ app de escritorio para Mac, dashboard cloud. Free tier: 10 reuniones/mes + 5 cr�
 3. **Chips de preguntas sugeridas + prompts guardados** en el chat de memoria: los chips ya
    estaban decididos (backlog Potor #1); Tactiq añade la idea de una mini-biblioteca de
    prompts favoritos del usuario (tabla pequeña en SQLite, UI en el panel del chat).
-4. **Acciones post-reunión configurables** (versión esbelta de sus workflows): al generar el
+4. ~~**Acciones post-reunión configurables** (versión esbelta de sus workflows): al generar el
    acta, disparar acciones opt-in: export md a carpeta OPS (ya existe), copiar resumen al
    portapapeles, POST a webhook genérico (cubre n8n/Zapier/lo que sea sin construir 20
-   integraciones). NO construir un builder visual: un checklist de 3-4 acciones en Ajustes.
+   integraciones). NO construir un builder visual: un checklist de 3-4 acciones en Ajustes.~~
+   **HECHO 2026-07-03** (commit daad367, Ola 6.1): webhook saliente firmado HMAC-SHA256 al
+   cerrar reunión persistida con acta (`WEBHOOK_SCOPE` pendientes/acta, transcript nunca
+   incluido), anti-SSRF, opt-in apagado por default, + dead-drop local `PENDING_EXPORT_DIR`
+   (markdown de pendientes siempre, con o sin webhook); ver CLAUDE.md sección 16. Sin builder
+   visual ni catálogo de integraciones (decisión respetada).
 5. **Contexto personal para la IA** (nombre, rol, dominio) inyectado en los system prompts de
    insights/acta/chat: barato y mejora la calidad de pendientes con responsable ("Yo" = Johann).
 6. **Notas manuales por reunión**: campo de notas libre junto al acta (columna en la tabla
@@ -339,12 +347,21 @@ total). Fathom aporta el patrón de inmediatez; superwhisper/Wispr Flow los patr
    **HECHO 2026-07-03** (commit e4900d5): 4 plantillas (general/ventas/1:1/clase) en
    `core/meeting_templates.py`, columna `template` por reunión, clave condicional `bant` en
    ventas; ver CLAUDE.md sección 14.
-6. **Undo AI Edit / ver crudo** (Wispr Flow): toggle raw/procesado en cada transcripción
-   (guardamos el raw: esfuerzo mínimo).
-7. **Diccionario que aprende**: al detectar corrección manual de un dictado, sugerir entrada
-   (encaja con source='suggested' ya previsto en diccionario v2).
-8. **Modos de dictado por app activa** (superwhisper) con 3 presets sensatos por defecto
-   (email formal / chat casual / código). Evitar su error: settings infinitos sin defaults.
+6. ~~**Undo AI Edit / ver crudo** (Wispr Flow): toggle raw/procesado en cada transcripción
+   (guardamos el raw: esfuerzo mínimo).~~
+   **HECHO 2026-07-03** (commit b952411, Ola 6.2): columna `raw_text` (NULL si no difiere),
+   toggle "Ver crudo" + "Deshacer edición IA" en el historial. Fuera de v1: `url_transcribe` y
+   traducción no capturan crudo (no retroactivo, decidido). Ver CLAUDE.md sección 16.
+7. ~~**Diccionario que aprende**: al detectar corrección manual de un dictado, sugerir entrada
+   (encaja con source='suggested' ya previsto en diccionario v2).~~
+   **HECHO 2026-07-03** (commit b952411, Ola 6.2): `suggest_dictionary_pairs` (difflib) al editar
+   una transcripción en el dashboard; bandeja "Sugeridas" con Aceptar/Descartar, nace
+   `enabled=0` (nunca auto-aplicado). Ver CLAUDE.md sección 16.
+8. ~~**Modos de dictado por app activa** (superwhisper) con 3 presets sensatos por defecto
+   (email formal / chat casual / código). Evitar su error: settings infinitos sin defaults.~~
+   **HECHO 2026-07-03** (commit 473c872, Ola 6.3): 3 presets fijos, `DICTATION_MODES_ENABLED`
+   (default off) + `DICTATION_MODE_MAP` configurable, captura del `.exe` en foco best-effort.
+   Sin builder de modos custom (decisión respetada). Ver CLAUDE.md sección 16.
 9. **Command palette Ctrl+K** + estados vacíos con onboarding accionable.
 10. **Timestamps clicables** que saltan a la línea del transcript (ya hay flash de segmento
     en /reunion: extenderlo).
