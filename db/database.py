@@ -104,6 +104,9 @@ class TranscriptionDB:
         "ALTER TABLE meetings ADD COLUMN metrics_json TEXT",
         # Plantilla por tipo de reunión (unidad 4.3): general/ventas/one_on_one/clase
         "ALTER TABLE meetings ADD COLUMN template TEXT",
+        # Detecciones proactivas entregadas en vivo (unidad 5.1): rastro para el
+        # bucle de mejora de prompts junto a feedback_json
+        "ALTER TABLE meetings ADD COLUMN detections_json TEXT",
     ]
 
     # DDL adicional para la cola de URLs (Fase 3, paso 2)
@@ -491,17 +494,18 @@ class TranscriptionDB:
                        insights_json: str = None, minutes_json: str = None,
                        chapters_json: str = None, highlights_json: str = None,
                        notes_json: str = None, feedback_json: str = None,
-                       metrics_json: str = None, template: str = None) -> int:
+                       metrics_json: str = None, template: str = None,
+                       detections_json: str = None) -> int:
         """Inserta una reunión finalizada y devuelve su id."""
         with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO meetings (title, transcript, segments_json, insights_json, "
                 "minutes_json, chapters_json, highlights_json, notes_json, feedback_json, "
-                "metrics_json, duration_seconds, started_at, template) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "metrics_json, duration_seconds, started_at, template, detections_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (title, transcript, segments_json, insights_json, minutes_json,
                  chapters_json, highlights_json, notes_json, feedback_json,
-                 metrics_json, duration_seconds, started_at, template),
+                 metrics_json, duration_seconds, started_at, template, detections_json),
             )
             meeting_id = cursor.lastrowid
             self._fts_index_meeting(conn, meeting_id, {

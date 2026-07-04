@@ -154,6 +154,12 @@ class ProactiveGate:
     def queue_size(self) -> int:
         return len(self._queue)
 
+    def delivered(self, key: str) -> bool:
+        """¿Esta key ya se entregó al HUD? Lectura pura (unidad 5.1): la usa
+        MEETING.status() para exponer al panel web solo las tarjetas que el
+        usuario ya vio y aún no tienen feedback ✓/✗."""
+        return key in self._delivered_keys
+
 
 def is_lull(level_yo: float, level_ellos: float, threshold: float = _SILENCE_RMS) -> bool:
     """Verificación puntual (un solo tick): ¿ambos canales están en silencio ahora?

@@ -637,21 +637,127 @@ _INSIGHTS_SYSTEM = (
 )
 
 
-def update_state(state: dict, delta_text: str) -> dict:
+# ---------------------------------------------------------------------------
+# Detecciones proactivas (unidad 5.1) — SEGUNDA INTENCIÓN del MISMO update_state
+# ---------------------------------------------------------------------------
+# Decisión de diseño (debate adversarial, no re-litigar): las detecciones NO son
+# una llamada LLM aparte — el prompt del Insight Stream se extiende para devolver
+# {estado + "detecciones"} en UNA sola llamada (no duplica cuota claude-cli).
+# El bloque solo se añade cuando el caller PIDE detecciones (detections_out is
+# not None): los usos legacy de update_state conservan el prompt y el contrato
+# de siempre, byte a byte.
+
+_DETECTIONS_SYSTEM_EXTRA = (
+    "\n\nSEGUNDA TAREA (misma respuesta, mismo objeto JSON): añade además la clave "
+    '"detecciones" con exactamente esta forma:\n'
+    '  "detecciones": {\n'
+    '    "preguntas_sin_responder": [{"pregunta": string, "time": "mm:ss"|null}],\n'
+    '    "compromisos": [{"texto": string, "time": "mm:ss"|null}],\n'
+    '    "acuerdos_vagos": [{"texto": string, "falta": "fecha"|"responsable"|"ambos", "time": "mm:ss"|null}]\n'
+    "  }\n"
+    "En el TEXTO NUEVO, 'Yo' es quien graba (el usuario) y 'Ellos' son los demás participantes.\n\n"
+    "CRITERIOS QUIRÚRGICOS (el costo de un falso positivo es ALTO: cada detección interrumpe al "
+    "usuario en plena reunión; ante la MÍNIMA duda, NO reportes):\n"
+    '- "preguntas_sin_responder": SOLO si "Ellos" hizo una pregunta DIRECTA dirigida a "Yo" que pide '
+    "una respuesta concreta (un dato, un precio, una fecha, un sí/no), Y DESPUÉS de esa pregunta hay "
+    'turnos de "Yo" en el texto que NO la responden (la esquivó o cambió de tema). Si el fragmento '
+    'termina justo después de la pregunta y "Yo" aún no tuvo turno, NO la reportes todavía: se evalúa '
+    "en el siguiente fragmento. NO cuentan: preguntas retóricas, muletillas ('¿no?', '¿vale?', "
+    "'¿me explico?'), preguntas que Ellos se hacen entre sí o a sí mismos, ni preguntas ya respondidas "
+    "aunque sea parcialmente.\n"
+    '- "compromisos": SOLO si "Yo" adquiere un compromiso EXPLÍCITO en primera persona con acción y '
+    "objeto concretos ('te lo envío mañana', 'yo preparo el informe', 'mañana te confirmo el precio'). "
+    "NO cuentan: condicionales ('podría…', 'si acaso…'), sugerencias colectivas ('deberíamos…', "
+    "'habría que…'), intenciones vagas ('lo miro', 'vemos'), ni compromisos de 'Ellos'.\n"
+    '- "acuerdos_vagos": SOLO si el intercambio CIERRA un tema con una acción ACORDADA por ambas '
+    'partes ("ok, hagamos eso", "de acuerdo, se cambia el proveedor") pero SIN fecha NI responsable '
+    'explícitos. "falta" indica qué faltó. NO cuentan: temas solo comentados, aplazados sin acuerdo, '
+    "o acuerdos que sí tienen fecha o dueño.\n"
+    '- "time": copia LITERALMENTE el marcador [mm:ss] del TEXTO NUEVO más cercano al contenido; '
+    "null si no hay marcador. NUNCA inventes un timestamp.\n"
+    "- Si el mensaje incluye una lista YA_REPORTADAS, NO vuelvas a incluir nada que signifique lo "
+    "mismo que un ítem de esa lista (ya se avisó al usuario).\n"
+    "- Las detecciones son EXCEPCIONALES: en la mayoría de los fragmentos las tres listas van "
+    "VACÍAS. Es preferible callar a inventar."
+)
+
+
+def empty_detections() -> dict:
+    """Detecciones vacías (forma canónica de la unidad 5.1)."""
+    return {"preguntas_sin_responder": [], "compromisos": [], "acuerdos_vagos": []}
+
+
+def _clean_detections(raw: object) -> dict:
+    """Valida/normaliza la clave "detecciones" del LLM a la forma canónica.
+
+    Fail-safe estricto: cualquier cosa que no encaje (no-dict, ítems sin texto,
+    tipos raros) se DESCARTA en silencio — listas vacías por defecto.
+    """
+    out = empty_detections()
+    if not isinstance(raw, dict):
+        return out
+    specs = (
+        ("preguntas_sin_responder", "pregunta"),
+        ("compromisos", "texto"),
+        ("acuerdos_vagos", "texto"),
+    )
+    for key, text_field in specs:
+        items = raw.get(key)
+        if not isinstance(items, list):
+            continue
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            text = str(it.get(text_field) or "").strip()
+            if not text:
+                continue
+            entry = {text_field: text}
+            t = str(it.get("time") or "").strip()
+            entry["time"] = t or None
+            if key == "acuerdos_vagos":
+                falta = str(it.get("falta") or "").strip().lower()
+                entry["falta"] = falta if falta in ("fecha", "responsable", "ambos") else "ambos"
+            out[key].append(entry)
+    return out
+
+
+def update_state(state: dict, delta_text: str, *, detections_out: "dict | None" = None,
+                 ya_reportadas: "list | None" = None) -> dict:
     """Actualiza el rolling state con el delta de transcript. Fail-safe.
 
     Devuelve el nuevo estado, o el anterior sin cambios si el LLM no está
     disponible, falla, o devuelve JSON inválido.
+
+    Detecciones proactivas (unidad 5.1) — contrato NO invasivo: el retorno sigue
+    siendo el estado (dict), igual que siempre. Si el caller pasa ``detections_out``
+    (un dict), se usa como OUT-PARAM: se vacía y se rellena con las detecciones de
+    la MISMA llamada LLM ({"preguntas_sin_responder": [...], "compromisos": [...],
+    "acuerdos_vagos": [...]}; listas vacías si el LLM no devolvió nada o falló).
+    Solo en ese caso el system prompt se extiende con la segunda intención; los
+    callers que no pasan ``detections_out`` (fallbacks, tests, usos legacy) usan
+    el prompt original intacto. ``ya_reportadas`` (lista de textos ya avisados al
+    usuario) viaja al LLM como contexto de dedup para no repetir detecciones.
     """
     global _last_error
+    if detections_out is not None:
+        detections_out.clear()
+        detections_out.update(empty_detections())
     if not delta_text.strip() or not is_available(task="live"):
         return state
     prev = json.dumps(state, ensure_ascii=False)
+    system_content = _INSIGHTS_SYSTEM
+    user_content = f"ESTADO ACTUAL:\n{prev}\n\nTEXTO NUEVO:\n{delta_text}"
+    if detections_out is not None:
+        system_content = _INSIGHTS_SYSTEM + _DETECTIONS_SYSTEM_EXTRA
+        if ya_reportadas:
+            listed = "\n".join(f"- {str(t).strip()}" for t in ya_reportadas if str(t).strip())
+            if listed:
+                user_content += f"\n\nYA_REPORTADAS (no repetir en 'detecciones'):\n{listed}"
     try:
         content = _chat(
             messages=[
-                {"role": "system", "content": _INSIGHTS_SYSTEM},
-                {"role": "user", "content": f"ESTADO ACTUAL:\n{prev}\n\nTEXTO NUEVO:\n{delta_text}"},
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content},
             ],
             task="live",
             json_mode=True,
@@ -665,6 +771,8 @@ def update_state(state: dict, delta_text: str) -> dict:
             _last_error = "el modelo no devolvió un JSON válido"
             return state
         _last_error = None  # llamada OK
+        if detections_out is not None:
+            detections_out.update(_clean_detections(new_state.get("detecciones")))
         return {
             "temas": new_state.get("temas", []) or [],
             "pendientes": new_state.get("pendientes", []) or [],

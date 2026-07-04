@@ -20,11 +20,13 @@ No toca Qt directamente: corre en threads daemon y expone estado leíble.
 La captura dual fue validada con ``test_dual_capture.py`` (sin glitches, drift
 por canal <2%, anclaje por wall-clock de llegada suficiente para actas).
 """
+import hashlib
 import io
 import json
 import logging
 import os
 import queue
+import re
 import threading
 import time
 import wave
@@ -112,6 +114,11 @@ class MeetingSession:
         self._highlights: list = []        # [{"t": float, "time": "mm:ss"}] — momentos marcados con AltGr+H
         self._notes: list = []             # [{"t": float, "time": "mm:ss", "text": str}] — notas rápidas del usuario
         self._feedback: list = []          # [{"key","tipo","texto","value","t","time"}] — feedback ✓/✗ del único push (unidad 2.2)
+        # Detecciones proactivas encoladas en la reunión actual (unidad 5.1):
+        # [{"key","clase","base","texto","detail","t","time"}]. Rastro en RAM que
+        # (a) deduplica entre ciclos, (b) alimenta ya_reportadas del LLM, (c) se
+        # persiste como detections_json al stop() (insumo del bucle de mejora).
+        self._detections: list = []
         # Niveles por canal (RMS 0..1 del último chunk de audio) para los VU del dashboard.
         # Escritura de float simple: atómica bajo el GIL, no necesita el lock (barato,
         # se recalcula en cada callback de audio; decisión de debate: nada de _tail_rms aquí).
@@ -231,7 +238,32 @@ class MeetingSession:
                 "template": template,
                 "template_label": _templates.get(template)["label"],
                 "proactive_mode": _proactive.get_mode(),
+                # Tarjetas de detección YA ENTREGADAS al HUD y sin feedback ✓/✗
+                # todavía (unidad 5.1). El panel web ya las pinta con el renderer
+                # genérico renderCards si existen (gancho status().cards de 5.3).
+                "cards": self._delivered_cards_locked(),
             }
+
+    def _delivered_cards_locked(self) -> list:
+        """Tarjetas de detección entregadas pendientes de feedback (lista corta,
+        máx 5, para status()). EL CALLER DEBE TENER EL LOCK.
+
+        Solo detecciones que PROACTIVE ya entregó al HUD (no las que siguen en
+        cola esperando lull) y cuya key aún no tiene feedback ✓/✗ del usuario.
+        Forma: {key, tipo: "deteccion", texto, detail?} — el contrato de renderCards.
+        """
+        fb_keys = {f.get("key") for f in self._feedback}
+        cards = []
+        for d in self._detections:
+            if d["key"] in fb_keys:
+                continue
+            if not _proactive.PROACTIVE.delivered(d["key"]):
+                continue
+            card = {"key": d["key"], "tipo": "deteccion", "texto": d["texto"]}
+            if d.get("detail"):
+                card["detail"] = d["detail"]
+            cards.append(card)
+        return cards[-5:]
 
     def get_insights(self) -> dict:
         """Devuelve una copia del Insight Stream actual (temas/pendientes/propuestas)."""
@@ -397,6 +429,7 @@ class MeetingSession:
             self._highlights = []
             self._notes = []
             self._feedback = []
+            self._detections = []
             self._level_mic = 0.0
             self._level_sys = 0.0
             self._paused = False
@@ -515,6 +548,7 @@ class MeetingSession:
             highlights = list(self._highlights)
             notes = list(self._notes)
             feedback = list(self._feedback)
+            detections = list(self._detections)
             template = self._template
         minutes = _insights.generate_minutes(transcript, self._store_to_plain(),
                                              highlights=highlights, notes=notes,
@@ -556,6 +590,10 @@ class MeetingSession:
                     insert_kwargs["notes_json"] = json.dumps(notes, ensure_ascii=False)
                 if feedback:
                     insert_kwargs["feedback_json"] = json.dumps(feedback, ensure_ascii=False)
+                # Rastro de detecciones proactivas (unidad 5.1): insumo del bucle
+                # de mejora junto a feedback_json. Patrón notes_json: NULL si no hubo.
+                if detections:
+                    insert_kwargs["detections_json"] = json.dumps(detections, ensure_ascii=False)
                 # Patrón notes_json: solo se persiste si hubo voz detectada (sin
                 # speech las métricas serían todo ceros — mejor columna NULL).
                 if has_speech:
@@ -771,7 +809,10 @@ class MeetingSession:
             self._carry[label] = text[-200:]  # cola para el contexto del próximo chunk
             with self._lock:
                 self._segments.append({"t": window_start, "speaker": label, "text": text})
-                self._insight_buffer.append(f"{label}: {text}")
+                # Con marcador [mm:ss] (unidad 5.1): las detecciones devuelven "time"
+                # copiándolo literalmente del delta — sin marcador el LLM no tendría
+                # de dónde sacarlo sin inventar. El extractor de estado lo ignora.
+                self._insight_buffer.append(f"[{_fmt_mmss(window_start)}] {label}: {text}")
 
         # Tras incorporar la ventana: primero la consolidación (si toca, tiene prioridad),
         # luego la actualización incremental. Ambas comparten el mutex _insight_running,
@@ -856,9 +897,19 @@ class MeetingSession:
 
         El LLM extrae; el código mantiene la estabilidad: IDs estables por similitud,
         ítems pegajosos (no se retiran), redacción se actualiza in-situ. Siempre libera el flag.
+
+        Detecciones proactivas (unidad 5.1): la MISMA llamada devuelve además las
+        detecciones vía out-param (no gasta cuota extra). Se procesan al final,
+        fuera del lock del merge; su fallo nunca afecta el estado.
         """
+        detections: dict = {}
+        with self._lock:
+            # Contexto de dedup para el LLM: textos ya avisados (los últimos 20 bastan).
+            ya_reportadas = [d.get("base", "") for d in self._detections][-20:]
         try:
-            llm_state = _insights.update_state(plain_prev, delta)
+            llm_state = _insights.update_state(plain_prev, delta,
+                                               detections_out=detections,
+                                               ya_reportadas=ya_reportadas)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Reunión: error en Insight Stream: %s", exc)
             llm_state = plain_prev
@@ -881,6 +932,110 @@ class MeetingSession:
             # Surfacing del error del backend de insights (p. ej. LM Studio caído):
             # que el panel muestre el fallo en vez de parecer "congelado".
             self._last_error = _insights.last_error()
+
+        # Detecciones proactivas (unidad 5.1): fuera del lock, fail-safe total.
+        try:
+            self._handle_detections(detections)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Reunión: error procesando detecciones (se ignoran): %s", exc)
+
+    # ------------------------------------------------------------------
+    # Detecciones proactivas (unidad 5.1)
+    # ------------------------------------------------------------------
+
+    # Flag por clase (env, default tras la calibración con transcripts reales).
+    # Una clase ruidosa se apaga cambiando SU default aquí, sin tocar más código.
+    _DETECTION_FLAGS = {
+        "preguntas_sin_responder": ("PROACTIVE_DETECT_PREGUNTAS", "true"),
+        "compromisos": ("PROACTIVE_DETECT_COMPROMISOS", "true"),
+        "acuerdos_vagos": ("PROACTIVE_DETECT_ACUERDOS", "true"),
+    }
+
+    _DETECTION_TEXT_FIELD = {
+        "preguntas_sin_responder": "pregunta",
+        "compromisos": "texto",
+        "acuerdos_vagos": "texto",
+    }
+
+    @staticmethod
+    def _detection_key(texto: str) -> str:
+        """Key estable de una detección: hash del texto NORMALIZADO (minúsculas,
+        sin puntuación, espacios colapsados). Los IDs del rolling state son
+        inestables entre actualizaciones; el hash del texto no."""
+        norm = re.sub(r"\W+", " ", str(texto or "").lower()).strip()
+        return "det-" + hashlib.sha1(norm.encode("utf-8")).hexdigest()[:12]
+
+    @staticmethod
+    def _format_detection_card(clase: str, item: dict) -> str:
+        """Texto de la tarjeta HUD/panel por clase de detección."""
+        if clase == "preguntas_sin_responder":
+            return f"❓ Pregunta sin responder: {item.get('pregunta', '')}".strip()
+        if clase == "compromisos":
+            return f"🤝 Compromiso: {item.get('texto', '')}".strip()
+        falta = item.get("falta", "ambos")
+        label = {"fecha": "sin fecha", "responsable": "sin dueño"}.get(falta, "sin fecha/dueño")
+        return f"⚠️ Acuerdo {label}: {item.get('texto', '')}".strip()
+
+    @classmethod
+    def _detection_class_enabled(cls, clase: str) -> bool:
+        env_name, default = cls._DETECTION_FLAGS[clase]
+        return (os.getenv(env_name, default) or default).strip().lower() == "true"
+
+    def _handle_detections(self, detections: dict):
+        """Convierte las detecciones del LLM en tarjetas y las encola en PROACTIVE.
+
+        Gating en orden (todas las puertas anti-ruido de la unidad 5.1):
+          1. Modo: solo copilot/trainer (silent = cero proactividad extra).
+          2. Flag por clase (PROACTIVE_DETECT_PREGUNTAS/_COMPROMISOS/_ACUERDOS).
+          3. Dedup local por key (hash del texto normalizado) contra el rastro
+             de la reunión — complementa el dedup del LLM (ya_reportadas) y el
+             de la cola (delivered/discarded keys).
+          4. Presupuesto de atención should_push("deteccion") — ~1 push no-pendiente
+             cada 5 min. Si el presupuesto está agotado, la detección NO se encola
+             NI se registra: si sigue vigente, el LLM la re-reporta en un ciclo
+             posterior y entra entonces (mejor tarde que perdida o que en ráfaga).
+        La cola (PROACTIVE) añade encima caducidad y espera de lull; la entrega
+        al HUD ya está cableada en main.py (_tick_proactive, genérica por tipo).
+        """
+        if not detections:
+            return
+        if _proactive.get_mode() not in ("copilot", "trainer"):
+            return
+        if not self._active:
+            return
+        for clase, text_field in self._DETECTION_TEXT_FIELD.items():
+            if not self._detection_class_enabled(clase):
+                continue
+            for item in detections.get(clase) or []:
+                if not isinstance(item, dict):
+                    continue
+                base = str(item.get(text_field) or "").strip()
+                if not base:
+                    continue
+                key = self._detection_key(base)
+                with self._lock:
+                    if any(d["key"] == key for d in self._detections):
+                        continue
+                if not _proactive.PROACTIVE.should_push("deteccion"):
+                    continue
+                texto = self._format_detection_card(clase, item)
+                card = {"key": key, "tipo": "deteccion", "texto": texto}
+                detail = str(item.get("time") or "").strip() or None
+                if detail:
+                    card["detail"] = detail
+                _proactive.PROACTIVE.enqueue(card)
+                _proactive.PROACTIVE.mark_pushed("deteccion")
+                with self._lock:
+                    t = self._elapsed()
+                    self._detections.append({
+                        "key": key,
+                        "clase": clase,
+                        "base": base,
+                        "texto": texto,
+                        "detail": detail,
+                        "t": round(t, 1),
+                        "time": _fmt_mmss(t),
+                    })
 
     def _store_to_plain_locked(self) -> dict:
         """Convierte el store con IDs a texto plano. EL CALLER DEBE TENER EL LOCK."""
