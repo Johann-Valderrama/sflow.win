@@ -51,6 +51,7 @@ from core import insights as _insights
 from core import meeting_export as _export
 from core import meeting_metrics as _metrics
 from core import meeting_templates as _templates
+from core import proactive as _proactive
 from core import vad as _vad
 from db.database import TranscriptionDB
 
@@ -172,6 +173,17 @@ class MeetingSession:
     def is_active(self) -> bool:
         return self._active
 
+    def get_levels(self) -> tuple:
+        """(level_mic, level_sys) RMS 0..1 del último chunk, sin el lock (unidad 5.3).
+
+        Los floats se escriben de forma atómica bajo el GIL en _mic_callback/_sys_callback
+        (mismo razonamiento documentado ahí para _level_mic/_level_sys): leerlos aquí
+        sin adquirir self._lock es intencional y barato — se llama en el tick de 1s
+        del proactivo (main.py), y no hay trabajo bajo lock que valga la pena pagar
+        por una lectura de dos floats.
+        """
+        return (self._level_mic, self._level_sys)
+
     def get_template(self) -> str:
         """Plantilla activa (persiste entre reuniones del proceso)."""
         with self._lock:
@@ -218,6 +230,7 @@ class MeetingSession:
                 "levels": {"yo": level_mic, "ellos": level_sys},
                 "template": template,
                 "template_label": _templates.get(template)["label"],
+                "proactive_mode": _proactive.get_mode(),
             }
 
     def get_insights(self) -> dict:

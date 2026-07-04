@@ -15,6 +15,7 @@ from core import meeting_export as _meeting_export
 from core import meeting_templates as _meeting_templates
 from core import insights as _insights
 from core import assistant as _assistant
+from core import proactive as _proactive
 
 # ---------------------------------------------------------------------------
 # Estado de descarga del modelo local (compartido entre endpoints)
@@ -737,6 +738,15 @@ HTML_TEMPLATE = """
                     <span class="set-sec-toggle"><span class="set-sec-toggle-label">Mostrar</span></span>
                 </button>
                 <div id="sec-reuniones-body" class="set-sec-body">
+                    <div class="mb-3">
+                        <label for="cfg-proactive-mode" class="text-xs text-white/55 block mb-1">Modo proactivo (HUD en vivo)</label>
+                        <select id="cfg-proactive-mode" class="cfg-select">
+                            <option value="silent">Silencioso — solo pendientes</option>
+                            <option value="copilot">Copiloto — pendientes + detecciones + memoria cruzada</option>
+                            <option value="trainer">Entrenador — + coaching (ej. monólogo prolongado)</option>
+                        </select>
+                        <p class="text-xs text-white/40 mt-1">Controla qué tarjetas puede empujar el HUD (AltGr+A) sin que las pidas. Los pendientes siempre se muestran, en cualquier modo.</p>
+                    </div>
                     <p class="text-xs text-white/55 mb-3">El análisis en vivo necesita velocidad (Groq recomendado); acta y Asistente de reuniones admiten modelos más potentes (OpenRouter, contexto 1 M).</p>
                     <div class="flex flex-wrap items-center gap-2 mb-3">
                         <button type="button" id="cfg-insights-preset-sub" onclick="applyInsightsPreset('subscription')"
@@ -1617,6 +1627,8 @@ HTML_TEMPLATE = """
             document.getElementById('cfg-backend').value = settings.transcription_backend || 'groq';
             document.getElementById('cfg-local-model').value = settings.local_whisper_model || 'small';
             document.getElementById('cfg-groq-fallback').checked = settings.groq_fallback === true;
+            // Modo proactivo (HUD en vivo, unidad 5.3)
+            document.getElementById('cfg-proactive-mode').value = settings.proactive_mode || 'copilot';
             // Backend de insights (análisis de reuniones) — por tarea
             document.getElementById('cfg-insights-backend-live').value = settings.insights_backend_live || 'groq';
             document.getElementById('cfg-insights-backend-batch').value = settings.insights_backend_batch || 'groq';
@@ -1641,6 +1653,7 @@ HTML_TEMPLATE = """
                 transcription_backend: document.getElementById('cfg-backend').value,
                 local_whisper_model: document.getElementById('cfg-local-model').value,
                 groq_fallback: document.getElementById('cfg-groq-fallback').checked ? 'true' : 'false',
+                proactive_mode: document.getElementById('cfg-proactive-mode').value,
                 insights_backend_live: document.getElementById('cfg-insights-backend-live').value,
                 insights_backend_batch: document.getElementById('cfg-insights-backend-batch').value,
                 insights_endpoint_model: document.getElementById('cfg-insights-model').value.trim(),
@@ -2839,17 +2852,30 @@ function pendMeta(p){ const a=[]; if(p&&p.responsable)a.push(esc(p.responsable))
   const fh=[p&&p.fecha,p&&p.hora].filter(Boolean).map(esc).join(' '); if(fh)a.push(ICONS.calendar+' '+fh);
   return a.length?' <span class="text-white/35">('+a.join(' \\u00b7 ')+')</span>':''; }
 
-// --- Tarjetas de pendiente ✓/✗ (unidad 2.2: único push en vivo, con caducidad) ---
-// pendKey: hash simple del texto NORMALIZADO (minúsculas, sin acentos, sin puntuación,
+// --- Tarjetas genéricas de push ✓/✗ (unidad 2.2 -> generalizado en 5.3) ---
+// cardKey: hash simple del texto NORMALIZADO (minúsculas, sin acentos, sin puntuación,
 // espacios colapsados). NUNCA se usa el id del pendiente: la consolidación LLM puede
 // renumerarlo, lo que crearía tarjetas fantasma (verificado en debate de diseño).
-function pendKey(texto){
+// Se mantiene el nombre pendKey como alias por compatibilidad con quien lo referencie.
+function cardKey(texto){
   const norm=(texto||'').toString().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'')
     .toLowerCase().replace(/[^a-z0-9\\s]/g,' ').replace(/\\s+/g,' ').trim();
   let h=0; for(let i=0;i<norm.length;i++){ h=((h<<5)-h+norm.charCodeAt(i))|0; }
   return 'p'+h;
 }
-const _pendCards = new Map(); // key -> {texto, responsable, firstSeen, resolved, timer}
+function pendKey(texto){ return cardKey(texto); }
+
+// Estilo por tipo de tarjeta: clases Tailwind (borde/fondo) + etiqueta. Los tipos
+// futuros (deteccion/coaching/cruzada — unidades 5.1/5.2) solo necesitan una
+// entrada aquí; renderCards() ya sabe pintarlos.
+const CARD_STYLES = {
+  pendiente: {cls:'bg-amber-500/[0.06] border-amber-400/20', label:null},
+  coaching:  {cls:'bg-cyan-500/[0.06] border-cyan-400/20',   label:'Coaching'},
+  deteccion: {cls:'bg-violet-500/[0.06] border-violet-400/20', label:'Detección'},
+  cruzada:   {cls:'bg-violet-500/[0.06] border-violet-400/20', label:'Memoria cruzada'},
+};
+
+const _pendCards = new Map(); // key -> {texto, tipo, responsable, firstSeen, resolved, timer}
 const _PEND_TTL_MS = 180000;   // ~3 min de caducidad
 const _PEND_MAX_VISIBLE = 3;
 
@@ -2871,14 +2897,17 @@ function _pendScheduleExpiry(key){
 function _pendRenderCard(key){
   const c=_pendCards.get(key); if(!c) return;
   const container=document.getElementById('pending-cards'); if(!container) return;
+  const style=CARD_STYLES[c.tipo]||CARD_STYLES.pendiente;
   const div=document.createElement('div');
   div.id='pc-'+key;
-  div.className='rounded-lg bg-amber-500/[0.06] border border-amber-400/20 p-2.5 mt-fade';
+  div.className='rounded-lg '+style.cls+' p-2.5 mt-fade';
+  const labelHtml = style.label ? '<div class="text-[10px] uppercase tracking-wide text-white/40 mb-1">'+esc(style.label)+'</div>' : '';
   div.innerHTML =
+    labelHtml+
     '<div class="text-xs text-white/80 leading-snug mb-1.5">'+esc(c.texto)+pendMeta(c)+'</div>'+
     '<div class="flex items-center gap-1.5" id="pc-actions-'+key+'">'+
-      '<button class="text-[11px] px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300/90 hover:bg-emerald-500/25" onclick="mtPendFeedback(\\''+key+'\\',1)" title="Confirmar pendiente">\\u2713</button>'+
-      '<button class="text-[11px] px-2 py-0.5 rounded bg-white/[0.06] text-white/45 hover:bg-white/[0.1]" onclick="mtPendFeedback(\\''+key+'\\',-1)" title="No es un pendiente real">\\u2717</button>'+
+      '<button class="text-[11px] px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300/90 hover:bg-emerald-500/25" onclick="mtCardFeedback(\\''+key+'\\',\\''+c.tipo+'\\',1)" title="Confirmar">\\u2713</button>'+
+      '<button class="text-[11px] px-2 py-0.5 rounded bg-white/[0.06] text-white/45 hover:bg-white/[0.1]" onclick="mtCardFeedback(\\''+key+'\\',\\''+c.tipo+'\\',-1)" title="Descartar">\\u2717</button>'+
     '</div>';
   container.appendChild(div);
 }
@@ -2894,13 +2923,19 @@ function _pendEnforceMax(){
   }
 }
 
-function renderPendingCards(pendientes){
-  if(!Array.isArray(pendientes)) return;
-  for(const p of pendientes){
+// renderCards: renderer GENÉRICO (unidad 5.3, corrección O2). card={key,tipo,texto,detail?}.
+// Gating por modo client-side: en modo 'silent' (status().proactive_mode) solo se
+// muestran tarjetas tipo 'pendiente' (contrato inamovible desde 2.2); el resto de
+// tipos se filtra aquí mismo, antes de tocar el DOM.
+function renderCards(cards, proactiveMode){
+  if(!Array.isArray(cards)) return;
+  for(const p of cards){
     const texto=(p&&p.texto||'').trim(); if(!texto) continue;
-    const key=pendKey(texto);
+    const tipo=(p&&p.tipo)||'pendiente';
+    if(proactiveMode==='silent' && tipo!=='pendiente') continue;
+    const key=(p&&p.key) || cardKey(texto);
     if(_pendCards.has(key)) continue; // ya vista (nueva, resuelta o caducada): nunca reaparece
-    const card={texto, responsable:p.responsable, fecha:p.fecha, hora:p.hora,
+    const card={texto, tipo, responsable:p.responsable, fecha:p.fecha, hora:p.hora, detail:p.detail,
       firstSeen: Date.now(), resolved:false, expired:false, timer:null};
     _pendCards.set(key, card);
     _pendRenderCard(key);
@@ -2908,8 +2943,14 @@ function renderPendingCards(pendientes){
     _pendEnforceMax();
   }
 }
+// Alias de compatibilidad: los pendientes del insight stream siguen entrando por
+// aquí (tipo 'pendiente' hardcodeado, forma histórica de esta función).
+function renderPendingCards(pendientes){
+  if(!Array.isArray(pendientes)) return;
+  renderCards(pendientes.map(p=>({...p, tipo:'pendiente'})), null);
+}
 
-async function mtPendFeedback(key, value){
+async function mtCardFeedback(key, tipo, value){
   const c=_pendCards.get(key); if(!c || c.resolved) return;
   c.resolved=true;
   const actions=document.getElementById('pc-actions-'+key);
@@ -2918,10 +2959,12 @@ async function mtPendFeedback(key, value){
     : '<span class="text-[11px] text-white/35">\\u2717 Descartado</span>'; }
   try{
     await fetch('/api/meeting/feedback',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({key:key, tipo:'pendiente', texto:c.texto, value:value})});
+      body:JSON.stringify({key:key, tipo:(tipo||c.tipo||'pendiente'), texto:c.texto, value:value})});
   }catch(e){ /* best-effort: la tarjeta igual se retira */ }
   setTimeout(()=>{ _pendRemove(key); }, 2000);
 }
+// Alias de compatibilidad con el nombre anterior (unidad 2.2).
+async function mtPendFeedback(key, value){ return mtCardFeedback(key, 'pendiente', value); }
 
 function _pendResetAll(){
   const container=document.getElementById('pending-cards');
@@ -2956,7 +2999,12 @@ async function loadLive(){
       const lv=(s.levels||{}), pctYo=Math.round(Math.min(lv.yo||0,1)*100), pctEllos=Math.round(Math.min(lv.ellos||0,1)*100);
       const vuYo=document.getElementById('mt-vu-yo'), vuEllos=document.getElementById('mt-vu-ellos');
       if(vuYo) vuYo.style.width=pctYo+'%'; if(vuEllos) vuEllos.style.width=pctEllos+'%';
-      renderPendingCards((d.insights||{}).pendientes||[]);
+      // Pendientes del insight stream (tipo 'pendiente' hardcodeado) + tarjetas
+      // genéricas futuras si el backend ya expone status().cards (5.1/5.2 —
+      // tolerante a su ausencia: hoy status() no trae "cards", no rompe nada).
+      const pendCards=((d.insights||{}).pendientes||[]).map(p=>({...p, tipo:'pendiente'}));
+      const extraCards=Array.isArray(s.cards) ? s.cards : [];
+      renderCards(pendCards.concat(extraCards), s.proactive_mode);
     } else { startB.classList.remove('hidden'); stopB.classList.add('hidden'); document.getElementById('mt-status').textContent='';
       liveHeader.classList.add('hidden'); actionBar.classList.add('hidden'); tabs.classList.add('hidden');
       document.getElementById('mt-paused-badge').classList.add('hidden'); _mtPaused=false;
@@ -3646,6 +3694,7 @@ def get_settings():
         "local_whisper_model": os.getenv("LOCAL_WHISPER_MODEL", "small"),
         "groq_fallback": os.getenv("GROQ_FALLBACK", "false").lower() == "true",
         "audio_source": os.getenv("AUDIO_SOURCE", "mic"),
+        "proactive_mode": _proactive.get_mode(),
         "insights_backend": os.getenv("INSIGHTS_BACKEND", "groq"),
         "insights_backend_live": (os.getenv("INSIGHTS_BACKEND_LIVE", "").strip().lower()
                                    or os.getenv("INSIGHTS_BACKEND", "groq").strip().lower()
@@ -3681,6 +3730,7 @@ def update_settings():
         "transcription_backend": "TRANSCRIPTION_BACKEND",
         "local_whisper_model": "LOCAL_WHISPER_MODEL",
         "groq_fallback": "GROQ_FALLBACK",
+        "proactive_mode": "PROACTIVE_MODE",
         "insights_backend": "INSIGHTS_BACKEND",
         "insights_backend_live": "INSIGHTS_BACKEND_LIVE",
         "insights_backend_batch": "INSIGHTS_BACKEND_BATCH",

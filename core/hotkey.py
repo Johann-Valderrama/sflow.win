@@ -39,6 +39,8 @@ class HotkeyListener(QObject):
     translate_pressed = pyqtSignal()
     meeting_toggle = pyqtSignal()  # AltGr+R: iniciar/terminar modo reunión (toggle)
     highlight_pressed = pyqtSignal()  # AltGr+H: marcar momento destacado durante la reunión
+    hud_toggle = pyqtSignal()      # AltGr+A: abrir/cerrar el HUD proactivo (unidad 5.3)
+    lost_pressed = pyqtSignal()    # AltGr+M: "Me perdí" — resumen de los últimos 2 min (unidad 5.3)
 
     def __init__(self):
         """Inicializa el estado de teclas, el timer de armado y la detección de triple-tap."""
@@ -51,6 +53,8 @@ class HotkeyListener(QObject):
         self._hands_free = False
         self._alt_gr_t_mode = False  # True cuando está en modo toggle AltGr+T
         self._h_held = False  # supresión de auto-repeat para AltGr+H (no es un toggle idempotente)
+        self._a_held = False  # supresión de auto-repeat para AltGr+A (mismo patrón que H)
+        self._m_held = False  # supresión de auto-repeat para AltGr+M (mismo patrón que H)
 
         self._listener: keyboard.Listener | None = None
 
@@ -88,6 +92,8 @@ class HotkeyListener(QObject):
         self._hands_free = False
         self._alt_gr_t_mode = False
         self._h_held = False
+        self._a_held = False
+        self._m_held = False
         self._shift_tap_count = 0
         self._last_shift_press = 0.0
         self._shift_chord = False
@@ -164,6 +170,13 @@ class HotkeyListener(QObject):
         # ante layouts igual que la detección de 'T'/'R'.
         _H_VK = 0x48
         is_h = hasattr(key, 'vk') and key.vk == _H_VK
+        # Detectar 'A' por vk (0x41) para el toggle del HUD proactivo (AltGr+A) y
+        # 'M' por vk (0x4D) para "Me perdí" (AltGr+M), robustos ante layouts igual
+        # que la detección de 'T'/'R'/'H' (unidad 5.3).
+        _A_VK = 0x41
+        is_a = hasattr(key, 'vk') and key.vk == _A_VK
+        _M_VK = 0x4D
+        is_m = hasattr(key, 'vk') and key.vk == _M_VK
 
         # --- Tap limpio de Shift: cualquier otra tecla invalida tap y secuencia ---
         # Va ANTES de los bloques con return (reunión, modo 4) para que el acorde
@@ -190,6 +203,23 @@ class HotkeyListener(QObject):
                 self._h_held = True
                 self.highlight_pressed.emit()
             return
+
+        # --- Toggle del HUD proactivo: AltGr + A (unidad 5.3) ---
+        # Mismo patrón anti-auto-repeat que H: sin _a_held, mantener A presionado
+        # togglearía el HUD decenas de veces por segundo.
+        if is_a and self._alt_gr_held:
+            if not self._a_held:
+                self._a_held = True
+                self.hud_toggle.emit()
+            return
+
+        # --- "Me perdí": AltGr + M (unidad 5.3) ---
+        if is_m and self._alt_gr_held:
+            if not self._m_held:
+                self._m_held = True
+                self.lost_pressed.emit()
+            return
+
         if is_t and self._alt_gr_held:
             if self._alt_gr_t_mode and self._recording:
                 # Segunda pulsación → detener grabación
@@ -250,6 +280,12 @@ class HotkeyListener(QObject):
         is_h = hasattr(key, 'vk') and key.vk == _H_VK
         if is_h:
             self._h_held = False
+        _A_VK = 0x41
+        if hasattr(key, 'vk') and key.vk == _A_VK:
+            self._a_held = False
+        _M_VK = 0x4D
+        if hasattr(key, 'vk') and key.vk == _M_VK:
+            self._m_held = False
 
         # Actualizar estado de modificadores
         if is_ctrl:

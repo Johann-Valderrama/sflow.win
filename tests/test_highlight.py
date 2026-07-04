@@ -52,6 +52,8 @@ def listener():
     hl.translate_pressed = MagicMock()
     hl.meeting_toggle = MagicMock()
     hl.highlight_pressed = MagicMock()
+    hl.hud_toggle = MagicMock()
+    hl.lost_pressed = MagicMock()
     return hl
 
 
@@ -155,6 +157,104 @@ class TestHighlightHotkey:
         # Tras el reset, una nueva pulsación debe volver a emitir
         listener._on_press(h_key)
         assert listener.highlight_pressed.emit.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Unidad 5.3 — AltGr+A (toggle HUD) y AltGr+M ("me perdí")
+# ---------------------------------------------------------------------------
+
+class TestHudHotkeys:
+    def test_altgr_a_emits_once_despite_autorepeat(self, listener):
+        _press_alt_gr(listener)
+        a_key = _vk_key(0x41)
+        for _ in range(20):
+            listener._on_press(a_key)
+        assert listener.hud_toggle.emit.call_count == 1
+
+    def test_altgr_a_release_then_press_emits_again(self, listener):
+        _press_alt_gr(listener)
+        a_key = _vk_key(0x41)
+        listener._on_press(a_key)
+        listener._on_press(a_key)
+        assert listener.hud_toggle.emit.call_count == 1
+        listener._on_release(a_key)
+        listener._on_press(a_key)
+        assert listener.hud_toggle.emit.call_count == 2
+
+    def test_a_without_altgr_does_nothing(self, listener):
+        a_key = _vk_key(0x41)
+        listener._on_press(a_key)
+        listener._on_release(a_key)
+        assert listener.hud_toggle.emit.call_count == 0
+
+    def test_altgr_m_emits_once_despite_autorepeat(self, listener):
+        _press_alt_gr(listener)
+        m_key = _vk_key(0x4D)
+        for _ in range(20):
+            listener._on_press(m_key)
+        assert listener.lost_pressed.emit.call_count == 1
+
+    def test_altgr_m_release_then_press_emits_again(self, listener):
+        _press_alt_gr(listener)
+        m_key = _vk_key(0x4D)
+        listener._on_press(m_key)
+        listener._on_press(m_key)
+        assert listener.lost_pressed.emit.call_count == 1
+        listener._on_release(m_key)
+        listener._on_press(m_key)
+        assert listener.lost_pressed.emit.call_count == 2
+
+    def test_m_without_altgr_does_nothing(self, listener):
+        m_key = _vk_key(0x4D)
+        listener._on_press(m_key)
+        listener._on_release(m_key)
+        assert listener.lost_pressed.emit.call_count == 0
+
+    def test_reset_clears_a_and_m_held_flags(self, listener):
+        _press_alt_gr(listener)
+        a_key = _vk_key(0x41)
+        m_key = _vk_key(0x4D)
+        listener._on_press(a_key)
+        listener._on_press(m_key)
+        assert listener._a_held is True
+        assert listener._m_held is True
+        listener.reset()
+        assert listener._a_held is False
+        assert listener._m_held is False
+
+    def test_no_regression_h_r_t_and_mode1(self, listener):
+        """AltGr+A/M no rompen H, R, T ni el modo 1 (Ctrl+Alt)."""
+        from pynput import keyboard
+        import core.hotkey as hotkey_module
+        original_arming_delay = hotkey_module.ARMING_DELAY
+        hotkey_module.ARMING_DELAY = 0
+        try:
+            # H sigue funcionando
+            _press_alt_gr(listener)
+            listener._on_press(_vk_key(0x48))
+            assert listener.highlight_pressed.emit.call_count == 1
+            _release_alt_gr(listener)
+
+            # R sigue funcionando (sin supresión de auto-repeat, como antes)
+            _press_alt_gr(listener)
+            listener._on_press(_vk_key(0x52))
+            assert listener.meeting_toggle.emit.call_count == 1
+            _release_alt_gr(listener)
+
+            # T sigue funcionando (toggle)
+            _press_alt_gr(listener)
+            listener._on_press(_vk_key(0x54))
+            assert listener.translate_pressed.emit.call_count == 1
+            listener._on_press(_vk_key(0x54))
+            assert listener.released.emit.call_count == 1
+            _release_alt_gr(listener)
+
+            # Modo 1 (Ctrl+Alt) sigue disparando sin AltGr
+            listener._on_press(keyboard.Key.ctrl_l)
+            listener._on_press(keyboard.Key.alt_l)
+            assert listener.pressed.emit.call_count == 1
+        finally:
+            hotkey_module.ARMING_DELAY = original_arming_delay
 
 
 # ---------------------------------------------------------------------------

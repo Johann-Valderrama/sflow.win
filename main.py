@@ -1,23 +1,6 @@
 #!/usr/bin/env python3
 """Vflow - Voice-to-text desktop tool powered by Groq Whisper."""
 
-# IMPORTANTE — Fix de conflicto OpenMP entre ctranslate2 y PyQt6 (Windows).
-#
-# ctranslate2 (usado por faster-whisper) incluye su propio libiomp5md.dll
-# (runtime Intel OpenMP).  Cuando PyQt6 carga primero sus DLLs de Qt y el
-# runtime MSVC inicializa TLS/mutexes globales, un segundo intento de
-# inicializar el runtime OpenMP de Intel desde ctranslate2 provoca un Access
-# Violation (exit code 0xC0000005) que mata el proceso silenciosamente.
-#
-# Solución: importar ctranslate2 ANTES de cualquier import de PyQt6 para que
-# sea ctranslate2 quien registre primero su runtime OpenMP.  Esta importación
-# es un no-op en equipos donde faster-whisper no está instalado (se ignora
-# silenciosamente), por lo que no afecta la ruta Groq.
-try:
-    import ctranslate2  # noqa: F401 — pre-carga libiomp5md.dll antes de Qt
-except ImportError:
-    pass  # faster-whisper no instalado; modo Groq no se ve afectado
-
 import ctypes
 import logging
 import logging.handlers
@@ -50,12 +33,16 @@ from PyQt6.QtGui import QIcon, QPixmap, QAction
 
 from dotenv import set_key, unset_key
 from ui.pill_widget import PillWidget
+from ui.hud_widget import HudWidget
 from core.recorder import AudioRecorder
 from core.transcriber import Transcriber
 from core.hotkey import HotkeyListener
 from core.meeting import MEETING
 from core.clipboard import paste_text, copy_text, save_frontmost_app
 from core.secrets import encrypt
+from core import proactive as _proactive
+from core.proactive import PROACTIVE, LullDetector, MonologueWatch
+from core import assistant as _assistant
 from db.database import TranscriptionDB
 from web.server import start_web_server
 from config import LOGO_PATH, APP_DATA_DIR, GROQ_API_KEY, CHUNK_SECONDS, MAX_RECORDING_SECONDS, APP_VERSION, AUDIO_SOURCE
@@ -388,6 +375,7 @@ class VflowApp(QObject):
     transcription_error = pyqtSignal(str, int)          # error_msg, generation
     paste_finished = pyqtSignal(str)                    # "pasted" | "clipboard_only" | "failed"
     meeting_stopped = pyqtSignal(object)                # dict resultado de MEETING.stop()
+    lost_answer_ready = pyqtSignal(dict)                # resultado de answer_live() (unidad 5.3)
 
     def __init__(self):
         """Inicializa componentes (recorder, transcriber, DB, hotkey, pill) y conecta señales."""
@@ -408,9 +396,17 @@ class VflowApp(QObject):
 
         self.hotkey = HotkeyListener()
         self.pill = PillWidget()
+        self.hud = HudWidget()
 
         # Referencia al tray para mostrar mensajes; se asigna desde main()
         self.tray: QSystemTrayIcon | None = None
+
+        # Estado del Proactivo v2 (unidad 5.3): detectores puros alimentados en
+        # el tick del _meeting_sync_timer, cuando hay reunión activa.
+        self._lull_detector = LullDetector()
+        self._monologue_watch = MonologueWatch()
+        self._hud_visible = False
+        self._hud_has_unseen_card = False  # controla el badge de la pill
 
         # Contador de generación y guard anti-duplicado
         self._generation = 0
@@ -455,10 +451,18 @@ class VflowApp(QObject):
         self.hotkey.translate_pressed.connect(self._on_translate_pressed, Qt.ConnectionType.QueuedConnection)
         self.hotkey.meeting_toggle.connect(self._on_meeting_toggle, Qt.ConnectionType.QueuedConnection)
         self.hotkey.highlight_pressed.connect(self._on_highlight, Qt.ConnectionType.QueuedConnection)
+        self.hotkey.hud_toggle.connect(self._on_hud_toggle, Qt.ConnectionType.QueuedConnection)
+        self.hotkey.lost_pressed.connect(self._on_lost_pressed, Qt.ConnectionType.QueuedConnection)
         self.meeting_stopped.connect(self._on_meeting_stopped, Qt.ConnectionType.QueuedConnection)
         self.transcription_done.connect(self._on_transcription_done, Qt.ConnectionType.QueuedConnection)
         self.transcription_error.connect(self._on_transcription_error, Qt.ConnectionType.QueuedConnection)
         self.paste_finished.connect(self._on_paste_finished, Qt.ConnectionType.QueuedConnection)
+        self.lost_answer_ready.connect(self._on_lost_answer_ready, Qt.ConnectionType.QueuedConnection)
+
+        # Señales del HUD hacia el resto de la app (feedback/"me perdí"/pregunta libre)
+        self.hud.feedback_requested.connect(self._on_hud_feedback)
+        self.hud.lost_requested.connect(self._on_lost_pressed)
+        self.hud.ask_requested.connect(self._on_hud_ask)
 
     def start(self):
         """Inicia el listener de hotkeys y muestra la pill en estado idle."""
@@ -795,6 +799,97 @@ class VflowApp(QObject):
                 QSystemTrayIcon.MessageIcon.Information,
                 2500,
             )
+        if self._hud_visible:
+            self.hud.show_highlight_confirmation(item["time"])
+
+    # ------------------------------------------------------------------
+    # HUD proactivo (unidad 5.3)
+    # ------------------------------------------------------------------
+
+    @pyqtSlot()
+    def _on_hud_toggle(self):
+        """AltGr+A o clic derecho de la pill: abre/cierra el HUD.
+
+        Sin reunión activa se ignora (contrato de la unidad: el HUD solo tiene
+        sentido durante una reunión).
+        """
+        if not MEETING.is_active():
+            return
+        if self._hud_visible:
+            self.hud.hide()
+            self._hud_visible = False
+        else:
+            # Anclar cerca de la pill al abrir (posición actual de la pill).
+            px, py = self.pill.x(), self.pill.y()
+            self.hud.anchor_near(px, py)
+            self.hud.show()
+            self._hud_visible = True
+            self._hud_has_unseen_card = False
+            self.pill.set_meeting_state(
+                True, paused=self._meeting_paused_cached(),
+                elapsed_fmt=MEETING.status().get("elapsed_fmt", "00:00"),
+                level_ellos=0.0,
+                source_system=(os.getenv("AUDIO_SOURCE", "mic") == "system"),
+                badge=None,
+            )
+
+    def _meeting_paused_cached(self) -> bool:
+        try:
+            return bool(MEETING.status().get("paused"))
+        except Exception:  # noqa: BLE001
+            return False
+
+    @pyqtSlot()
+    def _on_lost_pressed(self):
+        """AltGr+M o botón del HUD: abre el HUD si estaba cerrado y dispara el
+        resumen de los últimos 2 minutos vía answer_live (SÍNCRONO, 5-15s) en un
+        hilo aparte — NUNCA en el hilo Qt (ver core/assistant.answer_live)."""
+        if not MEETING.is_active():
+            return
+        if not self._hud_visible:
+            self._on_hud_toggle()
+        self.hud.show_lost_spinner()
+        threading.Thread(target=self._lost_worker, daemon=True).start()
+
+    def _lost_worker(self):
+        """Corre en un hilo daemon: answer_live() es síncrono/bloqueante (5-15s
+        con claude-cli). El resultado vuelve al hilo Qt vía QueuedConnection."""
+        try:
+            res = _assistant.answer_live("Resume brevemente los últimos 2 minutos de la reunión")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("HUD: error en 'me perdí': %s", exc)
+            res = {"ok": False, "error": str(exc)}
+        self.lost_answer_ready.emit(res)
+
+    @pyqtSlot(dict)
+    def _on_lost_answer_ready(self, res: dict):
+        if res.get("ok"):
+            self.hud.show_lost_answer(res.get("answer") or "(sin respuesta)")
+        else:
+            self.hud.show_lost_answer("No se pudo generar el resumen: " + str(res.get("error") or "error desconocido"))
+
+    def _on_hud_feedback(self, key: str, tipo: str, texto: str, value: int):
+        """Botones ✓/✗ de una tarjeta del HUD → persiste igual que el feedback web."""
+        try:
+            MEETING.add_feedback(key, tipo, texto, value)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("HUD: error registrando feedback: %s", exc)
+
+    def _on_hud_ask(self, message: str):
+        """Pregunta libre del mini-input del HUD → mismo worker que 'me perdí'
+        (answer_live síncrono en un hilo, resultado por señal Qt)."""
+        if not MEETING.is_active():
+            return
+        self.hud.show_lost_spinner()
+        threading.Thread(target=self._ask_worker, args=(message,), daemon=True).start()
+
+    def _ask_worker(self, message: str):
+        try:
+            res = _assistant.answer_live(message)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("HUD: error en pregunta libre: %s", exc)
+            res = {"ok": False, "error": str(exc)}
+        self.lost_answer_ready.emit(res)
 
     def _meeting_stop_worker(self):
         """Detiene la reunión en background (bloquea) y emite el resultado al hilo Qt."""
@@ -864,22 +959,65 @@ class VflowApp(QObject):
                     # _on_meeting_stopped ya gestiona la pill (_meeting_stopping=True).
                     self._apply_meeting_viz(False)
                     self.pill.set_state(PillWidget.STATE_DONE)
+            if not active:
+                # Reunión terminada: cerrar el HUD y resetear el gate proactivo
+                # (nueva reunión = estado limpio, sin arrastrar cooldowns/cola).
+                if self._hud_visible:
+                    self.hud.hide()
+                    self._hud_visible = False
+                self._hud_has_unseen_card = False
+                PROACTIVE.reset()
+                self._lull_detector.reset()
+                self._monologue_watch.reset()
 
         if active:
             try:
                 status = MEETING.status()
                 levels = status.get("levels") or {}
+                level_ellos = float(levels.get("ellos", 0.0) or 0.0)
+                self._tick_proactive(levels)
+                badge = "!" if (self._hud_has_unseen_card and not self._hud_visible) else None
                 self.pill.set_meeting_state(
                     True,
                     paused=bool(status.get("paused")),
                     elapsed_fmt=status.get("elapsed_fmt", "00:00"),
-                    level_ellos=float(levels.get("ellos", 0.0) or 0.0),
+                    level_ellos=level_ellos,
                     source_system=(os.getenv("AUDIO_SOURCE", "mic") == "system"),
+                    badge=badge,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("_sync_meeting_pill: error actualizando overlay de reunión: %s", exc)
         elif self.pill._meeting_mode:
             self.pill.set_meeting_state(False)
+
+    def _tick_proactive(self, levels: dict):
+        """Un tick (~1s) del Proactivo v2: alimenta lull/monólogo y entrega la
+        siguiente tarjeta de la cola si corresponde (unidad 5.3).
+
+        Llamado desde _sync_meeting_pill mientras hay reunión activa. Las clases
+        de detección/memoria cruzada (5.1/5.2) encolan en PROACTIVE desde sus
+        propios puntos de integración; aquí solo se drena la cola y se corre el
+        coaching de monólogo (modo trainer).
+        """
+        try:
+            level_yo = float(levels.get("yo", 0.0) or 0.0)
+            level_ellos = float(levels.get("ellos", 0.0) or 0.0)
+            lull = self._lull_detector.update(level_yo, level_ellos)
+
+            if _proactive.get_mode() == "trainer":
+                coaching_card = self._monologue_watch.update(level_yo, level_ellos)
+                if coaching_card is not None:
+                    key = f"coaching-monologue-{int(MEETING.status().get('elapsed', 0))}"
+                    PROACTIVE.enqueue({**coaching_card, "key": key})
+
+            card = PROACTIVE.pop_deliverable(lull)
+            if card is not None:
+                if self._hud_visible:
+                    self.hud.add_card(card)
+                else:
+                    self._hud_has_unseen_card = True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("_tick_proactive: error (se ignora este tick): %s", exc)
 
     def _apply_meeting_viz(self, active: bool):
         """Apunta el visualizador del pill al audio de la reunión (tu voz) o lo
@@ -1024,6 +1162,9 @@ def main():
     vflow.pill.open_dashboard_requested.connect(
         lambda: webbrowser.open(f"http://localhost:{port}/reunion"),
         Qt.ConnectionType.QueuedConnection,
+    )
+    vflow.pill.hud_toggle_requested.connect(
+        vflow._on_hud_toggle, Qt.ConnectionType.QueuedConnection,
     )
 
     logger.info("Vflow v%s activo. Dashboard en http://localhost:%s", APP_VERSION, port)

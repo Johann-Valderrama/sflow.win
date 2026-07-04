@@ -53,6 +53,9 @@ class PillWidget(QWidget):
 
     # Clic corto (sin arrastre) con reunión activa: pide abrir el dashboard en /reunion.
     open_dashboard_requested = pyqtSignal()
+    # Clic derecho (unidad 5.3): pide abrir/cerrar el HUD proactivo. No interfiere
+    # con el drag (que usa el botón izquierdo).
+    hud_toggle_requested = pyqtSignal()
 
     def __init__(self):
         """Configura la ventana flotante, timers de animación y el visualizador de audio."""
@@ -74,6 +77,7 @@ class PillWidget(QWidget):
         self._meeting_elapsed_fmt = "00:00"
         self._meeting_level_ellos = 0.0
         self._meeting_source_system = False  # AUDIO_SOURCE=system: matiz/glifo levemente distinto
+        self._meeting_badge: str | None = None  # badge compacto (unidad 5.3): tarjeta del HUD sin ver
         self._bg_color_active = QColor(15, 15, 15, int(255 * PILL_OPACITY))
         self._bg_color_idle = QColor(140, 140, 140, 176)  # gray, 20% more translucent
         self._bg_color = self._bg_color_idle  # start in idle
@@ -180,18 +184,23 @@ class PillWidget(QWidget):
             logger.warning("_ensure_on_screen falló: %s", exc)
 
     def set_meeting_state(self, active: bool, paused: bool = False, elapsed_fmt: str = "00:00",
-                           level_ellos: float = 0.0, source_system: bool = False):
+                           level_ellos: float = 0.0, source_system: bool = False,
+                           badge: "str | None" = None):
         """Actualiza el estado de reunión mostrado en la pill (llamado desde main.py ~1/s).
 
         No cambia self._state (idle/recording/...): la reunión pinta un acento propio
         ENCIMA del estado normal de dictado mientras `active` es True. Solo repinta
         (sin animación de tamaño): timer/indicador son overlays baratos.
+
+        ``badge`` (unidad 5.3): 1 palabra/símbolo compacto pintado junto al timer
+        cuando hay una tarjeta del HUD sin ver (HUD cerrado); None = sin badge.
         """
         self._meeting_mode = active
         self._meeting_paused = paused
         self._meeting_elapsed_fmt = elapsed_fmt
         self._meeting_level_ellos = max(0.0, min(1.0, level_ellos))
         self._meeting_source_system = source_system
+        self._meeting_badge = badge
         self.update()
 
     def set_state(self, state: str):
@@ -372,6 +381,8 @@ class PillWidget(QWidget):
                     label = "⏸"  # glifo de pausa, parpadea reutilizando el ángulo del spinner
                 else:
                     label = self._meeting_elapsed_fmt
+                if self._meeting_badge:
+                    label = f"{label} {self._meeting_badge}"
                 painter.drawText(text_x, 0, text_w - 10, h, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label)
                 # Indicador "Ellos": punto cian cuya opacidad sigue el nivel del canal.
                 dot_r = 3
@@ -411,10 +422,17 @@ class PillWidget(QWidget):
         QTimer.singleShot(0, self._force_topmost)
 
     def mousePressEvent(self, event):
-        """Registra la posición inicial para arrastrar la pill (y para distinguir clic de arrastre)."""
+        """Registra la posición inicial para arrastrar la pill (y para distinguir clic de arrastre).
+
+        Clic derecho (unidad 5.3): no arrastra, solo pide toggle del HUD proactivo
+        (superficie nueva, no interfiere con el drag que usa el botón izquierdo).
+        """
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self._press_pos = event.globalPosition().toPoint()
+            event.accept()
+        elif event.button() == Qt.MouseButton.RightButton:
+            self.hud_toggle_requested.emit()
             event.accept()
 
     def mouseMoveEvent(self, event):
