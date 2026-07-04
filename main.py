@@ -836,9 +836,11 @@ class VflowApp(QObject):
             self.hud.hide()
             self._hud_visible = False
         else:
-            # Anclar cerca de la pill al abrir (posición actual de la pill).
-            px, py = self.pill.x(), self.pill.y()
-            self.hud.anchor_near(px, py)
+            # Panel lateral (unidad 5.4): ya no es un popup anclado a la pill.
+            # Respeta la geometría que el usuario haya dejado (posición/tamaño);
+            # solo aplica el default (lado derecho) la primera vez o tras "restablecer".
+            self.hud.ensure_initial_geometry()
+            self.hud.set_registro(MEETING.get_registro())
             self.hud.show()
             self._hud_visible = True
             self._hud_has_unseen_card = False
@@ -1033,6 +1035,10 @@ class VflowApp(QObject):
                     self.hud.add_card(card)
                 else:
                     self._hud_has_unseen_card = True
+
+            if self._hud_visible:
+                self.hud.set_timer_label(MEETING.status().get("elapsed_fmt", "00:00"))
+                self.hud.set_registro(MEETING.get_registro())
         except Exception as exc:  # noqa: BLE001
             logger.warning("_tick_proactive: error (se ignora este tick): %s", exc)
 

@@ -140,6 +140,9 @@ class MeetingSession:
         # Memoria cruzada en vivo (unidad 5.2): ids de reuniones PASADAS por las
         # que ya se emitió tarjeta en ESTA sesión (dedup: máx 1 por reunión pasada).
         self._cross_emitted: set = set()
+        # Tarjetas de memoria cruzada emitidas, con timestamp, para el registro del
+        # HUD (unidad 5.4): [{"t": float, "time": "mm:ss", "texto": str}].
+        self._cross_cards: list = []
         # Niveles por canal (RMS 0..1 del último chunk de audio) para los VU del dashboard.
         # Escritura de float simple: atómica bajo el GIL, no necesita el lock (barato,
         # se recalcula en cada callback de audio; decisión de debate: nada de _tail_rms aquí).
@@ -306,6 +309,36 @@ class MeetingSession:
         with self._lock:
             return dict(self._last_metrics) if self._last_metrics else None
 
+    def get_registro(self) -> list:
+        """Registro cronológico de la reunión para el panel del HUD (unidad 5.4).
+
+        Une los eventos que el copiloto fue notando —highlights (⭐), notas del
+        usuario (📝), detecciones (❓/🤝/⚠️) y memoria cruzada (🕘)— cada uno con su
+        timestamp real, ordenados del más reciente al más antiguo (como una línea
+        de tiempo que se lee de arriba hacia abajo). Es PULL puro: no interrumpe,
+        se consulta. Forma de cada ítem: {tipo, texto, time, t}.
+
+        Nota v1: los pendientes del insight stream (rolling, sin timestamp estable)
+        NO entran aquí; viven en las tarjetas "Ahora" y en el dashboard. Se pueden
+        añadir después si se decide estampar su primer avistamiento.
+        """
+        with self._lock:
+            entries = []
+            for h in self._highlights:
+                entries.append({"tipo": "highlight", "texto": "Momento destacado",
+                                "time": h.get("time", ""), "t": h.get("t", 0.0)})
+            for n in self._notes:
+                entries.append({"tipo": "note", "texto": n.get("text", ""),
+                                "time": n.get("time", ""), "t": n.get("t", 0.0)})
+            for d in self._detections:
+                entries.append({"tipo": "deteccion", "texto": d.get("texto", ""),
+                                "time": d.get("time", ""), "t": d.get("t", 0.0)})
+            for c in self._cross_cards:
+                entries.append({"tipo": "cruzada", "texto": c.get("texto", ""),
+                                "time": c.get("time", ""), "t": c.get("t", 0.0)})
+        entries.sort(key=lambda e: e.get("t", 0.0), reverse=True)
+        return entries
+
     def transcript_segments(self) -> list:
         """Devuelve los segmentos ordenados cronológicamente, listos para render."""
         with self._lock:
@@ -452,6 +485,7 @@ class MeetingSession:
             self._feedback = []
             self._detections = []
             self._cross_emitted = set()
+            self._cross_cards = []
             self._level_mic = 0.0
             self._level_sys = 0.0
             self._paused = False
@@ -1203,11 +1237,14 @@ class MeetingSession:
                 return
             fecha = self._fmt_ddmm(row.get("started_at"))
             prefijo = f"El {fecha} se acordó" if fecha else "En una reunión pasada se acordó"
-            card = {"key": f"cruz-{mid}", "tipo": "cruzada", "texto": f"{prefijo}: {best_text}"}
+            texto = f"{prefijo}: {best_text}"
+            card = {"key": f"cruz-{mid}", "tipo": "cruzada", "texto": texto}
             _proactive.PROACTIVE.enqueue(card)
             _proactive.PROACTIVE.mark_pushed("cruzada")
             with self._lock:
                 self._cross_emitted.add(mid)
+                t = self._elapsed()
+                self._cross_cards.append({"t": round(t, 1), "time": _fmt_mmss(t), "texto": texto})
             logger.info("Reunión: memoria cruzada emitida (reunión pasada %s, overlap=%d).",
                         mid, best_overlap)
             return  # máx 1 tarjeta por consolidación (el presupuesto manda igual)

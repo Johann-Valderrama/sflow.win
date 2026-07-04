@@ -1,27 +1,46 @@
-"""HUD proactivo (unidad 5.3) — ventana Qt nativa, sin QtWebEngine.
+"""HUD proactivo (unidad 5.4) — panel lateral Qt nativo, sin QtWebEngine.
 
-Superficie nueva para el Proactivo v2: tarjetas de push (pendientes/detecciones/
-coaching), confirmación de highlight, "Me perdí" y una pregunta libre sobre la
-reunión en curso. Se alimenta EN-PROCESO desde main.py (nunca HTTP/sockets):
-main.py le empuja datos en el tick de 1s del ``_meeting_sync_timer`` existente
-(corrección O9 del debate: lecturas del HUD hacia MEETING deben ser mínimas y
-cortas; mejor que main.py empuje).
+Rediseño 5.4: de popup pequeño anclado a la pill, a PANEL LATERAL de dos zonas
+(mockup aprobado por Johann, fidelidad literal de colores/tamaños):
+
+  HEADER  — punto ámbar + "Reunión · copiloto" + timer + botón "restablecer".
+  AHORA   — zona transitoria: pila de tarjetas de push (máx 3), placeholder si
+            no hay ninguna.
+  REGISTRO — memoria de solo-lectura de la reunión completa (MEETING.get_registro()):
+            scroll con una fila por evento (highlight/note/deteccion/cruzada).
+  BOTTOM  — botón "Me perdí" + input de pregunta libre (igual que antes).
+
+Nada se borra automáticamente: "Ahora" es la única zona transitoria (las
+tarjetas caducan o reciben feedback y desaparecen de ahí), pero el Registro
+sigue existiendo porque se reconstruye siempre desde MEETING (fuente de
+verdad), nunca se edita localmente.
+
+Se alimenta EN-PROCESO desde main.py (nunca HTTP/sockets): main.py empuja
+datos en el tick de 1s del ``_meeting_sync_timer`` existente (corrección O9
+del debate: lecturas del HUD hacia MEETING deben ser mínimas y cortas; mejor
+que main.py empuje).
 
 Flags de ventana FIJOS (corrección O10): jamás togglear WindowDoesNotAcceptFocus
 ni ningún otro flag en caliente — mismo patrón verificado en ui/pill_widget.py
 (los clicks llegan sin robar foco con esta combinación). Para escribir en el
 mini-input de pregunta, el foco se activa DELIBERADAMENTE (patrón de
 core/clipboard.py: guardar HWND frontal, SetForegroundWindow, restaurar al salir).
+
+Redimensionable/reposicionable (requisito 5.4): QSizeGrip en la esquina
+inferior derecha, arrastre restringido a la banda del header (para no chocar
+con clicks en tarjetas/scroll del registro), y geometría persistida en memoria
+del proceso (no hay "re-anclaje" tras el primer show: si el usuario movió o
+redimensionó el panel, se respeta hasta que pulse "restablecer").
 """
 import ctypes
 import ctypes.wintypes
 import logging
 
-from PyQt6.QtCore import Qt, QTimer, QPoint, QRectF, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PyQt6.QtCore import Qt, QTimer, QRectF, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QFontMetrics, QTextOption
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
-    QScrollArea, QFrame, QApplication,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit,
+    QScrollArea, QFrame, QApplication, QSizeGrip,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,32 +69,62 @@ _user32.SetWindowPos.restype = ctypes.wintypes.BOOL
 
 _HWND_TOPMOST = ctypes.wintypes.HWND(-1)
 
-# Estilo por tipo de tarjeta: (color de título, etiqueta).
+# Estilo por tipo de tarjeta ("Ahora"): (color de título, etiqueta, emoji del chip).
 CARD_STYLES = {
-    "pendiente": ("#d97706", "Pendiente"),          # ámbar — mismo acento que el dashboard
-    "coaching": ("#22d3ee", "Coaching"),             # verde-azulado (cian)
-    "deteccion": ("#a78bfa", "Detección"),           # violeta (default para tipos futuros)
-    "cruzada": ("#a78bfa", "Memoria cruzada"),
+    "pendiente": ("#d97706", "Pendiente", "📋"),        # ámbar
+    "coaching": ("#22d3ee", "Coaching", "🧭"),           # cian
+    "deteccion": ("#a78bfa", "Detección", "❓"),          # violeta
+    "cruzada": ("#a78bfa", "Memoria cruzada", "🕘"),      # violeta
 }
-_DEFAULT_STYLE = ("#a78bfa", "Nota")
+_DEFAULT_CARD_STYLE = ("#a78bfa", "Nota", "📝")
+
+# Estilo por tipo de fila del Registro: (color del chip, fondo alpha, emoji default).
+REGISTRO_STYLES = {
+    "highlight": (QColor(251, 191, 36), "rgba(251,191,36,0.15)", "⭐"),
+    "note": (QColor(96, 165, 250), "rgba(96,165,250,0.15)", "📝"),
+    "deteccion": (QColor(167, 139, 250), "rgba(139,92,246,0.16)", "❓"),
+    "cruzada": (QColor(167, 139, 250), "rgba(139,92,246,0.16)", "🕘"),
+}
+_DEFAULT_REGISTRO_STYLE = (QColor(167, 139, 250), "rgba(139,92,246,0.16)", "📝")
+
+# Emojis que el propio texto de detección ya trae al frente (evita duplicar
+# el emoji si coincide con el que pondríamos en el chip).
+_LEADING_EMOJIS = ("❓", "🤝", "⚠️")
 
 CARD_TTL_MS = 180_000  # 180s de caducidad visual (contrato con proactive.py)
 _MAX_CARDS = 3
-_HUD_WIDTH = 320
+
+_DEFAULT_WIDTH = 340
+_MIN_WIDTH = 280
+_MIN_HEIGHT = 320
+_RIGHT_MARGIN = 18  # separación del borde derecho de pantalla al anclar
+_TOP_MARGIN = 40
 
 
 def _feedback_btn_css(rgb: str) -> str:
-    """CSS de un botón de feedback (✓/✗) con el color rgb "r,g,b" dado."""
+    """CSS de un botón de feedback (Útil/Ruido) con el color rgb "r,g,b" dado."""
     return (
         f"QPushButton {{ background-color: rgba({rgb},0.12); color: rgba({rgb},0.95); "
-        f"border: 1px solid rgba({rgb},0.35); border-radius: 6px; font-size: 11.5px; font-weight: 600; }}"
+        f"border: 1px solid rgba({rgb},0.35); border-radius: 6px; font-size: 12px; "
+        f"font-weight: 600; padding: 0px; }}"
         f"QPushButton:hover {{ background-color: rgba({rgb},0.22); }}"
         f"QPushButton:pressed {{ background-color: rgba({rgb},0.32); }}"
     )
 
 
+class _SectionLabel(QLabel):
+    """Etiqueta de sección tipo "AHORA" / "REGISTRO DE LA REUNIÓN"."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text.upper(), parent)
+        self.setStyleSheet(
+            "color: rgba(255,255,255,0.35); font-size: 10.5px; font-weight: 600; "
+            "letter-spacing: 0.7px; border: none; background: transparent;"
+        )
+
+
 class _Card(QFrame):
-    """Una tarjeta individual dentro de la pila del HUD."""
+    """Una tarjeta individual dentro de la pila "Ahora"."""
 
     feedback = pyqtSignal(str, str, str, int)  # key, tipo, texto, value
 
@@ -84,7 +133,7 @@ class _Card(QFrame):
         self.key = card.get("key", "")
         self.tipo = card.get("tipo", "")
         self.texto = card.get("texto", "")
-        color, label = CARD_STYLES.get(self.tipo, _DEFAULT_STYLE)
+        color, label, emoji = CARD_STYLES.get(self.tipo, _DEFAULT_CARD_STYLE)
 
         r, g, b, _ = QColor(color).getRgb()
         self.setObjectName("HudCard")
@@ -92,23 +141,35 @@ class _Card(QFrame):
             f"QFrame#HudCard {{ background-color: rgba(255,255,255,22); "
             f"border: 1px solid rgba({r},{g},{b},110); border-radius: 10px; }}"
         )
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(5)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(10, 8, 10, 8)
+        outer.setSpacing(8)
+
+        chip = QLabel(emoji)
+        chip.setFixedSize(34, 34)
+        chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        chip.setStyleSheet(
+            f"background-color: rgba({r},{g},{b},38); border-radius: 10px; "
+            f"font-size: 15px; border: none;"
+        )
+        outer.addWidget(chip, 0)
+
+        body_col = QVBoxLayout()
+        body_col.setSpacing(5)
 
         title = QLabel(label.upper())
         title.setStyleSheet(
             f"color: {color}; font-weight: 700; font-size: 10.5px; "
             f"letter-spacing: 0.5px; border: none; background: transparent;"
         )
-        layout.addWidget(title)
+        body_col.addWidget(title)
 
         body = QLabel(self.texto)
         body.setWordWrap(True)
         body.setStyleSheet(
             "color: rgba(255,255,255,235); font-size: 13px; border: none; background: transparent;"
         )
-        layout.addWidget(body)
+        body_col.addWidget(body)
 
         detail = card.get("detail")
         if detail:
@@ -117,23 +178,25 @@ class _Card(QFrame):
             detail_lbl.setStyleSheet(
                 "color: rgba(255,255,255,130); font-size: 11px; border: none; background: transparent;"
             )
-            layout.addWidget(detail_lbl)
+            body_col.addWidget(detail_lbl)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(6)
-        ok_btn = QPushButton("✓ Útil")
-        ok_btn.setFixedHeight(24)
+        ok_btn = QPushButton("Útil")
+        ok_btn.setFixedHeight(28)
         ok_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         ok_btn.setStyleSheet(_feedback_btn_css("74,222,128"))
         ok_btn.clicked.connect(lambda: self.feedback.emit(self.key, self.tipo, self.texto, 1))
-        bad_btn = QPushButton("✗ Ruido")
-        bad_btn.setFixedHeight(24)
+        bad_btn = QPushButton("Ruido")
+        bad_btn.setFixedHeight(28)
         bad_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         bad_btn.setStyleSheet(_feedback_btn_css("248,113,113"))
         bad_btn.clicked.connect(lambda: self.feedback.emit(self.key, self.tipo, self.texto, -1))
         btn_row.addWidget(ok_btn, 1)
         btn_row.addWidget(bad_btn, 1)
-        layout.addLayout(btn_row)
+        body_col.addLayout(btn_row)
+
+        outer.addLayout(body_col, 1)
 
         self._ttl_timer = QTimer(self)
         self._ttl_timer.setSingleShot(True)
@@ -146,8 +209,134 @@ class _Card(QFrame):
         self.deleteLater()
 
 
+class _RegistroRow(QFrame):
+    """Una fila de solo-lectura dentro del scroll de Registro."""
+
+    def __init__(self, entry: dict, parent=None):
+        super().__init__(parent)
+        tipo = entry.get("tipo", "")
+        texto = str(entry.get("texto", "") or "")
+        time_label = str(entry.get("time", "") or "")
+        color, bg, default_emoji = REGISTRO_STYLES.get(tipo, _DEFAULT_REGISTRO_STYLE)
+
+        emoji = default_emoji
+        for lead in _LEADING_EMOJIS:
+            if texto.startswith(lead):
+                emoji = lead
+                texto = texto[len(lead):].lstrip()
+                break
+
+        self.setObjectName("RegistroRow")
+        self.setStyleSheet(
+            "QFrame#RegistroRow { background: transparent; border-radius: 9px; }"
+            "QFrame#RegistroRow:hover { background-color: rgba(255,255,255,0.04); }"
+        )
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 8, 6, 8)
+        row.setSpacing(8)
+
+        chip = QLabel(emoji)
+        chip.setFixedSize(26, 26)
+        chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        chip.setStyleSheet(
+            f"background-color: {bg}; border-radius: 8px; font-size: 12px; border: none;"
+        )
+        row.addWidget(chip, 0)
+
+        text_lbl = QLabel()
+        text_lbl.setStyleSheet(
+            "color: rgba(255,255,255,0.85); font-size: 12.5px; border: none; background: transparent;"
+        )
+        fm = QFontMetrics(text_lbl.font())
+        elided = fm.elidedText(texto, Qt.TextElideMode.ElideRight, 220)
+        text_lbl.setText(elided)
+        text_lbl.setToolTip(texto)
+        row.addWidget(text_lbl, 1)
+
+        time_lbl = QLabel(time_label)
+        time_lbl.setStyleSheet(
+            "color: rgba(255,255,255,0.35); font-size: 11px; border: none; background: transparent;"
+        )
+        row.addWidget(time_lbl, 0)
+
+
+_ASK_MIN_HEIGHT = 34   # una línea (mismo alto que el QLineEdit anterior)
+_ASK_MAX_HEIGHT = 90   # ~4 líneas; pasado esto, scroll interno
+
+
+class _AutoGrowTextEdit(QTextEdit):
+    """Input de pregunta libre: QTextEdit compacto que crece con el contenido.
+
+    Enter envía (mismo contrato que el QLineEdit anterior: returnPressed →
+    submit); Shift+Enter inserta salto de línea; Esc limpia y devuelve el
+    foco. Se redimensiona entre ``_ASK_MIN_HEIGHT`` y ``_ASK_MAX_HEIGHT``
+    según el tamaño real del documento (scrollbar interno pasado el máximo).
+    """
+
+    submitted = pyqtSignal()
+    escaped = pyqtSignal()
+    clicked = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setPlaceholderText("Pregunta sobre la reunión…")
+        self.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setTabChangesFocus(True)
+        self.setStyleSheet(
+            "QTextEdit { background-color: rgba(255,255,255,18); color: rgba(255,255,255,230); "
+            "border: 1px solid rgba(255,255,255,40); border-radius: 12px; padding: 6px 10px; "
+            "font-size: 12.5px; }"
+            "QTextEdit:focus { border: 1px solid rgba(139,92,246,160); }"
+        )
+        self.document().documentLayout().documentSizeChanged.connect(self._adjust_height)
+        # Altura de referencia de una sola línea vacía: todo crecimiento posterior
+        # se mide como delta contra esta base, para que el estado inicial/vacío
+        # caiga exactamente en _ASK_MIN_HEIGHT (evita doble conteo de márgenes/
+        # frame del QTextEdit, que varían con la stylesheet aplicada).
+        self._base_doc_h = self.document().size().height()
+        self._adjust_height()
+
+    def _adjust_height(self, *_args):
+        doc_h = self.document().size().height()
+        base = getattr(self, "_base_doc_h", doc_h)
+        grown = max(0, int(doc_h - base))
+        target = _ASK_MIN_HEIGHT + grown
+        clamped = max(_ASK_MIN_HEIGHT, min(target, _ASK_MAX_HEIGHT))
+        self.setFixedHeight(clamped)
+        self.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded if target > _ASK_MAX_HEIGHT
+            else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+
+    def text(self) -> str:
+        """Compat con el contrato previo del QLineEdit (usado internamente)."""
+        return self.toPlainText().strip()
+
+    def clear(self):
+        super().clear()
+        self._adjust_height()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                super().keyPressEvent(event)  # Shift+Enter: salto de línea normal
+            else:
+                self.submitted.emit()
+            return
+        if event.key() == Qt.Key.Key_Escape:
+            self.escaped.emit()
+            return
+        super().keyPressEvent(event)
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 class HudWidget(QWidget):
-    """Ventana flotante nativa del HUD proactivo."""
+    """Panel lateral flotante nativo del HUD proactivo (unidad 5.4)."""
 
     feedback_requested = pyqtSignal(str, str, str, int)  # key, tipo, texto, value
     lost_requested = pyqtSignal()                         # botón "Me perdí"
@@ -162,7 +351,7 @@ class HudWidget(QWidget):
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedWidth(_HUD_WIDTH)
+        self.setMinimumSize(_MIN_WIDTH, _MIN_HEIGHT)
         # El fondo/borde redondeado se pinta a mano en paintEvent (mismo patrón que
         # ui/pill_widget.py): un QWidget plano con WA_TranslucentBackground NO
         # garantiza que su stylesheet background-color/border-radius se pinte en
@@ -170,49 +359,163 @@ class HudWidget(QWidget):
 
         self._drag_pos = None
         self._saved_hwnd = None  # HWND frontal guardado al activar el input (foco deliberado)
-        self._anchor_point = None  # (x, y) de referencia para re-anclar tras el primer show()
+        self._geometry_saved = False  # True tras el primer move/resize manual del usuario
+        self._last_registro_sig = None  # (len, primer time, último time) — evita re-render inútil
+        self._elapsed_label = "00:00"
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(8)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # (1) Pila de tarjetas (máx 3)
+        # ------------------------------------------------------------
+        # (1) HEADER
+        # ------------------------------------------------------------
+        self.header = QFrame()
+        self.header.setObjectName("HudHeader")
+        self.header.setStyleSheet(
+            "QFrame#HudHeader { border-bottom: 1px solid rgba(255,255,255,0.07); background: transparent; }"
+        )
+        header_row = QHBoxLayout(self.header)
+        header_row.setContentsMargins(16, 15, 16, 12)
+        header_row.setSpacing(8)
+
+        self._dot = QLabel()
+        self._dot.setFixedSize(8, 8)
+        self._dot.setStyleSheet("background-color: #d97706; border-radius: 4px; border: none;")
+        header_row.addWidget(self._dot, 0)
+
+        title_lbl = QLabel("Reunión · copiloto")
+        title_lbl.setStyleSheet(
+            "color: rgba(255,255,255,0.6); font-size: 12.5px; font-weight: 500; "
+            "border: none; background: transparent;"
+        )
+        header_row.addWidget(title_lbl, 1)
+
+        self.timer_label = QLabel("00:00")
+        self.timer_label.setStyleSheet(
+            "color: rgba(255,255,255,0.5); font-size: 12.5px; border: none; background: transparent;"
+        )
+        header_row.addWidget(self.timer_label, 0)
+
+        self.reset_btn = QPushButton("⤢")
+        self.reset_btn.setToolTip("Restablecer posición y tamaño")
+        self.reset_btn.setFixedSize(22, 22)
+        self.reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.reset_btn.setStyleSheet(
+            "QPushButton { background: transparent; color: rgba(255,255,255,0.45); "
+            "border: none; font-size: 13px; padding: 0px; }"
+            "QPushButton:hover { color: rgba(255,255,255,0.85); }"
+        )
+        self.reset_btn.clicked.connect(self.reset_geometry)
+        header_row.addWidget(self.reset_btn, 0)
+
+        root.addWidget(self.header)
+
+        # ------------------------------------------------------------
+        # (2) ZONA "AHORA"
+        # ------------------------------------------------------------
+        now_section = QFrame()
+        now_layout = QVBoxLayout(now_section)
+        now_layout.setContentsMargins(12, 12, 12, 6)
+        now_layout.setSpacing(0)
+
+        now_label = _SectionLabel("Ahora")
+        now_label.setContentsMargins(0, 0, 0, 8)
+        now_layout.addWidget(now_label)
+
         self.cards_container = QVBoxLayout()
         self.cards_container.setSpacing(6)
-        root.addLayout(self.cards_container)
+        now_layout.addLayout(self.cards_container)
         self._cards: list[_Card] = []
 
-        # (2) Línea de confirmación de highlight (se desvanece a los 2s)
+        self.cards_placeholder = QLabel("Sin sugerencias ahora")
+        self.cards_placeholder.setStyleSheet(
+            "color: rgba(255,255,255,0.3); font-size: 12px; border: none; background: transparent;"
+        )
+        now_layout.addWidget(self.cards_placeholder)
+
+        # Línea de confirmación de highlight (se desvanece a los 2s)
         self.highlight_label = QLabel("")
         self.highlight_label.setStyleSheet(
             "color: #fbbf24; font-size: 12px; font-weight: 600; border: none; background: transparent;"
         )
         self.highlight_label.setVisible(False)
-        root.addWidget(self.highlight_label)
+        now_layout.addWidget(self.highlight_label)
         self._highlight_timer = QTimer(self)
         self._highlight_timer.setSingleShot(True)
         self._highlight_timer.timeout.connect(lambda: self.highlight_label.setVisible(False))
 
-        # (3) Botón "Me perdí" + respuesta scrolleable
-        self.lost_btn = QPushButton("🧭  Me perdí  ·  AltGr+M")
+        root.addWidget(now_section, 0)
+
+        # ------------------------------------------------------------
+        # (3) ZONA "REGISTRO" (flex: ocupa el resto)
+        # ------------------------------------------------------------
+        registro_section = QFrame()
+        registro_layout = QVBoxLayout(registro_section)
+        registro_layout.setContentsMargins(12, 8, 12, 0)
+        registro_layout.setSpacing(0)
+
+        registro_label = _SectionLabel("Registro de la reunión")
+        registro_label.setContentsMargins(0, 0, 0, 8)
+        registro_layout.addWidget(registro_label)
+
+        self.registro_scroll = QScrollArea()
+        self.registro_scroll.setWidgetResizable(True)
+        self.registro_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.registro_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
+            "QScrollBar:vertical { background: transparent; width: 6px; margin: 0; }"
+            "QScrollBar::handle:vertical { background: rgba(255,255,255,70); border-radius: 3px; min-height: 20px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+        )
+        self.registro_column = QWidget()
+        self.registro_column_layout = QVBoxLayout(self.registro_column)
+        self.registro_column_layout.setContentsMargins(0, 0, 0, 8)
+        self.registro_column_layout.setSpacing(2)
+        self.registro_column_layout.addStretch(1)
+        self.registro_scroll.setWidget(self.registro_column)
+
+        self.registro_placeholder = QLabel("Aún no hay eventos en esta reunión")
+        self.registro_placeholder.setStyleSheet(
+            "color: rgba(255,255,255,0.3); font-size: 12px; border: none; background: transparent;"
+        )
+        self.registro_column_layout.insertWidget(0, self.registro_placeholder)
+
+        registro_layout.addWidget(self.registro_scroll, 1)
+        root.addWidget(registro_section, 1)
+
+        # ------------------------------------------------------------
+        # (4) BOTTOM
+        # ------------------------------------------------------------
+        bottom_section = QFrame()
+        bottom_section.setObjectName("HudBottom")
+        bottom_section.setStyleSheet(
+            "QFrame#HudBottom { border-top: 1px solid rgba(255,255,255,0.07); background: transparent; }"
+        )
+        bottom_layout = QVBoxLayout(bottom_section)
+        bottom_layout.setContentsMargins(12, 10, 12, 12)
+        bottom_layout.setSpacing(8)
+
+        self.lost_btn = QPushButton("🧭  Me perdí · resumir · AltGr+M")
         self.lost_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.lost_btn.setFixedHeight(30)
+        self.lost_btn.setFixedHeight(32)
         self.lost_btn.setStyleSheet(
             "QPushButton { background-color: rgba(139,92,246,0.16); color: #ddd6fe; "
             "border: 1px solid rgba(139,92,246,0.45); border-radius: 8px; "
-            "font-size: 12px; font-weight: 600; text-align: center; }"
+            "font-size: 12px; font-weight: 600; text-align: center; padding: 0px; }"
             "QPushButton:hover { background-color: rgba(139,92,246,0.28); }"
             "QPushButton:pressed { background-color: rgba(139,92,246,0.4); }"
         )
         self.lost_btn.clicked.connect(self._on_lost_clicked)
-        root.addWidget(self.lost_btn)
+        bottom_layout.addWidget(self.lost_btn)
 
         self.lost_spinner_label = QLabel("Resumiendo…")
         self.lost_spinner_label.setStyleSheet(
             "color: rgba(255,255,255,160); font-size: 11.5px; border: none; background: transparent;"
         )
         self.lost_spinner_label.setVisible(False)
-        root.addWidget(self.lost_spinner_label)
+        bottom_layout.addWidget(self.lost_spinner_label)
 
         self.lost_scroll = QScrollArea()
         self.lost_scroll.setWidgetResizable(True)
@@ -232,23 +535,26 @@ class HudWidget(QWidget):
             "color: rgba(255,255,255,225); font-size: 12.5px; padding: 4px; background: transparent;"
         )
         self.lost_scroll.setWidget(self.lost_answer_label)
-        root.addWidget(self.lost_scroll)
+        bottom_layout.addWidget(self.lost_scroll)
 
-        # (4) Mini-input de pregunta libre
-        self.ask_input = QLineEdit()
-        self.ask_input.setPlaceholderText("Pregunta sobre la reunión…")
-        self.ask_input.setFixedHeight(30)
-        self.ask_input.setStyleSheet(
-            "QLineEdit { background-color: rgba(255,255,255,18); color: rgba(255,255,255,230); "
-            "border: 1px solid rgba(255,255,255,40); border-radius: 8px; padding: 4px 10px; font-size: 12.5px; }"
-            "QLineEdit:focus { border: 1px solid rgba(139,92,246,160); }"
-        )
-        self.ask_input.returnPressed.connect(self._on_ask_submitted)
-        root.addWidget(self.ask_input)
+        self.ask_input = _AutoGrowTextEdit()
+        self.ask_input.submitted.connect(self._on_ask_submitted)
+        self.ask_input.escaped.connect(self._on_ask_escaped)
+        self.ask_input.clicked.connect(self._activate_for_input)
+        bottom_layout.addWidget(self.ask_input)
 
-        # Foco deliberado: activar la ventana SOLO al clicar el input (no roba foco
-        # el resto del tiempo, igual que la pill).
-        self.ask_input.installEventFilter(self)
+        root.addWidget(bottom_section, 0)
+
+        # ------------------------------------------------------------
+        # QSizeGrip (redimensionable) — esquina inferior derecha, funciona en
+        # ventanas frameless. Se superpone al bottom_section vía posicionamiento
+        # absoluto tras cada resize (ver resizeEvent).
+        # ------------------------------------------------------------
+        self.size_grip = QSizeGrip(self)
+        self.size_grip.setFixedSize(16, 16)
+        self.size_grip.setStyleSheet("background: transparent;")
+
+        self._update_placeholders()
 
         # Reafirmación de "always on top" (mismo patrón Win32 que ui/pill_widget.py):
         # la pill reasserta su HWND_TOPMOST cada 1s, y sin esto el HUD termina
@@ -263,7 +569,7 @@ class HudWidget(QWidget):
     # ------------------------------------------------------------------
 
     def add_card(self, card: dict):
-        """Añade una tarjeta a la pila (máx 3 visibles; la más vieja se retira)."""
+        """Añade una tarjeta a la pila "Ahora" (máx 3 visibles; la más vieja se retira)."""
         c = _Card(card, parent=self)
         c.feedback.connect(self._on_card_feedback)
         self.cards_container.addWidget(c)
@@ -272,6 +578,50 @@ class HudWidget(QWidget):
             old = self._cards.pop(0)
             old.setParent(None)
             old.deleteLater()
+        self._update_placeholders()
+
+    def set_registro(self, entries: list):
+        """Repuebla la columna de Registro desde MEETING.get_registro() (idempotente).
+
+        Compara por longitud + primer/último ``time`` contra el último render para
+        evitar reconstruir la lista (y parpadear) cuando no cambió nada relevante.
+        """
+        entries = entries or []
+        sig = (
+            len(entries),
+            entries[0].get("time") if entries else None,
+            entries[-1].get("time") if entries else None,
+        )
+        if sig == self._last_registro_sig:
+            return
+        self._last_registro_sig = sig
+
+        # Limpia filas previas (deja el placeholder y el stretch final intactos:
+        # se re-insertan al final de este método).
+        layout = self.registro_column_layout
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w is not None and w is not self.registro_placeholder:
+                w.setParent(None)
+                w.deleteLater()
+
+        if not entries:
+            layout.addWidget(self.registro_placeholder)
+            self.registro_placeholder.setVisible(True)
+            layout.addStretch(1)
+            return
+
+        self.registro_placeholder.setVisible(False)
+        for entry in entries:
+            row = _RegistroRow(entry, parent=self.registro_column)
+            layout.addWidget(row)
+        layout.addStretch(1)
+
+    def set_timer_label(self, elapsed_fmt: str):
+        """Actualiza el timer mm:ss/hh:mm:ss del header (llamado ~1/s desde main.py)."""
+        self._elapsed_label = elapsed_fmt
+        self.timer_label.setText(elapsed_fmt)
 
     def show_highlight_confirmation(self, time_label: str):
         """Muestra "⭐ mm:ss" y lo desvanece a los 2s (llamado desde main.py al marcar AltGr+H)."""
@@ -288,31 +638,26 @@ class HudWidget(QWidget):
         self.lost_answer_label.setText(text)
         self.lost_scroll.setVisible(True)
 
-    def anchor_near(self, x: int, y: int):
-        """Ancla el HUD cerca de un punto (posición de la pill al abrir), arriba de él.
-
-        Se posiciona dos veces: una estimación inmediata con ``sizeHint()`` (antes
-        de que Qt calcule el layout real) y una segunda pasada tras el primer
-        ``show()`` con la altura REAL ya renderizada — sin esto, una estimación
-        corta hace que el HUD termine con su borde inferior solapando la pill.
-        """
-        self._anchor_point = (x, y)
-        self._apply_anchor(self.sizeHint().height())
-        QTimer.singleShot(0, lambda: self._apply_anchor(self.height()))
-
-    def _apply_anchor(self, height: int):
-        if self._anchor_point is None:
+    def reset_geometry(self):
+        """Botón "restablecer" del header: mueve el panel al lado derecho de la
+        pantalla y restaura el tamaño por defecto (340 x 72% del alto disponible)."""
+        screen = QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
+        if screen is None:
             return
-        x, y = self._anchor_point
-        gap = 16
-        target = QPoint(x, max(y - height - gap, 0))
-        screen = QApplication.screenAt(target) or QApplication.primaryScreen()
-        if screen:
-            geo = screen.availableGeometry()
-            tx = max(geo.left(), min(target.x(), geo.right() - self.width()))
-            ty = max(geo.top(), min(target.y(), geo.bottom() - height))
-            target = QPoint(tx, ty)
-        self.move(target)
+        geo = screen.availableGeometry()
+        width = _DEFAULT_WIDTH
+        height = int(geo.height() * 0.72)
+        x = geo.right() - width - _RIGHT_MARGIN
+        y = geo.top() + _TOP_MARGIN
+        self.setGeometry(x, y, width, height)
+        self._geometry_saved = True
+
+    def ensure_initial_geometry(self):
+        """Aplica la geometría por defecto SOLO si el usuario nunca movió/redimensionó
+        el panel a mano. Se llama antes de cada show() (reemplaza el anchor_near de
+        la 5.3: el panel ya no es un popup pegado a la pill)."""
+        if not self._geometry_saved:
+            self.reset_geometry()
 
     def force_topmost(self):
         """Reasserta HWND_TOPMOST vía Win32 (mismo patrón que ui/pill_widget.py).
@@ -348,6 +693,14 @@ class HudWidget(QWidget):
         super().hideEvent(event)
         self._topmost_timer.stop()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Reposiciona el grip a la esquina inferior derecha en cada resize.
+        self.size_grip.move(self.width() - self.size_grip.width(),
+                             self.height() - self.size_grip.height())
+        if self.isVisible():
+            self._geometry_saved = True
+
     def paintEvent(self, event):
         """Pinta el fondo redondeado semi-translúcido a mano (ver nota en __init__:
         un QWidget plano con solo WA_TranslucentBackground no garantiza que su
@@ -356,8 +709,8 @@ class HudWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         path = QPainterPath()
-        path.addRoundedRect(rect, 14, 14)
-        painter.fillPath(path, QColor(16, 16, 20, 238))
+        path.addRoundedRect(rect, 22, 22)
+        painter.fillPath(path, QColor(17, 17, 21, 245))
         painter.setPen(QPen(QColor(139, 92, 246, 100), 1.2))
         painter.drawPath(path)
         painter.end()
@@ -366,17 +719,17 @@ class HudWidget(QWidget):
     # Internos
     # ------------------------------------------------------------------
 
+    def _update_placeholders(self):
+        self.cards_placeholder.setVisible(len(self._cards) == 0)
+
     def _on_card_feedback(self, key: str, tipo: str, texto: str, value: int):
         if value != 0:  # 0 = caducidad silenciosa, no se reporta como feedback
             self.feedback_requested.emit(key, tipo, texto, value)
-        if self._card_by_key(key) is None:
+        if key in [c.key for c in self._cards]:
             return
-
-    def _card_by_key(self, key: str):
-        for c in self._cards:
-            if c.key == key:
-                return c
-        return None
+        # La tarjeta ya se retiró de self._cards en add_card() o por _expire();
+        # cuando el widget termina de destruirse, actualizamos el placeholder.
+        QTimer.singleShot(0, self._update_placeholders)
 
     def _on_lost_clicked(self):
         self.lost_requested.emit()
@@ -409,25 +762,28 @@ class HudWidget(QWidget):
             except Exception as exc:  # noqa: BLE001
                 logger.warning("hud: no se pudo restaurar el foco: %s", exc)
 
-    def eventFilter(self, obj, event):
-        from PyQt6.QtCore import QEvent
-        if obj is self.ask_input:
-            if event.type() == QEvent.Type.MouseButtonPress:
-                self._activate_for_input()
-            elif event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
-                self.ask_input.clear()
-                self._restore_focus()
-                return True
-        return super().eventFilter(obj, event)
+    def _on_ask_escaped(self):
+        """Esc dentro del input de pregunta: limpia y devuelve el foco (mismo
+        contrato que el QLineEdit anterior, ahora conectado por señal en vez de
+        eventFilter ya que ``_AutoGrowTextEdit`` emite ``escaped`` directamente)."""
+        self.ask_input.clear()
+        self._restore_focus()
 
     # ------------------------------------------------------------------
-    # Arrastre (mismo patrón que la pill)
+    # Arrastre — SOLO desde la banda del header (para no chocar con clicks
+    # en tarjetas/scroll del registro; a diferencia de la 5.3, ahora el panel
+    # tiene contenido interactivo en casi toda su superficie).
     # ------------------------------------------------------------------
+
+    def _in_header_band(self, pos) -> bool:
+        return 0 <= pos.y() <= self.header.height()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton and self._in_header_band(event.position().toPoint()):
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
+        else:
+            super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if event.buttons() == Qt.MouseButton.LeftButton and self._drag_pos:
@@ -440,7 +796,14 @@ class HudWidget(QWidget):
                 new_pos.setX(x)
                 new_pos.setY(y)
             self.move(new_pos)
+            self._geometry_saved = True
             event.accept()
+        else:
+            super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        self._drag_pos = None
+        if self._drag_pos is not None:
+            self._drag_pos = None
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
