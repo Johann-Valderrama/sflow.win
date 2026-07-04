@@ -379,6 +379,38 @@ ya cubre esos flujos); builder visual de modos de dictado custom (3 presets fijo
 suficientes, evita el error de settings infinitos de superwhisper); pinning de IP al socket del
 webhook (rebinding avanzado, riesgo residual documentado y aceptado).
 
+### 17. Copiloto con contexto OPS — briefing v1 (Ola 7, jul 2026)
+
+Permite que el chat en vivo "Preguntar" (`core/assistant.py` `answer_live`/`build_context_live`)
+conecte lo hablado en la reunión con el contexto compartible del usuario (proyectos activos,
+compromisos, metas), curado en un `.md` externo. **Opt-in, apagado por default.**
+
+- **Setting `OPS_BRIEFING_PATH`** (default `""`): ruta a un `.md` curado por el usuario. Se
+  gestiona desde el dashboard (Ajustes → "Copiloto con contexto OPS") y desde `.env` (flag de
+  lectura perezosa, documentado en `config.py`). Vacío = feature apagada, sin efecto ni logs.
+- **Módulo `core/ops_briefing.py`** (`get_briefing() -> str`, `invalidate() -> None`): caché en
+  memoria bajo lock con TTL de **60s** por `time.monotonic()` (nunca mtime: resolución NTFS ~1s +
+  TOCTOU + carreras); la I/O de disco ocurre **fuera** del lock (el archivo puede vivir en una
+  carpeta de red). Guard de tamaño de **8192 bytes** sobre el contenido REALMENTE leído (no
+  `st_size`); decodifica `utf-8-sig` (limpia BOM de Notepad). **Fail-open total**: ausente,
+  directorio, symlink roto, permiso, no-UTF8 o >8KB → `""` sin propagar excepción. **Privacidad
+  dura**: el módulo nunca loguea el CONTENIDO del briefing, solo el path y metadatos (tamaño).
+  El dashboard llama `invalidate()` al guardar un cambio de `ops_briefing_path` para que se vea
+  sin esperar el TTL.
+- **Inyección SOLO en el chat pull** (`build_context_live`): el bloque del briefing entra al
+  `prefix` fijo (junto a `ins_block`) con delimitadores explícitos (`<<<BRIEFING ... >>>`) y
+  **válvula de sacrificio**: si el presupuesto es tan chico que incluirlo se comería el transcript
+  reciente, se descarta (prioridad `transcript > briefing > análisis en vivo`; `avail` nunca queda
+  negativo por su culpa). **Gate de privacidad**: no se inyecta si `proactive.get_mode() ==
+  "silent"` (pantalla compartida), aunque el archivo exista y sea válido. Cuando el briefing SÍ
+  se incluyó (`meta["briefing_included"]`), `answer_live` añade una línea condicional al system
+  prompt indicando conectar sin inventar hechos; si no se incluyó (apagado/silent/sacrificado),
+  la línea no se añade. La rama de transcript vacío (`meta["empty"]`) sigue respondiendo sin
+  llamar al LLM, sin que el briefing la fuerce.
+- **Backlog v1.1 (fuera de alcance, no implementado)**: inyectar el briefing en el Insight Stream
+  (`core/insights.py`, `update_state`) y tarjetas proactivas "🧭 Contexto" (memoria cruzada con el
+  briefing). v1 es deliberadamente solo-pull: decisión de un debate adversarial ya cerrado.
+
 ## Security & Privacy
 
 ### 1. API Key Encryption (DPAPI)
@@ -469,6 +501,7 @@ Edit `config.py`:
 - `PENDING_EXPORT_DIR` — Carpeta del dead-drop local de pendientes (`vflow-pendientes-<id>-<fecha>.md`); se escribe siempre al cerrar una reunión con pendientes, con o sin webhook activado.
 - `DICTATION_MODES_ENABLED` (default: `false`) — Activa el reformateo post-dictado por app activa (Ola 6).
 - `DICTATION_MODE_MAP` — Mapa `exe:preset` (p. ej. `outlook.exe:email,slack.exe:chat,code.exe:codigo`) que asigna un preset de reformateo por `.exe` en foco; parseo tolerante a espacios/mayúsculas.
+- `OPS_BRIEFING_PATH` (default: `""`) — Ruta a un `.md` curado por el usuario (proyectos activos, compromisos, metas); si está seteado, su contenido se inyecta SOLO en el chat en vivo "Preguntar" (Ola 7, unidad 7.1). Vacío = apagado.
 
 ### Backends de insights — Anthropic (API oficial) y claude-cli (suscripción Claude)
 

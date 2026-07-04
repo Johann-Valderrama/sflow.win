@@ -204,6 +204,14 @@ MEETINGS_DIR = os.getenv("MEETINGS_DIR", os.path.join(_DATA_DIR, "meetings"))
 #   PROACTIVE_DETECT_CRUZADA (default "true")     — 5.2: memoria cruzada en vivo
 #       (tarjeta "El dd/mm se acordó: …" desde actas pasadas; retrieval puro, cero LLM).
 
+# Copiloto con contexto OPS — briefing v1 (unidad 7.1) — flag de entorno de
+# lectura PEREZOSA (se lee en cada llamada, en core/ops_briefing.py, NO aquí:
+# así se apaga sin reiniciar la app). OPT-IN, apagado por defecto.
+#   OPS_BRIEFING_PATH (default "") — ruta a un .md curado por el usuario (proyectos
+#       activos, compromisos, metas). Si está seteado, su contenido se inyecta SOLO
+#       en el chat en vivo "Preguntar" (core/assistant.py answer_live), nunca en el
+#       insight stream. Vacío = apagado.
+
 # Capa inteligente del modo reunión (Insight Stream + acta LLM)
 # INSIGHTS_ENABLED: activa/desactiva temas-pendientes-propuestas en vivo + acta final.
 # INSIGHTS_BACKEND: 'groq' (default; reutiliza GROQ_API_KEY). 'local'/'endpoint' = siguiente fase.

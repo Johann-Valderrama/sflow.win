@@ -478,6 +478,24 @@ def _format_live_insights(ins: dict) -> str:
     return "\n".join(parts)
 
 
+def _briefing_block_for_live() -> str:
+    """Bloque del briefing OPS (unidad 7.1) para el chat en vivo, o "" si no aplica.
+
+    Gate de privacidad: en modo proactivo "silent" (pantalla compartida) NO se
+    inyecta, aunque el archivo exista. Fail-safe: cualquier error al resolver el
+    modo o leer el briefing devuelve "" (nunca rompe el chat en vivo).
+    """
+    try:
+        from core import proactive as _proactive  # noqa: PLC0415 — evita ciclo de import
+        if _proactive.get_mode() == "silent":
+            return ""
+        from core import ops_briefing as _ops_briefing  # noqa: PLC0415
+        return _ops_briefing.get_briefing()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("build_context_live: briefing OPS omitido (%s)", type(exc).__name__)
+        return ""
+
+
 def build_context_live(message: str, budget: int = None, meeting=None) -> tuple:
     """Construye el contexto del chat sobre la reunión EN CURSO. Contrato NUEVO (unidad 2.3).
 
@@ -495,7 +513,14 @@ def build_context_live(message: str, budget: int = None, meeting=None) -> tuple:
     ``meeting`` permite inyectar una sesión en tests; por defecto usa MEETING.
 
     Devuelve (context_str, meta) con meta = {active, segment_count, truncated,
-    empty, shown_seconds}.
+    empty, shown_seconds, briefing_included}.
+
+    Briefing OPS (unidad 7.1): si OPS_BRIEFING_PATH está configurado y el modo
+    proactivo no es "silent", su bloque entra al prefix fijo (mismo trato que
+    ins_block) con la MISMA válvula de sacrificio: si el presupuesto es tan chico
+    que meterlo se comería el transcript reciente, se descarta (prioridad:
+    transcript > briefing). ``meta["briefing_included"]`` refleja si entró de
+    verdad — lo usa answer_live para decidir si añade la instrucción condicional.
     """
     budget = budget if budget is not None else _budget_chars()
     if meeting is None:
@@ -511,6 +536,7 @@ def build_context_live(message: str, budget: int = None, meeting=None) -> tuple:
 
     ins_str = _format_live_insights(insights_snap)
     ins_block = ("=== ANÁLISIS EN VIVO (parcial) ===\n" + ins_str) if ins_str else ""
+    briefing_block = _briefing_block_for_live()
 
     meta = {
         "active": bool(snap.get("active")),
@@ -518,28 +544,43 @@ def build_context_live(message: str, budget: int = None, meeting=None) -> tuple:
         "truncated": False,
         "empty": not segments,
         "shown_seconds": 0,
+        "briefing_included": False,
     }
 
     if not segments:
         parts = [header, "(Aún no hay intervenciones transcritas.)"]
         if ins_block:
             parts.append(ins_block)
+        if briefing_block:
+            parts.append(briefing_block)
+            meta["briefing_included"] = True
         return "\n\n".join(parts)[:budget], meta
 
     lines = [f"[{s['time']} {s['speaker']}] {s['text']}" for s in segments]
 
-    def _fixed_prefix(with_insights: bool) -> str:
+    def _fixed_prefix(with_insights: bool, with_briefing: bool) -> str:
         parts = [header]
         if with_insights and ins_block:
             parts.append(ins_block)
+        if with_briefing and briefing_block:
+            parts.append(briefing_block)
         return "\n\n".join(parts) + "\n\n=== TRANSCRIPCIÓN EN VIVO ===\n"
 
-    prefix = _fixed_prefix(True)
+    prefix = _fixed_prefix(True, True)
     avail = budget - len(prefix)
-    if avail < 500 and ins_block:
-        # Presupuesto minúsculo: el transcript vivo manda; se sacrifica el bloque de insights.
-        prefix = _fixed_prefix(False)
+    if avail < 500 and briefing_block:
+        # Presupuesto minúsculo: el transcript vivo manda; se sacrifica PRIMERO el
+        # briefing (prioridad transcript > briefing > insights, mismo espíritu que
+        # el sacrificio de ins_block: nunca dejar avail negativo).
+        prefix = _fixed_prefix(True, False)
         avail = budget - len(prefix)
+    else:
+        meta["briefing_included"] = bool(briefing_block)
+    if avail < 500 and ins_block:
+        # Aún minúsculo tras soltar el briefing: se sacrifica también el análisis en vivo.
+        prefix = _fixed_prefix(False, False)
+        avail = budget - len(prefix)
+        meta["briefing_included"] = False
 
     total = sum(len(ln) + 1 for ln in lines)
     kept_start = 0
@@ -636,6 +677,15 @@ def answer_live(message: str, history=None, max_tokens: int = 1024,
     live_extra = _template_live_extra(meeting)
     if live_extra:
         system_content += "\n\n" + live_extra
+    if meta.get("briefing_included"):
+        # Instrucción condicional (unidad 7.1): solo se añade cuando el briefing
+        # se incluyó DE VERDAD en el contexto (no sacrificado por la válvula, no
+        # apagado, no gateado por modo silent).
+        system_content += (
+            "\n\nUsa el CONTEXTO DEL USUARIO solo para CONECTAR lo hablado con "
+            "proyectos/compromisos del usuario; nunca inventes hechos del "
+            "briefing que no vengan al caso."
+        )
     system_content += "\n\n" + context
     messages = [{"role": "system", "content": system_content}]
 

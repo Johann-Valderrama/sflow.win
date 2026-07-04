@@ -17,6 +17,7 @@ from core import insights as _insights
 from core import assistant as _assistant
 from core import proactive as _proactive
 from core import dictation_modes as _dictation_modes
+from core import ops_briefing as _ops_briefing
 
 # ---------------------------------------------------------------------------
 # Estado de descarga del modelo local (compartido entre endpoints)
@@ -916,6 +917,23 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
+            <!-- Sección: Copiloto con contexto OPS (unidad 7.1) -->
+            <div class="set-sec collapsed" id="sec-ops-briefing" style="--sec-accent:rgba(167,139,250,.6)">
+                <button type="button" class="set-sec-head" onclick="toggleSetSec('ops-briefing')" aria-expanded="false" aria-controls="sec-ops-briefing-body">
+                    <span class="set-sec-title"><svg class="set-sec-chev ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span class="set-dot" style="background:rgba(167,139,250,.85)"></span>Copiloto con contexto OPS</span>
+                    <span class="set-sec-toggle"><span class="set-sec-toggle-label">Mostrar</span></span>
+                </button>
+                <div id="sec-ops-briefing-body" class="set-sec-body space-y-3">
+                    <p class="text-xs text-white/55">Ruta a un <code class="text-white/70">.md</code> con tu contexto compartible (proyectos activos, compromisos, metas). Se usa <strong>solo en el chat en vivo "Preguntar"</strong>, para conectar lo hablado con ese contexto. <strong>Apagado por defecto</strong> (vacío = sin efecto).</p>
+                    <div>
+                        <label for="cfg-ops-briefing-path" class="text-xs text-white/55 block mb-1">Ruta al briefing (.md)</label>
+                        <input type="text" id="cfg-ops-briefing-path" placeholder="C:\\OPS\\_briefing\\contexto.md" autocomplete="off"
+                            class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-violet-500/60 focus:border-white/45 w-full">
+                        <p class="text-xs text-white/40 mt-1">Con pantalla compartida usa el modo <strong>Silencioso</strong> (Proactividad, arriba) para no filtrar tu contexto. Si tu backend batch primario falla y el fallback está activo, el prompt puede salir por groq/openrouter.</p>
+                    </div>
+                </div>
+            </div>
+
             <!-- Sección: API Keys -->
             <div class="set-sec collapsed" id="sec-apikeys" style="--sec-accent:rgba(251,191,36,.6)">
                 <button type="button" class="set-sec-head" onclick="toggleSetSec('apikeys')" aria-expanded="false" aria-controls="sec-apikeys-body">
@@ -1806,6 +1824,8 @@ HTML_TEMPLATE = """
             // Modos de dictado por app activa (unidad 6.3)
             document.getElementById('cfg-dictation-modes-enabled').checked = settings.dictation_modes_enabled === true;
             document.getElementById('cfg-dictation-mode-map').value = settings.dictation_mode_map || '';
+            // Copiloto con contexto OPS — briefing v1 (unidad 7.1)
+            document.getElementById('cfg-ops-briefing-path').value = settings.ops_briefing_path || '';
             updateWebhookHistoryWarn();
             onInsightsBackendChange();
             updateLocalModelSection();
@@ -1838,6 +1858,7 @@ HTML_TEMPLATE = """
                 pending_export_dir: document.getElementById('cfg-pending-export-dir').value.trim(),
                 dictation_modes_enabled: document.getElementById('cfg-dictation-modes-enabled').checked ? 'true' : 'false',
                 dictation_mode_map: document.getElementById('cfg-dictation-mode-map').value.trim(),
+                ops_briefing_path: document.getElementById('cfg-ops-briefing-path').value.trim(),
             };
             await fetch('/api/settings', {
                 method: 'POST',
@@ -3999,6 +4020,8 @@ def get_settings():
         # Modos de dictado por app activa (unidad 6.3)
         "dictation_modes_enabled": os.getenv("DICTATION_MODES_ENABLED", "false").strip().lower() == "true",
         "dictation_mode_map": os.getenv("DICTATION_MODE_MAP", _dictation_modes.DEFAULT_MODE_MAP),
+        # Copiloto con contexto OPS — briefing v1 (unidad 7.1)
+        "ops_briefing_path": os.getenv("OPS_BRIEFING_PATH", ""),
     })
 
 
@@ -4039,10 +4062,17 @@ def update_settings():
         # Modos de dictado por app activa (unidad 6.3)
         "dictation_modes_enabled": "DICTATION_MODES_ENABLED",
         "dictation_mode_map": "DICTATION_MODE_MAP",
+        # Copiloto con contexto OPS — briefing v1 (unidad 7.1)
+        "ops_briefing_path": "OPS_BRIEFING_PATH",
     }
     for field, env_key in allowed.items():
         if field in data:
             _set_env_key(env_key, str(data[field]).strip())
+
+    # Si cambió la ruta del briefing, invalidar la caché para que se vea sin
+    # esperar el TTL de 60s (core/ops_briefing.py).
+    if "ops_briefing_path" in data:
+        _ops_briefing.invalidate()
 
     # Si se activó el backend local y el modelo está descargado, disparar warmup
     if data.get("transcription_backend") == "local":
