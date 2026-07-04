@@ -100,6 +100,8 @@ class TranscriptionDB:
         "ALTER TABLE meetings ADD COLUMN notes_json TEXT",
         # Feedback ✓/✗ del único push en vivo (pendientes), para el bucle de mejora de prompts (unidad 2.2)
         "ALTER TABLE meetings ADD COLUMN feedback_json TEXT",
+        # Métricas de conversación Yo/Ellos: talk-time, pct, monólogo, WPM, preguntas (unidad 3.1)
+        "ALTER TABLE meetings ADD COLUMN metrics_json TEXT",
     ]
 
     # DDL adicional para la cola de URLs (Fase 3, paso 2)
@@ -485,15 +487,18 @@ class TranscriptionDB:
                        duration_seconds: float, started_at: str = None,
                        insights_json: str = None, minutes_json: str = None,
                        chapters_json: str = None, highlights_json: str = None,
-                       notes_json: str = None, feedback_json: str = None) -> int:
+                       notes_json: str = None, feedback_json: str = None,
+                       metrics_json: str = None) -> int:
         """Inserta una reunión finalizada y devuelve su id."""
         with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO meetings (title, transcript, segments_json, insights_json, "
-                "minutes_json, chapters_json, highlights_json, notes_json, feedback_json, duration_seconds, started_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "minutes_json, chapters_json, highlights_json, notes_json, feedback_json, "
+                "metrics_json, duration_seconds, started_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (title, transcript, segments_json, insights_json, minutes_json,
-                 chapters_json, highlights_json, notes_json, feedback_json, duration_seconds, started_at),
+                 chapters_json, highlights_json, notes_json, feedback_json,
+                 metrics_json, duration_seconds, started_at),
             )
             meeting_id = cursor.lastrowid
             self._fts_index_meeting(conn, meeting_id, {
@@ -509,7 +514,7 @@ class TranscriptionDB:
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT id, title, duration_seconds, started_at, created_at "
+                "SELECT id, title, duration_seconds, started_at, created_at, metrics_json "
                 "FROM meetings ORDER BY created_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()

@@ -49,6 +49,8 @@ from core.recorder import MicSource, LoopbackSource
 from core.transcriber import Transcriber
 from core import insights as _insights
 from core import meeting_export as _export
+from core import meeting_metrics as _metrics
+from core import vad as _vad
 from db.database import TranscriptionDB
 
 logger = logging.getLogger(__name__)
@@ -96,6 +98,15 @@ class MeetingSession:
         self._mic_frames: list = []
         self._sys_frames: list = []
         self._segments: list = []          # [{"t": float, "speaker": str, "text": str}]
+        # Segmentos de VOZ (VAD) por canal, en segundos en el EJE DE AUDIO propio
+        # del canal (anclaje por muestras acumuladas, NUNCA por window_start: el
+        # loopback se salta silencios y su eje diverge del reloj de pared).
+        self._speech: dict = {self.LABEL_MIC: [], self.LABEL_SYS: []}
+        # Muestras de audio acumuladas YA procesadas por canal (a 16 kHz). El
+        # timestamp de reunión de un segmento VAD = (acumulado_previo + offset
+        # del segmento en muestras) / 16000, en el eje del canal.
+        self._speech_samples: dict = {self.LABEL_MIC: 0, self.LABEL_SYS: 0}
+        self._last_metrics: dict | None = None  # métricas de la última reunión terminada (panel 3.2)
         self._highlights: list = []        # [{"t": float, "time": "mm:ss"}] — momentos marcados con AltGr+H
         self._notes: list = []             # [{"t": float, "time": "mm:ss", "text": str}] — notas rápidas del usuario
         self._feedback: list = []          # [{"key","tipo","texto","value","t","time"}] — feedback ✓/✗ del único push (unidad 2.2)
@@ -200,6 +211,11 @@ class MeetingSession:
         with self._lock:
             return dict(self._last_minutes) if self._last_minutes else None
 
+    def get_last_metrics(self) -> "dict | None":
+        """Métricas de la última reunión terminada (None si sigue activa o no hubo)."""
+        with self._lock:
+            return dict(self._last_metrics) if self._last_metrics else None
+
     def transcript_segments(self) -> list:
         """Devuelve los segmentos ordenados cronológicamente, listos para render."""
         with self._lock:
@@ -289,19 +305,22 @@ class MeetingSession:
     def pause(self) -> dict:
         """Pausa la captura: congela el reloj y deja de acumular frames.
 
-        Hace un flush de la ventana actual antes de pausar (reutiliza el mecanismo
-        de _flush_window) para no perder lo hablado hasta este instante. Idempotente.
+        Marca la pausa PRIMERO (bajo el lock) y hace el flush de la ventana actual
+        DESPUÉS: con _paused=True los callbacks dejan de acumular, así ningún frame
+        que llegue durante el flush se cuela en la ventana post-pausa (antes el
+        flush iba primero y frames pre-pausa contaminaban la siguiente ventana).
+        Idempotente.
         """
         with self._lock:
             if not self._active or self._paused:
                 return {"ok": True, "paused": self._paused}
+            self._paused = True
+            self._pause_started = time.monotonic()
             window_start = self._window_start
         # _flush_window adquiere su propio lock; se llama fuera del bloque anterior
         # para no anidar innecesariamente (el lock es reentrante, pero mejor evitarlo).
         self._flush_window(window_start)
         with self._lock:
-            self._paused = True
-            self._pause_started = time.monotonic()
             self._window_start = self._elapsed()
             return {"ok": True, "paused": True}
 
@@ -335,6 +354,9 @@ class MeetingSession:
             self._mic_frames = []
             self._sys_frames = []
             self._segments = []
+            self._speech = {self.LABEL_MIC: [], self.LABEL_SYS: []}
+            self._speech_samples = {self.LABEL_MIC: 0, self.LABEL_SYS: 0}
+            self._last_metrics = None
             self._highlights = []
             self._notes = []
             self._feedback = []
@@ -440,6 +462,15 @@ class MeetingSession:
         segments = self.transcript_segments()
         insights = self.get_insights()
 
+        # Métricas de conversación Yo/Ellos (unidad 3.1): puras, sin LLM. El worker
+        # ya terminó (join arriba), así que _speech está completo y estable.
+        with self._lock:
+            speech_copy = {k: list(v) for k, v in self._speech.items()}
+        has_speech = any(speech_copy.values())
+        meeting_metrics = _metrics.compute_metrics(speech_copy, segments, duration)
+        with self._lock:
+            self._last_metrics = meeting_metrics  # para el panel, junto a _last_minutes
+
         # Acta post-reunión: una sola llamada LLM sobre el transcript completo, alimentada
         # con el análisis en vivo para que sea consistente con lo que vio el usuario.
         # Fail-safe: si el LLM no está disponible devuelve un acta vacía.
@@ -484,6 +515,10 @@ class MeetingSession:
                     insert_kwargs["notes_json"] = json.dumps(notes, ensure_ascii=False)
                 if feedback:
                     insert_kwargs["feedback_json"] = json.dumps(feedback, ensure_ascii=False)
+                # Patrón notes_json: solo se persiste si hubo voz detectada (sin
+                # speech las métricas serían todo ceros — mejor columna NULL).
+                if has_speech:
+                    insert_kwargs["metrics_json"] = json.dumps(meeting_metrics, ensure_ascii=False)
                 meeting_id = self._db.meeting_insert(**insert_kwargs)
                 saved = True
             except Exception as exc:  # noqa: BLE001
@@ -519,6 +554,9 @@ class MeetingSession:
             "insights": insights,
             "minutes": minutes,
             "metrics": metrics,
+            # "metrics" ya lo ocupan las métricas de fluidez (instrumentación);
+            # las de conversación Yo/Ellos van bajo su propia clave.
+            "meeting_metrics": meeting_metrics,
             "started_at": self._started_at,
             "meeting_id": meeting_id,
             "saved": saved,
@@ -650,6 +688,29 @@ class MeetingSession:
         for frames, label in ((mic_frames, self.LABEL_MIC), (sys_frames, self.LABEL_SYS)):
             if not frames:
                 continue
+            # --- Métricas de voz (VAD) con anclaje POR MUESTRAS por canal ---
+            # La inferencia corre FUERA del lock de la sesión (los frames llegan
+            # detached como argumentos del worker); solo el append de resultados
+            # y la actualización del contador van bajo el lock. El contador
+            # avanza SIEMPRE (aunque el VAD falle o no haya voz) para que el eje
+            # de audio del canal no se desalinee.
+            audio = np.concatenate(frames, axis=0).reshape(-1)
+            total_samples = int(audio.shape[0])
+            base_samples = self._speech_samples.get(label, 0)  # único escritor: este worker serial
+            speech_segs: list = []
+            try:
+                rel = _vad.speech_timestamps(audio.astype(np.float32) / 32768.0)
+                base_s = base_samples / float(SAMPLE_RATE)
+                speech_segs = _metrics.merge_segments(
+                    [{"start": base_s + s["start"], "end": base_s + s["end"]} for s in rel]
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Reunión: VAD de métricas falló en '%s' (se continúa sin voz): %s", label, exc)
+            with self._lock:
+                if speech_segs:
+                    self._speech[label].extend(speech_segs)
+                self._speech_samples[label] = base_samples + total_samples
+
             carry = self._carry.get(label, "")  # contexto del chunk anterior de ESTE canal
             try:
                 wav = _frames_to_wav(frames)

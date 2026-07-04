@@ -3994,8 +3994,19 @@ def meeting_resume():
 
 @app.route("/api/meetings", methods=["GET"])
 def meetings_list():
-    """Lista de reuniones pasadas (sin transcript completo) para el historial."""
-    return jsonify({"meetings": _db.meetings_recent(limit=200)})
+    """Lista de reuniones pasadas (sin transcript completo) para el historial.
+
+    Cada fila incluye "metrics" parseado (dict o None) para la tarjeta del
+    historial (unidad 3.2); el metrics_json crudo no se expone en la lista.
+    """
+    import json as _json
+    meetings = _db.meetings_recent(limit=200)
+    for m in meetings:
+        try:
+            m["metrics"] = _json.loads(m.pop("metrics_json", None) or "null")
+        except Exception:  # noqa: BLE001
+            m["metrics"] = None
+    return jsonify({"meetings": meetings})
 
 
 @app.route("/api/meetings/<int:meeting_id>", methods=["GET"])
@@ -4005,7 +4016,7 @@ def meeting_detail(meeting_id):
     if not m:
         return jsonify({"error": "not found"}), 404
     import json as _json
-    for k in ("minutes_json", "insights_json", "segments_json", "chapters_json"):
+    for k in ("minutes_json", "insights_json", "segments_json", "chapters_json", "metrics_json"):
         try:
             m[k.replace("_json", "")] = _json.loads(m.get(k) or "null")
         except Exception:  # noqa: BLE001

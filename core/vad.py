@@ -27,9 +27,81 @@ import io
 import logging
 import os
 import struct
+import threading
 import wave
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Caché módulo-nivel del modelo Silero VAD
+# ---------------------------------------------------------------------------
+# get_vad_model() de faster-whisper construye 2 InferenceSession ONNX; cachearlo
+# aquí garantiza UNA sola construcción por proceso con carga thread-safe (doble
+# check bajo _VAD_LOAD_LOCK), independientemente de la semántica de caché de la
+# versión instalada de la librería. La inferencia va bajo _VAD_INFER_LOCK (lock
+# PROPIO del VAD, nunca el lock de MeetingSession): las sesiones ONNX se
+# comparten entre el dictado (apply_vad) y el modo reunión (speech_timestamps),
+# que corren en hilos distintos.
+_VAD_MODEL = None
+_VAD_LOAD_LOCK = threading.Lock()
+_VAD_INFER_LOCK = threading.Lock()
+
+
+def _get_cached_vad_model():
+    """Devuelve el modelo Silero VAD cacheado a nivel módulo (carga thread-safe).
+
+    En faster-whisper 1.1.1 get_vad_model() ya viene decorado con lru_cache, por
+    lo que get_speech_timestamps() (que lo llama internamente) recibe la MISMA
+    instancia que cacheamos aquí: llamar a esta función antes de la inferencia
+    asegura que la construcción de las sesiones ONNX ocurre una vez y bajo
+    nuestro lock, nunca en caliente dentro de una ventana de reunión.
+    """
+    global _VAD_MODEL
+    if _VAD_MODEL is None:
+        with _VAD_LOAD_LOCK:
+            if _VAD_MODEL is None:
+                from faster_whisper.vad import get_vad_model
+                _VAD_MODEL = get_vad_model()
+    return _VAD_MODEL
+
+
+def speech_timestamps(audio) -> list:
+    """Detecta segmentos de voz en un array de audio y los devuelve en SEGUNDOS.
+
+    Args:
+        audio: np.ndarray float32 mono 16 kHz normalizado en [-1, 1] (1-D).
+
+    Returns:
+        list[dict]: [{"start": float, "end": float}] en SEGUNDOS relativos al
+        inicio del audio dado. faster-whisper devuelve MUESTRAS (ints); aquí se
+        convierte dividiendo por 16000. Lista vacía si no hay voz.
+
+    La inferencia corre bajo el lock propio del VAD (_VAD_INFER_LOCK), nunca
+    bajo el lock de MeetingSession: el caller debe llamar SIN sostener locks
+    ajenos. Lanza excepciones si faster-whisper no está disponible (el caller
+    decide el fail-open).
+    """
+    from faster_whisper.vad import VadOptions, get_speech_timestamps
+
+    if audio is None or len(audio) == 0:
+        return []
+
+    _get_cached_vad_model()  # asegura carga única fuera del hot path
+
+    # Padding corto (100 ms) a propósito: estos timestamps alimentan métricas de
+    # talk-time; el padding generoso de apply_vad (400 ms) inflaría los totales.
+    vad_opts = VadOptions(
+        threshold=0.5,
+        min_silence_duration_ms=500,
+        min_speech_duration_ms=100,
+        speech_pad_ms=100,
+    )
+    with _VAD_INFER_LOCK:
+        raw = get_speech_timestamps(audio, vad_opts, sampling_rate=16000)
+    return [
+        {"start": round(seg["start"] / 16000.0, 3), "end": round(seg["end"] / 16000.0, 3)}
+        for seg in raw
+    ]
 
 
 def apply_vad(wav_buffer: io.BytesIO) -> "io.BytesIO | None":
@@ -116,7 +188,12 @@ def _apply_vad_impl(wav_buffer: io.BytesIO) -> "io.BytesIO | None":
         threshold=0.5,
     )
 
-    timestamps = get_speech_timestamps(samples, vad_opts, sampling_rate=16000)
+    # Modelo cacheado a nivel módulo (una sola construcción por proceso) e
+    # inferencia bajo el lock propio del VAD: mismo comportamiento de recorte,
+    # sin reconstruir sesiones ONNX ni competir con el modo reunión.
+    _get_cached_vad_model()
+    with _VAD_INFER_LOCK:
+        timestamps = get_speech_timestamps(samples, vad_opts, sampling_rate=16000)
 
     if not timestamps:
         logger.debug("VAD: no se detectó voz — devolviendo None")

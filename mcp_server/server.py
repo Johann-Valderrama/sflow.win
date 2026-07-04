@@ -86,12 +86,21 @@ def get_minutes(meeting_id: int) -> dict:
     El acta puede incluir además "momentos_destacados" (instantes que el usuario
     marcó en vivo con AltGr+H, con su timestamp y contexto breve) cuando el usuario
     marcó alguno durante la reunión. minutes=null si la reunión aún no tiene acta
-    generada."""
+    generada. Incluye además "metrics" (dict o null): métricas de conversación
+    Yo/Ellos calculadas al terminar la reunión — talk_yo_s/talk_ellos_s, pct_yo/
+    pct_ellos, talk_to_listen, longest_monologue_*, turns_approx (aproximado por
+    alternancia de speaker en el transcript, no solapes reales), questions_*,
+    wpm_* y duration_s. Passthrough de metrics_json; null en reuniones antiguas
+    o sin voz detectada."""
     meeting = _get_meeting_or_fail(meeting_id)
 
     minutes = _parse_json(meeting.get("minutes_json"))
     if not isinstance(minutes, dict):
         minutes = None
+
+    metrics = _parse_json(meeting.get("metrics_json"))
+    if not isinstance(metrics, dict):
+        metrics = None
 
     chapters_raw = _parse_json(meeting.get("chapters_json"))
     if isinstance(chapters_raw, dict):
@@ -108,6 +117,7 @@ def get_minutes(meeting_id: int) -> dict:
         "duration_seconds": meeting.get("duration_seconds"),
         "minutes": minutes,
         "chapters": chapters,
+        "metrics": metrics,
         "has_transcript": bool(meeting.get("transcript")),
     }
 
