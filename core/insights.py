@@ -822,6 +822,69 @@ _CHAPTERS_SYSTEM = (
 )
 
 
+def budget_chars(task: str = "batch") -> int:
+    """Presupuesto de caracteres para el prompt de usuario según el backend de la tarea.
+
+    Compartido por ``assistant._budget_chars`` (Asistente de reuniones) y por
+    ``generate_minutes``/``generate_chapters`` (acta/capítulos) para que el mismo
+    backend (p. ej. LM Studio local, ventana chica) no desborde su contexto en
+    ningún punto de la app. ``ASSISTANT_CONTEXT_BUDGET_CHARS`` es un override
+    manual compartido por todas las tareas (nombre heredado del asistente).
+    """
+    env_val = os.getenv("ASSISTANT_CONTEXT_BUDGET_CHARS", "").strip()
+    if env_val:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
+    backend = _resolve_backend(task)
+    if backend == "endpoint":
+        return 18000
+    if backend == "claude-cli":
+        # El prompt se pasa por stdin al proceso claude -p: contenerlo.
+        return 40000
+    return 80000
+
+
+def _truncate_transcript_to_budget(transcript: str, other_len: int, budget: int) -> str:
+    """Trunca ``transcript`` por el PRINCIPIO (conserva el final) para que
+    ``other_len + len(resultado)`` quepa en ``budget`` con ~10% de margen.
+
+    Si no hace falta truncar, devuelve ``transcript`` intacto. Si trunca, antepone
+    un aviso "[transcript truncado por límite del modelo: faltan los primeros X
+    minutos]" calculado a partir del primer timestamp [mm:ss] que sobrevive.
+    """
+    safe_budget = int(budget * 0.9)
+    allowance = safe_budget - other_len
+    if allowance <= 0 or len(transcript) <= allowance:
+        return transcript
+
+    cut = transcript[-allowance:]
+    # Evita partir una línea/palabra a la mitad: corta en el siguiente salto de línea.
+    nl = cut.find("\n")
+    if nl != -1:
+        cut = cut[nl + 1:]
+
+    match = re.search(r"\[(\d{1,3}):(\d{2})(?::(\d{2}))?[\s\]]", cut)
+    minutes_missing = None
+    if match:
+        if match.group(3) is not None:
+            h, m = int(match.group(1)), int(match.group(2))
+            minutes_missing = h * 60 + m
+        else:
+            minutes_missing = int(match.group(1))
+
+    if minutes_missing is not None:
+        notice = (
+            f"[transcript truncado por límite del modelo: faltan los primeros "
+            f"{minutes_missing} minutos]\n"
+        )
+    else:
+        notice = "[transcript truncado por límite del modelo: falta el inicio]\n"
+
+    return notice + cut
+
+
 def generate_chapters(transcript: str, segments: list | None = None) -> list:
     """Genera la línea de tiempo de momentos clave (capítulos) de la reunión. Fail-safe.
 
@@ -831,10 +894,13 @@ def generate_chapters(transcript: str, segments: list | None = None) -> list:
     if not transcript.strip() or not is_available(task="batch"):
         return []
     try:
+        prefix = "TRANSCRIPCIÓN:\n"
+        budget = budget_chars(task="batch")
+        transcript = _truncate_transcript_to_budget(transcript, len(prefix), budget)
         content = _chat(
             messages=[
                 {"role": "system", "content": _CHAPTERS_SYSTEM},
-                {"role": "user", "content": f"TRANSCRIPCIÓN:\n{transcript}"},
+                {"role": "user", "content": f"{prefix}{transcript}"},
             ],
             task="batch",
             json_mode=True,
@@ -903,15 +969,19 @@ def generate_minutes(transcript: str, insights: dict | None = None,
     empty = {"resumen": "", "decisiones": [], "temas": [], "pendientes": [], "propuestas": [], "citas": []}
     if not transcript.strip() or not is_available(task="batch"):
         return empty
-    user = f"TRANSCRIPCIÓN:\n{transcript}"
+    extra = ""
     if insights:
-        user += f"\n\nANÁLISIS EN VIVO DETECTADO:\n{json.dumps(insights, ensure_ascii=False)}"
+        extra += f"\n\nANÁLISIS EN VIVO DETECTADO:\n{json.dumps(insights, ensure_ascii=False)}"
     if highlights:
         times = ", ".join(h.get("time", "") for h in highlights if h.get("time"))
-        user += (
+        extra += (
             "\n\nMOMENTOS DESTACADOS POR EL USUARIO (marcó estos instantes como importantes): "
             f"{times}"
         )
+    prefix = "TRANSCRIPCIÓN:\n"
+    budget = budget_chars(task="batch")
+    transcript = _truncate_transcript_to_budget(transcript, len(prefix) + len(extra), budget)
+    user = f"{prefix}{transcript}{extra}"
     minutes_max_tokens = max(1600, 2400) if reasoning else 1600
     try:
         content = _chat(

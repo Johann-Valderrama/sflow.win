@@ -101,22 +101,13 @@ _SYSTEM_LIVE = (
 # ---------------------------------------------------------------------------
 
 def _budget_chars() -> int:
-    """Presupuesto de caracteres para el bloque de contexto."""
-    env_val = os.getenv("ASSISTANT_CONTEXT_BUDGET_CHARS", "").strip()
-    if env_val:
-        try:
-            return int(env_val)
-        except ValueError:
-            pass
-    # El asistente corre sobre el backend "batch" (acta/asistente), no el global: el presupuesto
-    # debe seguir a ese backend (p.ej. LM Studio local necesita una ventana más chica).
-    backend = insights._resolve_backend("batch")
-    if backend == "endpoint":
-        return 18000
-    if backend == "claude-cli":
-        # El prompt se pasa por stdin al proceso claude -p: contenerlo.
-        return 40000
-    return 80000
+    """Presupuesto de caracteres para el bloque de contexto.
+
+    Delega en ``insights.budget_chars`` (helper compartido con generate_minutes/
+    generate_chapters) para que un mismo backend tenga el mismo presupuesto en
+    toda la app. El asistente corre sobre el backend "batch" (acta/asistente).
+    """
+    return insights.budget_chars(task="batch")
 
 
 # ---------------------------------------------------------------------------
