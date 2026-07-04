@@ -31,6 +31,16 @@ import threading
 import webbrowser
 import winreg
 import winsound
+
+# onnxruntime DEBE importarse ANTES que PyQt6: con el orden inverso su DLL de
+# pybind falla al inicializar ("DLL initialization routine failed") y el VAD
+# de Silero (dictado apply_vad + métricas de reunión) queda en fail-open
+# silencioso. Reproducción: python -c "from PyQt6.QtCore import QObject; import onnxruntime".
+try:
+    import onnxruntime  # noqa: F401
+except Exception:  # noqa: BLE001 — sin onnxruntime el VAD hace fail-open igual que antes
+    pass
+
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu,
     QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox,
