@@ -128,6 +128,7 @@ con Opus como política por defecto en decisiones irreversibles). Cada ola crea/
 | 4 | Patrón Granola | Notas + IA = la profundidad del acta; necesita el panel de la Ola 2 maduro |
 | 5 | Proactivo v2 | El de mayor incertidumbre: requiere iterar prompts con reuniones reales; depende de Olas 2 (panel) y 3 (VAD/silencios) |
 | 6 | Plataforma y dictado | Conveniencias de alto valor pero sin dependencias urgentes: webhook, pendientes→OPS, mejoras de dictado, navegación |
+| 7 | Copiloto con contexto OPS | Encolada por Johann (2026-07-03): el susurro gana el contexto de OPS vía briefing destilado (v1). Depende de la 5 (susurro) ya hecha; se ejecuta tras la 6 |
 
 Dependencias duras: 2 requiere 1(CSS) · 5 requiere 2 y 3 · el resto es secuenciable por valor.
 
@@ -403,6 +404,42 @@ Restricciones: 6.1 es opt-in y apagado por default (regla de privacidad del proy
 en local nada sale a internet sin decisión explícita); la URL del webhook se guarda como
 config, el secreto de firma cifrado DPAPI como la API key. 6.2: sugerir NUNCA auto-aplicar.
 6.3: exactamente 3 presets, sin UI de creación de modos. Verificación por flujo real.
+```
+
+---
+
+## Ola 7 — Copiloto con contexto OPS (encolada por Johann 2026-07-03, tras la Ola 6)
+
+**Objetivo:** el susurro proactivo deja de saber solo de reuniones y gana el contexto de
+OPS — "esto conecta con el proyecto X", "con este cliente quedaste en Y" — vía el diseño
+en capas ya registrado en PENDIENTES.md sección "Copiloto con contexto OPS" (v1 briefing
+destilado; v2 chat con workspace OPS-aware y v3 cruzada contra Engram quedan en backlog,
+NO son de esta ola).
+
+| Unidad | Qué | Dificultad | Ejecutar con | Por qué |
+|---|---|---|---|---|
+| 7.1 | **Briefing destilado v1**: setting `OPS_BRIEFING_PATH` (default vacío = feature apagada; configurable en dashboard Ajustes con ruta a un .md, p.ej. dead-drop en C:\OPS); si existe y pesa <8 KB, su contenido se inyecta como bloque "CONTEXTO DEL USUARIO (briefing OPS)" en el prompt del insight stream (update_state, incluida la segunda intención de detecciones) y del chat en vivo (_SYSTEM_LIVE), contando SIEMPRE en el presupuesto 4.0 como parte fija (si no cabe, se recorta el transcript, nunca el briefing se expande); recarga perezosa por mtime (~60s); instrucción de prompt: usar el briefing solo para CONECTAR lo hablado con el contexto (nunca inventar hechos del briefing que no vengan al caso); tarjetas de detección pueden citar el briefing con prefijo "🧭 Contexto:" | Estándar (prompt + setting + archivo; el riesgo es calidad del susurro y privacidad) | Sonnet 5 `high`, prompts revisados por el orquestador (L0) | El archivo lo cura OPS (frontera privado-vs-compartido vive AFUERA de Vflow); side cases: archivo ausente/enorme/no-UTF8 → fail-open silencioso; el modo Silencioso sigue mandando |
+
+Verificación: tests (inyección condicional, presupuesto, fail-open, recarga por mtime) +
+1 llamada real con briefing sintético y transcript real de la DB comprobando que el susurro
+conecta sin inventar. Nota de privacidad del diseño (PENDIENTES): pantalla compartida →
+modo Silencioso; el briefing solo contiene lo compartible.
+
+### Kickoff Ola 7
+
+```
+Lee primero: CLAUDE.md; docs/PENDIENTES.md sección "Copiloto con contexto OPS — el susurro
+que sabe de tus proyectos" (el diseño en capas y la nota de privacidad); docs/PLAN-OLAS.md
+Ola 7; PROGRESS.md; la skill orquestar-agentes(-fable) según tu modelo.
+
+Auto-check de modelo (7.1 estampada Sonnet high con prompts revisados por L0; director
+según régimen de costos del encabezado del plan).
+
+Tarea: SOLO la unidad 7.1 (v1 briefing; v2/v3 NO — backlog), 1 commit en windows-variant.
+Debate adversarial por ola OBLIGATORIO antes de codear (gatillo §10.2), con foco en:
+presupuesto/latencia del insight stream, privacidad (qué pasa si el archivo contiene algo
+no compartible: Vflow NO valida contenido, la responsabilidad es del archivo — ¿basta?),
+y si el bloque degrada la precisión quirúrgica de las detecciones calibradas en 5.1.
 ```
 
 ---
