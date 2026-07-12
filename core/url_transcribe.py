@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import tempfile
+import threading
 import wave
 from typing import Callable, Optional
 
@@ -131,6 +132,18 @@ class _SilentLogger:
     def error(self, m): pass
 
 
+# Refcount + lock para _clean_crypt32_argtypes (fix F7): dos descargas
+# concurrentes (worker de cola serial + POST /api/youtube-transcript de Flask
+# multihilo) pueden solaparse en el tiempo. El PRIMER entrante limpia los
+# argtypes; el ÚLTIMO en salir los restaura al valor capturado por el primero.
+# El lock protege SOLO el conteo y la mutación de argtypes — la descarga en sí
+# (el cuerpo del `yield`) NO retiene el lock, así que descargas concurrentes
+# conviven con argtypes limpios sin serializarse entre ellas.
+_crypt32_argtypes_lock = threading.Lock()
+_crypt32_argtypes_refcount = 0
+_crypt32_argtypes_saved = None
+
+
 @contextlib.contextmanager
 def _clean_crypt32_argtypes():
     """Limpia temporalmente los argtypes que core.secrets fija en crypt32.
@@ -142,27 +155,43 @@ def _clean_crypt32_argtypes():
     extracción de cookies fallaría siempre. Aquí limpiamos argtypes mientras
     yt-dlp trabaja y los restauramos al salir (secrets tolera argtypes=None).
     Fail-open fuera de Windows o si ctypes no está disponible.
+
+    Reentrante entre hilos vía refcount: si dos descargas se solapan, la
+    segunda en entrar no vuelve a guardar/limpiar (ya está limpio), y solo la
+    última en salir restaura — evita que una termine antes que la otra y deje
+    los argtypes en `None` permanentemente para la que sigue en vuelo.
     """
-    saved = None
+    global _crypt32_argtypes_refcount, _crypt32_argtypes_saved
+
     fn = None
     try:
         import ctypes  # noqa: PLC0415
         fn = ctypes.windll.crypt32.CryptUnprotectData
-        try:
-            saved = fn.argtypes
-        except Exception:
-            saved = None
-        fn.argtypes = None
     except Exception:
         fn = None
+
+    if fn is not None:
+        with _crypt32_argtypes_lock:
+            if _crypt32_argtypes_refcount == 0:
+                try:
+                    _crypt32_argtypes_saved = fn.argtypes
+                except Exception:
+                    _crypt32_argtypes_saved = None
+                fn.argtypes = None
+            _crypt32_argtypes_refcount += 1
+
     try:
         yield
     finally:
         if fn is not None:
-            try:
-                fn.argtypes = saved
-            except Exception:
-                pass
+            with _crypt32_argtypes_lock:
+                _crypt32_argtypes_refcount -= 1
+                if _crypt32_argtypes_refcount <= 0:
+                    _crypt32_argtypes_refcount = 0
+                    try:
+                        fn.argtypes = _crypt32_argtypes_saved
+                    except Exception:
+                        pass
 
 
 def sync_instagram_cookies(browser: Optional[str] = None) -> dict:
@@ -392,6 +421,14 @@ _CHUNK_SECONDS = 240   # ~7.7 MB por chunk a 16 kHz 16-bit mono
 _OVERLAP_SECONDS = 2   # solape entre chunks para continuidad de contexto
 _SAMPLE_RATE = 16000
 
+# Fix F5: dedup conservador del solape entre chunks. Solo se recorta el
+# prefijo duplicado de un chunk si hay un match CONTIGUO de al menos
+# _MIN_OVERLAP_TOKENS tokens normalizados; si no, se deja el texto intacto
+# (mejor un duplicado ocasional que comerse texto legítimo).
+_MIN_OVERLAP_TOKENS = 4
+_MAX_OVERLAP_SEARCH_TOKENS = 15
+_TOKEN_STRIP_RE = re.compile(r"[^\w]+", re.UNICODE)
+
 
 def _pcm_to_wav_bytes(pcm: np.ndarray) -> io.BytesIO:
     """Empaqueta un array int16 mono 16 kHz como WAV en memoria."""
@@ -426,45 +463,177 @@ def _decode_audio_to_pcm(audio_path: str) -> np.ndarray:
     return np.concatenate([c.reshape(-1) for c in chunks]).astype(np.int16)
 
 
+def _normalize_token(tok: str) -> str:
+    """Normaliza un token para comparación: minúsculas, sin puntuación."""
+    return _TOKEN_STRIP_RE.sub("", tok).lower()
+
+
+def _dedupe_overlap_prefix(accumulated_text: str, next_text: str) -> str:
+    """Recorta de *next_text* el prefijo que duplica el solape con *accumulated_text*.
+
+    Fix F5: el chunking transcribe ~2s de solape dos veces (una al final del
+    chunk N, otra al inicio del chunk N+1), y sin dedup esa frase queda
+    repetida en cada empalme. Compara los tokens normalizados (lowercase, sin
+    puntuación) del sufijo de *accumulated_text* contra el prefijo de
+    *next_text*, buscando el match CONTIGUO más largo (hasta
+    _MAX_OVERLAP_SEARCH_TOKENS). Solo recorta si el match tiene al menos
+    _MIN_OVERLAP_TOKENS — así una repetición legítima corta ("no, no") nunca
+    se toca. El corte se hace en frontera de palabra sobre el texto ORIGINAL
+    de *next_text* (conserva capitalización/puntuación del resto).
+
+    Si no hay match suficiente, o alguno de los textos está vacío, devuelve
+    *next_text* sin modificar.
+    """
+    if not accumulated_text or not next_text:
+        return next_text
+
+    prev_tokens_raw = accumulated_text.split()
+    next_tokens_raw = next_text.split()
+    if not prev_tokens_raw or not next_tokens_raw:
+        return next_text
+
+    prev_window = prev_tokens_raw[-_MAX_OVERLAP_SEARCH_TOKENS:]
+    next_window = next_tokens_raw[:_MAX_OVERLAP_SEARCH_TOKENS]
+
+    prev_norm = [_normalize_token(t) for t in prev_window]
+    next_norm = [_normalize_token(t) for t in next_window]
+
+    max_possible = min(len(prev_norm), len(next_norm))
+    best_len = 0
+    for length in range(max_possible, _MIN_OVERLAP_TOKENS - 1, -1):
+        prev_tail = prev_norm[-length:]
+        next_head = next_norm[:length]
+        # all(...) evita que una racha de tokens vacíos (solo puntuación, p.
+        # ej. "-" o "...") normalizados a "" cuente como match trivial.
+        if prev_tail == next_head and all(prev_tail):
+            best_len = length
+            break
+
+    if best_len == 0:
+        return next_text
+
+    remainder_tokens = next_tokens_raw[best_len:]
+    return " ".join(remainder_tokens)
+
+
+class _ChunkTranscriptionFailed(Exception):
+    """Un chunk agotó su reintento (uso interno de _transcribe_pcm_chunked)."""
+
+
+class _AllChunksFailedError(RuntimeError):
+    """Fix F6: TODOS los chunks fallaron tras su reintento — no hay nada que salvar."""
+
+
+def _format_gap_marker(start_sample: int, end_sample: int, sample_rate: int) -> str:
+    """Marcador explícito para un chunk que falló tras reintento (fix F6)."""
+
+    def _mmss(seconds: float) -> str:
+        t = max(0, int(round(seconds)))
+        return f"{t // 60:02d}:{t % 60:02d}"
+
+    start_s = start_sample / sample_rate
+    end_s = end_sample / sample_rate
+    return f"[fragmento no transcrito ~{_mmss(start_s)}–{_mmss(end_s)}]"
+
+
+def _transcribe_chunk_with_retry(chunk_pcm: np.ndarray, transcriber_instance, prompt: Optional[str]) -> str:
+    """Transcribe un chunk con UN reintento si el backend lanza excepción.
+
+    Fix F6: un chunk que falla no debe tirar todo el trabajo previo. Aquí solo
+    se resuelve el chunk individual: reintenta una vez (regenerando el WAV,
+    el buffer del primer intento ya pudo consumirse) y si vuelve a fallar,
+    propaga _ChunkTranscriptionFailed para que el caller decida (marcador de
+    hueco vs. fallo total). Cadena vacía = silencio legítimo, no es fallo.
+    """
+    try:
+        return transcriber_instance.transcribe(_pcm_to_wav_bytes(chunk_pcm), prompt=prompt)
+    except Exception as exc:
+        logger.warning("Chunk de transcripción falló, reintentando una vez: %s", exc)
+        try:
+            return transcriber_instance.transcribe(_pcm_to_wav_bytes(chunk_pcm), prompt=prompt)
+        except Exception as exc2:
+            raise _ChunkTranscriptionFailed(str(exc2)) from exc2
+
+
 def _transcribe_pcm_chunked(pcm: np.ndarray, transcriber_instance, on_progress: Optional[Callable]) -> str:
     """Transcribe PCM completo dividiéndolo en ventanas si es necesario.
 
     Para audios cortos (≤ CHUNK_SECONDS) envía un único WAV.
-    Para audios largos parte en ventanas con OVERLAP_SECONDS de solape y usa
-    el final del texto previo como prompt de contexto (mejora continuidad).
+    Para audios largos parte en ventanas con OVERLAP_SECONDS de solape, dedup
+    conservador del solape (fix F5), un reintento por chunk con marcador de
+    hueco explícito si falla dos veces (fix F6), y usa el final del texto
+    previo como prompt de contexto (mejora continuidad).
+
+    Lanza _AllChunksFailedError si TODOS los chunks fallaron tras su
+    reintento (el caller ya trata cualquier excepción de esta función como
+    fallo total de la ruta audio — comportamiento sin cambios).
     """
     total_samples = len(pcm)
     chunk_samples = _CHUNK_SECONDS * _SAMPLE_RATE
     overlap_samples = _OVERLAP_SECONDS * _SAMPLE_RATE
 
     if total_samples <= chunk_samples:
-        # Audio corto: un solo chunk
+        # Audio corto: un solo chunk. Si falla tras el reintento, es un fallo
+        # total (100% de los chunks) — se propaga igual que antes (el caller
+        # ya lo captura como error de red/procesamiento).
         if on_progress:
             on_progress("transcribiendo")
-        wav_buf = _pcm_to_wav_bytes(pcm)
-        return transcriber_instance.transcribe(wav_buf)
+        try:
+            return _transcribe_chunk_with_retry(pcm, transcriber_instance, None)
+        except _ChunkTranscriptionFailed as exc:
+            raise _AllChunksFailedError(str(exc)) from exc
 
     # Audio largo: transcripción por ventanas con carryover
     parts: list[str] = []
+    accumulated_real_text = ""
     start = 0
     chunk_idx = 0
+    total_chunks = (total_samples + chunk_samples - 1) // chunk_samples
+    failed_chunks = 0
     while start < total_samples:
         end = min(start + chunk_samples, total_samples)
         chunk_pcm = pcm[start:end]
         chunk_idx += 1
-        total_chunks = (total_samples + chunk_samples - 1) // chunk_samples
         if on_progress:
             on_progress(f"transcribiendo ({chunk_idx}/{total_chunks})")
 
-        # Prompt de contexto: últimas ~200 chars del texto acumulado
-        carry_prompt = " ".join(parts)[-200:] if parts else None
-        wav_buf = _pcm_to_wav_bytes(chunk_pcm)
-        chunk_text = transcriber_instance.transcribe(wav_buf, prompt=carry_prompt)
-        if chunk_text:
-            parts.append(chunk_text)
+        # Prompt de contexto: últimas ~200 chars del texto real acumulado
+        # (nunca incluye marcadores de hueco: no aportan contexto de habla).
+        carry_prompt = accumulated_real_text[-200:] if accumulated_real_text else None
+
+        try:
+            chunk_text = _transcribe_chunk_with_retry(chunk_pcm, transcriber_instance, carry_prompt)
+        except _ChunkTranscriptionFailed as exc:
+            failed_chunks += 1
+            logger.warning(
+                "Chunk %d/%d perdido tras reintento (hueco marcado): %s",
+                chunk_idx, total_chunks, exc,
+            )
+            parts.append(_format_gap_marker(start, end, _SAMPLE_RATE))
+        else:
+            if chunk_text:
+                deduped = (
+                    _dedupe_overlap_prefix(accumulated_real_text, chunk_text)
+                    if accumulated_real_text else chunk_text
+                )
+                if deduped:
+                    parts.append(deduped)
+                    accumulated_real_text = (
+                        f"{accumulated_real_text} {deduped}".strip()
+                        if accumulated_real_text else deduped
+                    )
+            # chunk_text vacío = silencio legítimo: sin marcador, no cuenta como fallo.
 
         # Avanzar con solape hacia atrás para no perder palabras en el corte
         start = end - overlap_samples if end < total_samples else total_samples
+
+    # OJO: comparar contra chunk_idx (iteraciones REALES), no contra total_chunks
+    # (estimado ceil que ignora el corrimiento del solape end-overlap: puede haber
+    # una iteración más que el estimado y el caso "todos fallaron" no dispararía).
+    if failed_chunks == chunk_idx:
+        raise _AllChunksFailedError(
+            f"Los {chunk_idx} fragmentos de audio fallaron al transcribir tras reintento."
+        )
 
     return " ".join(parts)
 
