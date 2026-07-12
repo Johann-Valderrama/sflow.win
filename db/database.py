@@ -704,6 +704,49 @@ class TranscriptionDB:
                     logger.warning("FTS clear error: %s", exc)
             return rowcount
 
+    def meetings_prune_older_than(self, days: int) -> int:
+        """Elimina reuniones (actas y transcripts) más antiguas que *days* días.
+
+        Si days <= 0 no hace nada (semántica: conservar siempre — misma
+        convención que ``prune_older_than`` para transcripciones).
+
+        A diferencia de las transcripciones, ``meetings_fts`` se mantiene A
+        MANO (sin triggers SQLite): un DELETE monolítico sobre `meetings`
+        dejaría entradas huérfanas en el índice FTS y ``meetings_search``
+        seguiría devolviendo hits de reuniones ya borradas. Por eso se sigue
+        el mismo patrón que ``meeting_delete``/``meetings_delete_all``: primero
+        se listan los ids a borrar, se limpia su entrada FTS una por una
+        (orden FTS-antes-que-filas), y solo al final se borran las filas de
+        `meetings`. Devuelve el número de filas eliminadas.
+        """
+        if days <= 0:
+            return 0
+        cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+        with self._connect() as conn:
+            ids = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT id FROM meetings WHERE date(created_at) < date(?)",
+                    (cutoff,),
+                ).fetchall()
+            ]
+            if not ids:
+                return 0
+            if self._fts_enabled:
+                for meeting_id in ids:
+                    try:
+                        conn.execute("DELETE FROM meetings_fts WHERE rowid=?", (meeting_id,))
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("FTS delete error (meeting %s): %s", meeting_id, exc)
+            cursor = conn.execute(
+                "DELETE FROM meetings WHERE date(created_at) < date(?)",
+                (cutoff,),
+            )
+            deleted = cursor.rowcount
+        if deleted:
+            logger.info("Poda de reuniones: %d reuniones eliminadas (anteriores a %s)", deleted, cutoff)
+        return deleted
+
     # ------------------------------------------------------------------
     # FTS5 — búsqueda full-text en reuniones
     # ------------------------------------------------------------------

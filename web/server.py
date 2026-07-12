@@ -911,6 +911,16 @@ HTML_TEMPLATE = """
                     <div id="cfg-insights-claudecli-wrap" class="mt-2 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
                         <p class="text-xs text-white/55">Usa tu suscripción de Claude vía Claude Code (requiere <code class="text-white/70">claude</code> instalado y logueado, sin API key). Sirve para acta, Asistente y análisis en vivo. <strong class="text-white/70">Consume la cuota de tu plan</strong> (Pro/Max): una reunión larga con análisis en vivo puede gastar decenas de mensajes. Modelos: <code class="text-white/70">CLAUDE_CLI_MODEL_LIVE</code> (haiku) y <code class="text-white/70">CLAUDE_CLI_MODEL_BATCH</code> (sonnet). Claude Code guarda transcripts locales propios.</p>
                     </div>
+                    <div class="mt-3 p-3 rounded-lg bg-red-500/[0.06] border border-red-500/20">
+                        <label for="cfg-meeting-retention-days" class="text-xs text-white/55 block mb-1">Eliminar reuniones (actas y transcripts) después de (días)</label>
+                        <select id="cfg-meeting-retention-days" class="cfg-select">
+                            <option value="0">Nunca (recomendado)</option>
+                            <option value="30">30 días</option>
+                            <option value="90">90 días</option>
+                            <option value="180">180 días</option>
+                        </select>
+                        <p class="text-xs text-red-300/80 mt-1">⚠ Borra <strong>definitivamente</strong> actas y transcripts de reuniones más viejas que N días (irreversible, incluye su índice de búsqueda). Se aplica <strong>al reiniciar la app</strong>, no al guardar aquí. Default: 0 = conservar siempre.</p>
+                    </div>
                 </div>
             </div>
 
@@ -1908,6 +1918,11 @@ HTML_TEMPLATE = """
             document.getElementById('cfg-dictation-mode-map').value = settings.dictation_mode_map || '';
             // Copiloto con contexto OPS — briefing v1 (unidad 7.1)
             document.getElementById('cfg-ops-briefing-path').value = settings.ops_briefing_path || '';
+            // Retención opcional de reuniones (unidad 3.2)
+            const meetingRetDays = settings.meeting_retention_days || 0;
+            const meetingRetSelect = document.getElementById('cfg-meeting-retention-days');
+            const meetingRetOpt = meetingRetSelect.querySelector('option[value="' + meetingRetDays + '"]');
+            meetingRetSelect.value = meetingRetOpt ? String(meetingRetDays) : '0';
             updateWebhookHistoryWarn();
             onInsightsBackendChange();
             updateLocalModelSection();
@@ -1941,6 +1956,7 @@ HTML_TEMPLATE = """
                 dictation_modes_enabled: document.getElementById('cfg-dictation-modes-enabled').checked ? 'true' : 'false',
                 dictation_mode_map: document.getElementById('cfg-dictation-mode-map').value.trim(),
                 ops_briefing_path: document.getElementById('cfg-ops-briefing-path').value.trim(),
+                meeting_retention_days: document.getElementById('cfg-meeting-retention-days').value,
             };
             await fetch('/api/settings', {
                 method: 'POST',
@@ -4135,9 +4151,45 @@ def _validate_briefing_path(path: str) -> str | None:
     return None
 
 
+def _validate_meeting_retention_days(value: str) -> str | None:
+    """Valida MEETING_RETENTION_DAYS. Devuelve un mensaje de error, o None si es válido.
+
+    Solo exige que sea un entero (positivo, cero o negativo); días<=0 se
+    interpreta aguas abajo (meetings_prune_older_than) como "conservar
+    siempre". Rechazar aquí lo no-numérico evita que quede persistido en el
+    .env un valor que luego reviente el GET con un ValueError (fix U3.2: la
+    lectura del GET además usa _safe_int_env como segunda red de seguridad).
+    """
+    value = (value or "").strip()
+    if not value:
+        return None  # vacío -> tratado como "0" por el default de getenv
+    try:
+        int(value)
+    except ValueError:
+        return "El valor debe ser un número entero (días). Usa 0 para conservar siempre."
+    return None
+
+
+def _safe_int_env(key: str, default: int) -> int:
+    """Lee una env var como entero sin reventar el caller si el valor no es numérico.
+
+    Un .env editado a mano (o una migración vieja) puede dejar basura en una
+    variable que el resto del código asume entera; convertir eso en un 500 en
+    /api/settings sería peor que devolver el default.
+    """
+    raw = os.getenv(key, "")
+    if not raw.strip():
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 _SETTINGS_VALIDATORS = {
     "pending_export_dir": _validate_export_dir,
     "ops_briefing_path": _validate_briefing_path,
+    "meeting_retention_days": _validate_meeting_retention_days,
 }
 
 
@@ -4184,6 +4236,10 @@ def get_settings():
         "dictation_mode_map": os.getenv("DICTATION_MODE_MAP", _dictation_modes.DEFAULT_MODE_MAP),
         # Copiloto con contexto OPS — briefing v1 (unidad 7.1)
         "ops_briefing_path": os.getenv("OPS_BRIEFING_PATH", ""),
+        # Retención opcional de reuniones (unidad 3.2). Default 0 = conservar
+        # siempre; es la única operación destructiva de este plan, por eso
+        # _safe_int_env nunca deja que un valor corrupto tumbe este GET.
+        "meeting_retention_days": _safe_int_env("MEETING_RETENTION_DAYS", 0),
     })
 
 
@@ -4226,6 +4282,8 @@ def update_settings():
         "dictation_mode_map": "DICTATION_MODE_MAP",
         # Copiloto con contexto OPS — briefing v1 (unidad 7.1)
         "ops_briefing_path": "OPS_BRIEFING_PATH",
+        # Retención opcional de reuniones (unidad 3.2)
+        "meeting_retention_days": "MEETING_RETENTION_DAYS",
     }
     errors: dict[str, str] = {}
     for field, env_key in allowed.items():

@@ -521,6 +521,7 @@ Edit `config.py`:
 - `DICTATION_MODES_ENABLED` (default: `false`) — Activa el reformateo post-dictado por app activa (Ola 6).
 - `DICTATION_MODE_MAP` — Mapa `exe:preset` (p. ej. `outlook.exe:email,slack.exe:chat,code.exe:codigo`) que asigna un preset de reformateo por `.exe` en foco; parseo tolerante a espacios/mayúsculas.
 - `OPS_BRIEFING_PATH` (default: `""`) — Ruta a un `.md` curado por el usuario (proyectos activos, compromisos, metas); si está seteado, su contenido se inyecta SOLO en el chat en vivo "Preguntar" (Ola 7, unidad 7.1). Vacío = apagado.
+- `MEETING_RETENTION_DAYS` (default: `0` = conservar siempre) — Si > 0, al ARRANCAR la app se borran definitivamente las reuniones (actas y transcripts) más viejas que N días, incluida su entrada en el índice de búsqueda (`meetings_fts`). Es la única operación destructiva de la unidad 3.2; apagada por defecto. Configurable desde el dashboard (Ajustes → Reuniones), se aplica en el próximo reinicio, no al guardar.
 
 ### Backends de insights — Anthropic (API oficial) y claude-cli (suscripción Claude)
 

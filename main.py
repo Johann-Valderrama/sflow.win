@@ -507,6 +507,19 @@ class VflowApp(QObject):
         except Exception as _prune_exc:
             logger.warning("Error en poda de historial por retención: %s", _prune_exc)
 
+        # Poda de reuniones por retención al arranque (MEETING_RETENTION_DAYS=0 → conservar
+        # siempre). Boot-only, mismo patrón que HISTORY_RETENTION_DAYS: es seguro contra una
+        # reunión activa porque las filas de `meetings` solo nacen en MEETING.stop() y esta
+        # poda corre aquí, antes de que el subsistema de reunión viva.
+        try:
+            meeting_retention_days = int(os.getenv("MEETING_RETENTION_DAYS", "0") or 0)
+            if meeting_retention_days > 0:
+                meetings_pruned = self.db.meetings_prune_older_than(meeting_retention_days)
+                if meetings_pruned:
+                    logger.info("Retención: eliminadas %d reuniones (> %d días)", meetings_pruned, meeting_retention_days)
+        except Exception as _meeting_prune_exc:
+            logger.warning("Error en poda de reuniones por retención: %s", _meeting_prune_exc)
+
         self.hotkey = HotkeyListener()
         self.pill = PillWidget()
         self.hud = HudWidget()
