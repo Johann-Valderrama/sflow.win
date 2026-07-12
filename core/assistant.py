@@ -805,3 +805,257 @@ def answer(db, message: str, history=None, meeting_id=None, max_tokens: int = 10
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": "Error al consultar el asistente: " + str(exc),
                 "reasoned": resolved}
+
+
+# ---------------------------------------------------------------------------
+# Chat de memoria CROSS-reunión + entregables (unidad 5.3)
+# ---------------------------------------------------------------------------
+# Chatea sobre un CONJUNTO de reuniones (seleccionadas a mano o por tema vía FTS)
+# y produce entregables (email de seguimiento, informe, resumen de acuerdos).
+# Diseño cerrado en debate adversarial — puntos NO renegociables:
+#   1. Contexto = ACTAS (minutes_json), NUNCA transcripts completos.
+#   2. Cap duro de 12 reuniones candidatas por RECENCIA, resuelto ANTES de armar
+#      el contexto; lo que no entra por cap o por presupuesto se DECLARA excluido
+#      (nunca se descarta en silencio).
+#   3. ids explícitos tienen prioridad sobre fts_query (nunca ambos a la vez).
+#   4. Cada acta en el contexto lleva SIEMPRE fecha + título + meeting_id visibles.
+
+_MULTI_MAX_CANDIDATES = 12
+
+MULTI_SYSTEM = (
+    "Eres un asistente de memoria que trabaja sobre un CONJUNTO de reuniones seleccionado "
+    "por el usuario (no todo el historial). Recibes las ACTAS (nunca transcripciones "
+    "completas) de esas reuniones, cada una con fecha, título e identificador [N].\n\n"
+    "REGLAS ESTRICTAS:\n"
+    "- Responde SOLO con base en las actas provistas. Prohibido usar conocimiento externo o "
+    "inventar datos, nombres, fechas o compromisos que no estén en el contexto.\n"
+    "- Cita SIEMPRE la fecha y la reunión de origen de cada afirmación (p. ej. \"el "
+    "2026-06-10 [10] se acordó...\").\n"
+    "- Si la respuesta no está en las actas provistas, dilo con claridad: \"No encuentro eso "
+    "en las reuniones seleccionadas.\" Nunca inventes ni extrapoles.\n"
+    "- No conviertas contenido descriptivo en pendientes. No inventes responsables ni fechas.\n"
+    "- Responde en español salvo que el usuario pida explícitamente otro idioma."
+)
+
+
+# Entregables (unidad 5.3): cada uno es una instrucción EXTRA al system prompt, sobre
+# la misma base MULTI_SYSTEM (los hechos siguen debiendo salir de las actas). Sin
+# template ("None") el chat queda libre, sin instrucción de formato.
+DELIVERABLE_TEMPLATES: dict = {
+    "email_seguimiento": {
+        "label": "Email de seguimiento",
+        "system_extra": (
+            "\n\nENTREGABLE SOLICITADO: redacta un EMAIL DE SEGUIMIENTO listo para copiar y "
+            "enviar. Primera línea 'Asunto: ...', luego el cuerpo. Incluye los acuerdos/"
+            "decisiones y los próximos pasos relevantes, citando la fecha/reunión de origen "
+            "de cada uno. Tono profesional y conciso."
+        ),
+    },
+    "informe": {
+        "label": "Informe ejecutivo",
+        "system_extra": (
+            "\n\nENTREGABLE SOLICITADO: redacta un INFORME EJECUTIVO con estas secciones, "
+            "cada una con su encabezado: Contexto, Decisiones, Pendientes por responsable, "
+            "Riesgos. Cita la fecha/reunión de origen en cada afirmación relevante. Si una "
+            "sección no tiene contenido real en las actas, dilo explícitamente en vez de "
+            "inventar."
+        ),
+    },
+    "resumen_acuerdos": {
+        "label": "Resumen de acuerdos",
+        "system_extra": (
+            "\n\nENTREGABLE SOLICITADO: redacta una LISTA COMPACTA de acuerdos/decisiones, "
+            "un ítem por línea, cada uno con su fecha y la reunión de origen. Sin relleno ni "
+            "introducción."
+        ),
+    },
+}
+
+
+def _resolve_multi_candidates(db, meeting_ids=None, fts_query=None) -> tuple:
+    """Resuelve las reuniones candidatas para ``answer_multi``.
+
+    Prioridad: ``meeting_ids`` explícitos SIEMPRE ganan sobre ``fts_query`` (nunca se
+    combinan). Devuelve ``(candidates, excluded)``:
+
+      - ``candidates``: lista de hasta ``_MULTI_MAX_CANDIDATES`` dicts
+        ``{id, title, started_at, minutes}``, ordenados por RECENCIA (más reciente
+        primero). El cap se aplica ANTES de que ``_assemble_multi_context`` arme el
+        bloque de texto — nunca se cargan al prompt más de 12 actas.
+      - ``excluded``: lista de dicts ``{id, titulo, motivo}`` para cada reunión pedida
+        que quedó fuera — id no encontrado ("no encontrada"), sin acta real
+        ("sin acta") o recortada por el cap de recencia ("cap de recencia (máx 12)").
+        El presupuesto de caracteres se aplica DESPUÉS, en ``_assemble_multi_context``.
+    """
+    excluded: list = []
+    raw_ids: list = []
+
+    if meeting_ids:
+        seen = set()
+        for mid in meeting_ids:
+            try:
+                mid_int = int(mid)
+            except (TypeError, ValueError):
+                continue
+            if mid_int in seen:
+                continue
+            seen.add(mid_int)
+            raw_ids.append(mid_int)
+    elif fts_query:
+        try:
+            results = db.meetings_search(_search_terms(fts_query), limit=30, match="or")
+        except Exception:  # noqa: BLE001
+            results = []
+        raw_ids = [r["id"] for r in results]
+
+    if not raw_ids:
+        return [], []
+
+    resolved: list = []
+    for mid in raw_ids:
+        try:
+            row = db.meeting_get(mid)
+        except Exception:  # noqa: BLE001
+            row = None
+        if not row:
+            excluded.append({"id": mid, "titulo": "", "motivo": "no encontrada"})
+            continue
+        title = row.get("title") or ""
+        try:
+            minutes = json.loads(row.get("minutes_json") or "null")
+        except Exception:  # noqa: BLE001
+            minutes = None
+        if not minutes:
+            excluded.append({"id": mid, "titulo": title, "motivo": "sin acta"})
+            continue
+        resolved.append({
+            "id": mid,
+            "title": title,
+            "started_at": row.get("started_at") or row.get("created_at") or "",
+            "minutes": minutes,
+        })
+
+    resolved.sort(key=lambda c: c["started_at"] or "", reverse=True)
+
+    candidates = resolved[:_MULTI_MAX_CANDIDATES]
+    for extra in resolved[_MULTI_MAX_CANDIDATES:]:
+        excluded.append({
+            "id": extra["id"], "titulo": extra["title"],
+            "motivo": "cap de recencia (máx 12)",
+        })
+
+    return candidates, excluded
+
+
+def _assemble_multi_context(candidates: list, budget: int) -> tuple:
+    """Ensambla el bloque de texto de actas para el chat multi-reunión.
+
+    ``candidates`` debe venir YA ordenado por recencia (más reciente primero, ver
+    ``_resolve_multi_candidates``). Se agregan actas en ese orden hasta agotar
+    ``budget``; las que no caben se declaran excluidas (motivo "presupuesto") en
+    vez de truncarse a la mitad. Cada bloque incluido lleva SIEMPRE visibles
+    fecha + título + ``[meeting_id]``.
+
+    Devuelve ``(context_str, included_meta, excluded_meta)`` con
+    ``included_meta``/``excluded_meta`` = listas de ``{id, titulo, fecha}`` /
+    ``{id, titulo, motivo}``.
+    """
+    header = "=== ACTAS DE REUNIONES SELECCIONADAS ==="
+    used = len(header)
+    parts = [header]
+    included_meta: list = []
+    excluded_meta: list = []
+
+    for c in candidates:
+        fecha = (c.get("started_at") or "")[:10] or "sin fecha"
+        acta_str = _format_acta(c.get("minutes") or {}) or "(acta sin contenido)"
+        title = c.get("title") or "sin título"
+        block = f"\n\n--- Reunión [{c['id']}] {fecha} · {title} ---\n{acta_str}"
+        if used + len(block) > budget:
+            excluded_meta.append({"id": c["id"], "titulo": c.get("title") or "", "motivo": "presupuesto"})
+            continue
+        parts.append(block)
+        used += len(block)
+        included_meta.append({"id": c["id"], "titulo": c.get("title") or "", "fecha": fecha})
+
+    return "".join(parts), included_meta, excluded_meta
+
+
+def answer_multi(db, message: str, meeting_ids=None, fts_query=None, history=None,
+                 template: "str | None" = None, max_tokens: int = 1536,
+                 reasoning="auto") -> dict:
+    """Chatea sobre un CONJUNTO de reuniones (selección manual o por tema) y, si se pide
+    un ``template``, produce un entregable (ver ``DELIVERABLE_TEMPLATES``).
+
+    ``meeting_ids`` (lista de ids) tiene prioridad SIEMPRE sobre ``fts_query`` (texto de
+    búsqueda FTS) — nunca se combinan. Si no se pasa ninguno de los dos, devuelve error.
+
+    Devuelve ``{ok: True, answer, reuniones_incluidas, excluidas, template_usado,
+    reasoned}`` o ``{ok: False, error, reasoned}``. ``reuniones_incluidas``/``excluidas``
+    documentan qué reunión entró de verdad al contexto y cuál quedó fuera (y por qué:
+    "no encontrada", "sin acta", "cap de recencia (máx 12)" o "presupuesto").
+    """
+    message = (message or "").strip()
+
+    if reasoning is True:
+        resolved_reasoning = True
+    elif reasoning is False:
+        resolved_reasoning = False
+    else:
+        resolved_reasoning = _needs_reasoning(message)
+
+    if not message:
+        return {"ok": False, "error": "Mensaje vacío", "reasoned": resolved_reasoning}
+
+    if template is not None and template not in DELIVERABLE_TEMPLATES:
+        return {"ok": False, "error": f"Plantilla desconocida: {template}",
+                "reasoned": resolved_reasoning}
+
+    if not meeting_ids and not fts_query:
+        return {"ok": False, "error": "Indica meeting_ids o fts_query",
+                "reasoned": resolved_reasoning}
+
+    try:
+        candidates, excluded_resolve = _resolve_multi_candidates(
+            db, meeting_ids=meeting_ids, fts_query=fts_query)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Asistente multi: error resolviendo candidatos: %s", exc)
+        candidates, excluded_resolve = [], []
+
+    budget = _budget_chars()
+    context, included_meta, excluded_budget = _assemble_multi_context(candidates, budget)
+    excluded_meta = excluded_resolve + excluded_budget
+
+    system_content = MULTI_SYSTEM
+    if template:
+        system_content += DELIVERABLE_TEMPLATES[template]["system_extra"]
+    identity_line = insights.user_identity_line()
+    if identity_line:
+        system_content += "\n\n" + identity_line
+    system_content += "\n\n" + context
+
+    messages = [{"role": "system", "content": system_content}]
+
+    if history:
+        valid_history = [
+            {"role": h["role"], "content": str(h.get("content") or "")[:2000]}
+            for h in history
+            if isinstance(h, dict) and h.get("role") in ("user", "assistant")
+        ]
+        messages.extend(valid_history[-6:])
+
+    messages.append({"role": "user", "content": message})
+
+    try:
+        text = insights.chat_memory(messages, max_tokens=max_tokens, reasoning=resolved_reasoning)
+        return {
+            "ok": True, "answer": text,
+            "reuniones_incluidas": included_meta, "excluidas": excluded_meta,
+            "template_usado": template, "reasoned": resolved_reasoning,
+        }
+    except insights.InsightsUnavailable as exc:
+        return {"ok": False, "error": str(exc) or "Backend de insights no disponible",
+                "reasoned": resolved_reasoning}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": "Error al consultar el asistente: " + str(exc),
+                "reasoned": resolved_reasoning}

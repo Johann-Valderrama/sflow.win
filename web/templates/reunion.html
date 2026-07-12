@@ -20,6 +20,20 @@
   #asst-messages .md-cite{color:#c4b5fd;text-decoration:underline;cursor:pointer;font-size:.92em;}
   svg.ic{width:1em;height:1em;display:inline-block;vertical-align:-0.125em;flex-shrink:0}
   @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important;}}
+  /* Selección múltiple del historial (unidad 5.3 — chat multi-reunión) */
+  .mm-select-cb{display:none;}
+  body.mm-select-mode .mm-select-cb{display:inline-block;}
+  #mm-overlay.flex{display:flex;}
+  #mm-overlay.hidden{display:none;}
+  #mm-select-bar.flex{display:flex;}
+  #mm-topic-row.flex{display:flex;}
+  #mm-messages ul{list-style:disc;margin:.25rem 0;padding-left:1.2rem;}
+  #mm-messages ol{list-style:decimal;margin:.25rem 0;padding-left:1.4rem;}
+  #mm-messages li{margin:.1rem 0;}
+  #mm-messages code{background:rgba(255,255,255,.1);padding:0 .25rem;border-radius:3px;font-family:monospace;font-size:.92em;}
+  #mm-messages strong{font-weight:600;}
+  #mm-messages .md-h{font-weight:600;margin:.3rem 0 .15rem;}
+  #mm-messages .md-p{margin:.15rem 0;}
 </style></head>
 <body class="min-h-screen p-6">
 <div class="max-w-5xl mx-auto">
@@ -114,9 +128,14 @@
     <div class="flex items-center justify-between mb-2 mt-8">
       <div class="text-sm font-medium text-white/60">Historial de reuniones</div>
       <div class="flex gap-2">
+        <button onclick="mmToggleSelectMode()" id="mm-select-toggle" class="btn text-white/45 hover:text-white/70 hover:bg-white/5" title="Seleccionar varias reuniones para chatear con ellas">Seleccionar</button>
+        <button onclick="mmOpenByTopic()" class="btn text-white/45 hover:text-white/70 hover:bg-white/5" title="Chatear con reuniones por tema (búsqueda)">Por tema…</button>
         <button onclick="exportAll()" class="btn text-white/45 hover:text-white/70 hover:bg-white/5" title="Exportar todas a Markdown">Exportar todas (.md)</button>
         <button onclick="clearAll()" class="btn text-white/55 hover:text-red-300 hover:bg-white/5" title="Eliminar todas las reuniones">Limpiar todo</button>
       </div>
+    </div>
+    <div id="mm-select-bar" class="hidden items-center justify-between glass rounded-lg px-3 py-2 mb-2">
+      <button onclick="mmOpenSelected()" id="mm-select-chat-btn" class="btn bg-violet-600/30 text-violet-200 hover:bg-violet-600/50">Chatear con 0 reuniones</button>
     </div>
     <input id="meetingSearch" type="search" placeholder="Buscar en reuniones…" aria-label="Buscar en reuniones"
       class="focus:outline-none focus:ring-2 focus:ring-violet-500/60"
@@ -124,6 +143,37 @@
       oninput="onSearchInput(this.value)">
     <div id="mt-history" class="space-y-1"></div>
     <div id="mt-viewer" class="glass rounded-xl p-4 mt-3 hidden"></div>
+  </div>
+
+  <!-- Overlay: chat multi-reunión + entregables (unidad 5.3). Oculto al cargar. -->
+  <div id="mm-overlay" class="fixed inset-0 hidden items-center justify-center p-4" style="z-index:60;background:rgba(0,0,0,0.6);">
+    <div class="glass rounded-xl p-4 w-full max-w-2xl max-h-[85vh] overflow-y-auto" style="background:#111116;">
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-sm font-medium text-violet-300/80" data-icon="chat">Chatear con varias reuniones</div>
+        <button onclick="mmCloseOverlay()" class="text-white/40 hover:text-white/80 text-lg leading-none px-1" title="Cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <div id="mm-overlay-scope" class="text-xs text-white/50 mb-2"></div>
+      <div id="mm-topic-row" class="hidden items-center gap-2 mb-2">
+        <input id="mm-topic-input" type="text" placeholder="Tema a buscar…" aria-label="Tema a buscar"
+          class="focus:outline-none focus:ring-2 focus:ring-violet-500/60"
+          style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.35rem .7rem;font-size:.8rem;"
+          oninput="mmDebounceTopic()">
+      </div>
+      <div id="mm-chips" class="flex flex-wrap gap-1.5 mb-2"></div>
+      <div id="mm-messages" class="space-y-2 overflow-y-auto mb-2" aria-live="polite" style="min-height:60px;max-height:280px;"></div>
+      <div id="mm-included-box" class="hidden text-[11px] text-white/40 mb-2 leading-relaxed"></div>
+      <div class="flex gap-2 mb-2">
+        <input id="mm-input" type="text" placeholder="Pregunta o pide un entregable…" aria-label="Pregunta o pide un entregable"
+          class="focus:outline-none focus:ring-2 focus:ring-violet-500/60"
+          style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.35rem .7rem;font-size:.8rem;"
+          onkeydown="if(event.key==='Enter')mmSend()">
+        <button onclick="mmSend()" class="btn bg-violet-600/30 text-violet-200 hover:bg-violet-600/50">Enviar</button>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="mmCopyLast()" class="btn text-white/50 hover:text-white/80 hover:bg-white/5">Copiar</button>
+        <button id="mm-export-btn" onclick="mmExportLast()" class="btn text-white/50 hover:text-white/80 hover:bg-white/5" title="Exportar a la carpeta configurada en Ajustes">Exportar a OPS</button>
+      </div>
+    </div>
   </div>
 
   <!-- Panel: Preguntar (Asistente de reuniones — chat de memoria, sin cambios internos) -->
@@ -588,12 +638,14 @@ async function loadHistory(){
     el.innerHTML=ms.map(m=>{ const dur=Math.round((m.duration_seconds||0)/60);
       return '<div class="glass rounded-lg px-3 py-2 hover:bg-white/[0.04]">'
         +'<div class="flex items-center gap-2">'
+        +'<input type="checkbox" class="mm-select-cb" data-id="'+m.id+'" aria-label="Seleccionar reunión" onclick="event.stopPropagation();mmToggleSelect('+m.id+',this.checked)" style="accent-color:#7c3aed;">'
         +'<span class="text-xs text-white/70 flex-1 cursor-pointer" onclick="openMeeting('+m.id+')">'+esc(m.started_at||m.created_at||'')+'</span>'
         +'<span class="text-[11px] text-white/30">'+dur+' min</span>'
         +'<button onclick="delMeeting('+m.id+')" class="text-white/25 hover:text-red-300 text-sm px-1" title="Eliminar esta reunión">'+ICONS.trash+'</button>'
         +'</div>'
         +metricsStrip(m.metrics)
         +'</div>'; }).join('');
+    document.querySelectorAll('.mm-select-cb').forEach(cb=>{ cb.checked=_mmSelected.has(parseInt(cb.dataset.id,10)); });
   }catch(e){} }
 function jumpToMoment(t, segs){
   // Busca el segmento cuyo data-t sea el más cercano a t y hace scroll + highlight
@@ -883,6 +935,183 @@ async function asstSend(text){
     }
   });
 })();
+
+// ---------------------------------------------------------------------------
+// Chat de memoria CROSS-reunión + entregables (unidad 5.3): selección múltiple
+// del historial + búsqueda "por tema" + overlay de chat con plantillas de
+// entregable. Prefijo "mm" (multi-meeting) para no colisionar con "mt"/"asst".
+// ---------------------------------------------------------------------------
+let _mmSelectMode=false;
+let _mmSelected=new Set();
+let _mmMode=null;          // {meeting_ids:[...]} o {fts_query:'...'}
+let _mmHistory=[];
+let _mmLastAnswer='';
+let _mmExportEnabled=false;
+let _mmTopicTimer=null;
+
+function mmToggleSelectMode(){
+  _mmSelectMode=!_mmSelectMode;
+  document.body.classList.toggle('mm-select-mode', _mmSelectMode);
+  document.getElementById('mm-select-toggle').textContent=_mmSelectMode?'Cancelar selección':'Seleccionar';
+  if(!_mmSelectMode){
+    _mmSelected.clear();
+    document.querySelectorAll('.mm-select-cb').forEach(cb=>{ cb.checked=false; });
+  }
+  mmUpdateSelectBar();
+}
+function mmToggleSelect(id, checked){
+  if(checked) _mmSelected.add(id); else _mmSelected.delete(id);
+  mmUpdateSelectBar();
+}
+function mmUpdateSelectBar(){
+  const bar=document.getElementById('mm-select-bar');
+  const n=_mmSelected.size;
+  const show=_mmSelectMode && n>0;
+  bar.classList.toggle('hidden', !show);
+  bar.classList.toggle('flex', show);
+  document.getElementById('mm-select-chat-btn').textContent='Chatear con '+n+' '+(n===1?'reunión':'reuniones');
+}
+function mmOpenSelected(){
+  if(!_mmSelected.size) return;
+  mmOpenOverlay({meeting_ids:[..._mmSelected]});
+}
+function mmOpenByTopic(){
+  mmOpenOverlay({fts_query:''});
+}
+
+async function mmCheckExportEnabled(){
+  try{ const r=await fetch('/api/settings'); const d=await r.json();
+    _mmExportEnabled=!!(d.pending_export_dir && d.pending_export_dir.trim());
+  }catch(e){ _mmExportEnabled=false; }
+  const btn=document.getElementById('mm-export-btn');
+  if(btn){
+    btn.disabled=!_mmExportEnabled;
+    btn.title=_mmExportEnabled?'Exportar a la carpeta configurada en Ajustes':'Configura la carpeta en Ajustes (Reuniones) para poder exportar';
+    btn.classList.toggle('opacity-40', !_mmExportEnabled);
+    btn.classList.toggle('cursor-not-allowed', !_mmExportEnabled);
+  }
+}
+
+function mmOpenOverlay(mode){
+  _mmMode=mode; _mmHistory=[]; _mmLastAnswer='';
+  document.getElementById('mm-messages').innerHTML='';
+  const box=document.getElementById('mm-included-box'); box.classList.add('hidden'); box.innerHTML='';
+  const topicRow=document.getElementById('mm-topic-row');
+  const scope=document.getElementById('mm-overlay-scope');
+  if(mode && mode.meeting_ids){
+    topicRow.classList.add('hidden'); topicRow.classList.remove('flex');
+    scope.textContent='Ámbito: '+mode.meeting_ids.length+' reunión(es) seleccionada(s) del historial.';
+  } else {
+    topicRow.classList.remove('hidden'); topicRow.classList.add('flex');
+    document.getElementById('mm-topic-input').value=(mode && mode.fts_query) || '';
+    scope.textContent='Ámbito: por tema (escribe abajo para buscar reuniones relacionadas).';
+  }
+  mmRenderChips();
+  mmCheckExportEnabled();
+  const ov=document.getElementById('mm-overlay');
+  ov.classList.remove('hidden'); ov.classList.add('flex');
+  const inp=document.getElementById(mode && mode.meeting_ids ? 'mm-input' : 'mm-topic-input');
+  if(inp) inp.focus();
+}
+function mmCloseOverlay(){
+  const ov=document.getElementById('mm-overlay');
+  ov.classList.add('hidden'); ov.classList.remove('flex');
+}
+document.addEventListener('keydown', function(ev){
+  if(ev.key!=='Escape') return;
+  const ov=document.getElementById('mm-overlay');
+  if(ov && !ov.classList.contains('hidden')) mmCloseOverlay();
+});
+
+const MM_TEMPLATES=[
+  ['email_seguimiento','Email de seguimiento'],
+  ['informe','Informe ejecutivo'],
+  ['resumen_acuerdos','Resumen de acuerdos'],
+];
+function mmRenderChips(){
+  const el=document.getElementById('mm-chips'); el.innerHTML='';
+  MM_TEMPLATES.forEach(function(t){
+    const b=document.createElement('button');
+    b.textContent=t[1];
+    b.style.cssText='font-size:.73rem;padding:.25rem .6rem;border-radius:.4rem;cursor:pointer;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.22);color:rgba(196,181,253,0.85);';
+    b.addEventListener('click',function(){ mmSend('Genera: '+t[1], t[0]); });
+    el.appendChild(b);
+  });
+}
+function mmDebounceTopic(){
+  clearTimeout(_mmTopicTimer);
+  _mmTopicTimer=setTimeout(function(){
+    const v=document.getElementById('mm-topic-input').value.trim();
+    if(v){ _mmMode={fts_query:v}; }
+  }, 300);
+}
+function mmAddMsg(role, html){
+  const el=document.getElementById('mm-messages');
+  const isUser=(role==='user');
+  const div=document.createElement('div');
+  div.className='text-xs leading-relaxed '+(isUser?'text-white/70':'text-violet-100/90');
+  div.style.cssText='padding:.35rem .6rem;border-radius:.4rem;'+(isUser?'background:rgba(255,255,255,0.04);text-align:right;':'background:rgba(139,92,246,0.10);');
+  div.innerHTML=(isUser?'<span class="text-white/30 mr-1">Tú:</span>':'<span class="text-violet-300/60 mr-1">Asistente:</span>')+html;
+  el.appendChild(div); el.scrollTop=el.scrollHeight;
+  return div;
+}
+function mmRenderIncluded(inc, exc){
+  const box=document.getElementById('mm-included-box');
+  inc=inc||[]; exc=exc||[];
+  if(!inc.length && !exc.length){ box.classList.add('hidden'); box.innerHTML=''; return; }
+  let h='';
+  if(inc.length) h+='<div>Incluidas ('+inc.length+'): '+inc.map(function(r){ return esc((r.fecha||'')+' · '+(r.titulo||('#'+r.id))); }).join(', ')+'</div>';
+  if(exc.length) h+='<div class="mt-1 text-white/30">Excluidas ('+exc.length+'): '+exc.map(function(r){ return esc((r.titulo||('#'+r.id))+' ['+(r.motivo||'')+']'); }).join(', ')+'</div>';
+  box.innerHTML=h; box.classList.remove('hidden');
+}
+async function mmSend(text, template){
+  const inp=document.getElementById('mm-input');
+  const msg=(text!=null?text:(inp?inp.value:'')).trim();
+  if(!msg) return;
+  if(!_mmMode || (!_mmMode.meeting_ids && !_mmMode.fts_query)){
+    mtoast('Escribe un tema para buscar reuniones, o selecciona reuniones del historial.','err');
+    return;
+  }
+  if(inp && text==null) inp.value='';
+  mmAddMsg('user', esc(msg));
+  _mmHistory.push({role:'user',content:msg});
+  const placeholder=mmAddMsg('assistant','<span class="text-white/45 italic">Pensando…</span>');
+  const body={message:msg, history:_mmHistory.slice(-6), template:template||null};
+  if(_mmMode.meeting_ids) body.meeting_ids=_mmMode.meeting_ids;
+  else body.fts_query=_mmMode.fts_query;
+  try{
+    const r=await fetch('/api/meetings/chat-multi',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(!r.ok||d.error){
+      placeholder.innerHTML='<span class="text-white/30 mr-1">Asistente:</span><span style="color:#f87171;">'
+        +esc(d.error||'Error al consultar el asistente.')+'</span>';
+    } else {
+      _mmLastAnswer=d.answer||'';
+      placeholder.innerHTML='<span class="text-violet-300/60 mr-1">Asistente:</span>'+mdToHtml(_mmLastAnswer);
+      _mmHistory.push({role:'assistant',content:_mmLastAnswer});
+      mmRenderIncluded(d.reuniones_incluidas, d.excluidas);
+    }
+  }catch(e){
+    placeholder.innerHTML='<span class="text-white/30 mr-1">Asistente:</span><span style="color:#f87171;">Error de red.</span>';
+  }
+}
+function mmCopyLast(){
+  if(!_mmLastAnswer){ mtoast('Todavía no hay respuesta para copiar.','err'); return; }
+  navigator.clipboard.writeText(_mmLastAnswer).then(function(){ mtoast('Copiado.','ok'); });
+}
+async function mmExportLast(){
+  if(!_mmExportEnabled){ mtoast('Configura la carpeta de exportación en Ajustes.','err'); return; }
+  if(!_mmLastAnswer){ mtoast('Todavía no hay respuesta para exportar.','err'); return; }
+  const titleInput=document.getElementById('mm-topic-input');
+  const titulo=(titleInput && titleInput.value.trim()) || 'entregable';
+  try{
+    const r=await fetch('/api/meetings/deliverable-export',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({content:_mmLastAnswer, titulo:titulo})});
+    const d=await r.json();
+    if(d.ok) mtoast('Exportado a: '+d.path,'ok'); else mtoast(d.error||'Error al exportar.','err');
+  }catch(e){ mtoast('Error de red al exportar.','err'); }
+}
+mmUpdateSelectBar();
 
 _fillIcons();  // iconos SVG estáticos (data-icon)
 loadLive(); startPoll(); loadHistory();

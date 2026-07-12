@@ -1,6 +1,10 @@
 """Blueprint del historial de reuniones (/api/meetings*) y el chat del Asistente de reuniones."""
 
 import json as _json
+import os as _os
+import re as _re
+import time as _time
+import unicodedata as _unicodedata
 
 from flask import Blueprint, jsonify, request
 
@@ -179,3 +183,104 @@ def meetings_chat():
     if not result.get("ok"):
         return jsonify({"error": result.get("error", "error")}), 503
     return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
+# Chat de memoria CROSS-reunión + entregables (unidad 5.3)
+# ---------------------------------------------------------------------------
+
+@bp.route("/api/meetings/chat-multi", methods=["POST"])
+def meetings_chat_multi():
+    """Chat sobre un CONJUNTO de reuniones (selección manual o por tema) + entregables.
+
+    Body: {meeting_ids?: [int], fts_query?: str, message: str, template?: str|null,
+    history?: [...]}. ``meeting_ids`` (si trae al menos un id entero válido) tiene
+    prioridad SOBRE ``fts_query`` — nunca se combinan (mismo contrato que
+    core.assistant.answer_multi). 400 si no hay ni ids ni query, o si el template no
+    es una de las 3 plantillas conocidas.
+    """
+    data = request.get_json(silent=True) or {}
+    message = (data.get("message") or "").strip()
+    if not message:
+        return jsonify({"error": "mensaje vacío"}), 400
+
+    raw_ids = data.get("meeting_ids")
+    meeting_ids = None
+    if isinstance(raw_ids, list) and raw_ids:
+        cleaned = []
+        for x in raw_ids:
+            try:
+                cleaned.append(int(x))
+            except (TypeError, ValueError):
+                continue
+        meeting_ids = cleaned or None
+
+    fts_query = (data.get("fts_query") or "").strip() or None
+    if meeting_ids:
+        fts_query = None  # ids explícitos ganan siempre (nunca se combinan)
+
+    if not meeting_ids and not fts_query:
+        return jsonify({"error": "indica meeting_ids o fts_query"}), 400
+
+    template = data.get("template")
+    if template is not None:
+        template = str(template).strip() or None
+    if template is not None and template not in _assistant.DELIVERABLE_TEMPLATES:
+        return jsonify({"error": f"plantilla desconocida: {template}"}), 400
+
+    history = data.get("history") or []
+    result = _assistant.answer_multi(_db, message, meeting_ids=meeting_ids, fts_query=fts_query,
+                                     history=history, template=template)
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error", "error")}), 503
+    return jsonify(result)
+
+
+def _deliverable_slug(titulo: str) -> str:
+    """Slug ASCII corto para el nombre del archivo exportado (sin acentos/espacios)."""
+    text = (titulo or "").strip().lower()
+    text = _unicodedata.normalize("NFD", text)
+    text = "".join(c for c in text if _unicodedata.category(c) != "Mn")
+    text = _re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    return text[:60] or "entregable"
+
+
+@bp.route("/api/meetings/deliverable-export", methods=["POST"])
+def meetings_deliverable_export():
+    """Exporta el texto de un entregable (respuesta del chat multi-reunión) a un .md.
+
+    Escribe a ``<PENDING_EXPORT_DIR>/entregables/vflow-entregable-<yyyymmdd-hhmm>-<slug>.md``
+    — SUBCARPETA ``entregables/`` y prefijo ``vflow-entregable-``, JAMÁS
+    ``vflow-pendientes-`` (ese naming es el contrato de tareas del dead-drop de
+    core/webhook.py y lo vigila un consumidor externo; mezclar prefijos rompería ese
+    contrato). 400 si no hay contenido o si PENDING_EXPORT_DIR no está configurado
+    (reutiliza la misma variable/validación que el dead-drop de pendientes, unidad 5.4 —
+    sin flag nuevo). Acción explícita del usuario: un error de I/O es 500, no fail-open.
+    """
+    data = request.get_json(silent=True) or {}
+    content = (data.get("content") or "").strip()
+    if not content:
+        return jsonify({"error": "contenido vacío"}), 400
+
+    export_dir = _os.getenv("PENDING_EXPORT_DIR", "").strip()
+    if not export_dir:
+        return jsonify({"error": "Configura la carpeta de exportación en Ajustes."}), 400
+
+    titulo = (data.get("titulo") or "").strip()
+    slug = _deliverable_slug(titulo)
+    stamp = _time.strftime("%Y%m%d-%H%M")
+
+    try:
+        target_dir = _os.path.join(export_dir, "entregables")
+        _os.makedirs(target_dir, exist_ok=True)
+        fname = f"vflow-entregable-{stamp}-{slug}.md"
+        path = _os.path.join(target_dir, fname)
+        n = 1
+        while _os.path.exists(path):
+            n += 1
+            path = _os.path.join(target_dir, f"vflow-entregable-{stamp}-{slug}-{n}.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return jsonify({"ok": True, "path": path})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 500
