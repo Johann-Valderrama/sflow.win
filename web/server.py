@@ -4021,6 +4021,75 @@ def set_api_keys():
     return jsonify({"ok": True, "saved": saved, "status": status})
 
 
+def _blacklisted_export_roots() -> list[str]:
+    """Raíces del sistema donde NUNCA debe apuntar el dead-drop de pendientes.
+
+    Resuelve rutas reales vía variables de entorno (no strings fijos), con
+    fallback a los literales de Windows si la variable no existe. Nota:
+    %APPDATA% NO se blacklistea completo (solo la subcarpeta Start Menu) para
+    que %APPDATA%\\Vflow siga siendo un destino válido.
+    """
+    roots = [
+        os.environ.get("SystemRoot") or r"C:\Windows",
+        os.environ.get("ProgramFiles") or r"C:\Program Files",
+        os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)",
+    ]
+    appdata = os.environ.get("APPDATA", "")
+    if appdata:
+        roots.append(os.path.join(appdata, "Microsoft", "Windows", "Start Menu"))
+    return [os.path.normcase(os.path.normpath(r)) for r in roots if r]
+
+
+def _validate_export_dir(path: str) -> str | None:
+    """Valida PENDING_EXPORT_DIR. Devuelve un mensaje de error, o None si es válido.
+
+    Reglas (unidad 1.3): ruta absoluta obligatoria; rechaza carpetas protegidas
+    del sistema (Windows, Program Files, Start Menu/Startup); exige que el
+    directorio exista SOLO para rutas locales (una ruta UNC \\\\server\\share
+    puede estar offline en el momento de guardar y aun así debe aceptarse).
+    """
+    path = (path or "").strip()
+    if not path:
+        return None  # vacío = sin configurar, válido (feature apagada)
+
+    expanded = os.path.expandvars(os.path.expanduser(path))
+    is_unc = expanded.startswith("\\\\") or expanded.startswith("//")
+    normalized = os.path.normpath(expanded)
+
+    if not os.path.isabs(normalized):
+        return "Ruta relativa no permitida; usa una ruta absoluta (p. ej. C:\\carpeta o \\\\server\\share\\carpeta)."
+
+    normcased = os.path.normcase(normalized)
+    for root in _blacklisted_export_roots():
+        if normcased == root or normcased.startswith(root + os.sep):
+            return f"Ruta no permitida (carpeta protegida del sistema): {path}"
+
+    if not is_unc and not os.path.isdir(normalized):
+        return f"La carpeta no existe: {path}"
+
+    return None
+
+
+def _validate_briefing_path(path: str) -> str | None:
+    """Valida OPS_BRIEFING_PATH. Devuelve un mensaje de error, o None si es válido.
+
+    Solo exige extensión .md (case-insensitive); NO exige existencia — el
+    módulo core/ops_briefing.py ya es fail-open total por diseño (unidad 7.1).
+    """
+    path = (path or "").strip()
+    if not path:
+        return None  # vacío = apagado, válido
+    if not path.lower().endswith(".md"):
+        return "La ruta del briefing debe apuntar a un archivo .md"
+    return None
+
+
+_SETTINGS_VALIDATORS = {
+    "pending_export_dir": _validate_export_dir,
+    "ops_briefing_path": _validate_briefing_path,
+}
+
+
 @app.route("/api/settings")
 def get_settings():
     """Devuelve la configuración actual (idioma, micrófono, sonidos, backend)."""
@@ -4107,18 +4176,30 @@ def update_settings():
         # Copiloto con contexto OPS — briefing v1 (unidad 7.1)
         "ops_briefing_path": "OPS_BRIEFING_PATH",
     }
+    errors: dict[str, str] = {}
     for field, env_key in allowed.items():
-        if field in data:
-            _set_env_key(env_key, str(data[field]).strip())
+        if field not in data:
+            continue
+        value = str(data[field]).strip()
+        validator = _SETTINGS_VALIDATORS.get(field)
+        if validator is not None:
+            err = validator(value)
+            if err:
+                errors[field] = err
+                continue  # campo rechazado: no se persiste; los demás siguen su curso
+        _set_env_key(env_key, value)
 
-    # Si cambió la ruta del briefing, invalidar la caché para que se vea sin
-    # esperar el TTL de 60s (core/ops_briefing.py).
-    if "ops_briefing_path" in data:
+    # Si cambió la ruta del briefing (y fue válida), invalidar la caché para que
+    # se vea sin esperar el TTL de 60s (core/ops_briefing.py).
+    if "ops_briefing_path" in data and "ops_briefing_path" not in errors:
         _ops_briefing.invalidate()
 
     # Si se activó el backend local y el modelo está descargado, disparar warmup
     if data.get("transcription_backend") == "local":
         _trigger_local_warmup_if_ready()
+
+    if errors:
+        return jsonify({"error": errors}), 400
 
     return jsonify({"ok": True})
 
