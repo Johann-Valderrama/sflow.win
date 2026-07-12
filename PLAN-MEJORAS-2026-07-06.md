@@ -303,9 +303,19 @@ PROGRESS.md PARA JOHANN. PROHIBIDO: push, borrar datos reales, leer .env, depend
 
 ## Ola 4 — Partir el monolito web/server.py (la palanca)
 
-🙋 **Depende de la decisión D1 (bloque DECISIONES, arriba):** D1:A o D1:C (uso personal) →
-alcance MÍNIMO, solo 4.1 + 4.3. D1:B (camino a productizar) → alcance COMPLETO, 4.1 + 4.2 + 4.3
-y abrir el debate 4.4.
+🙋 **D1 RESPONDIDA (2026-07-12): D1:B → alcance COMPLETO** (4.1 + 4.2 + 4.3 + abrir debate 4.4).
+
+> **CONSTRAINT DE DISEÑO NO NEGOCIABLE (visión agéntica de Johann, 2026-07-12):** Vflow debe ser
+> **autosuficiente por sí sola PERO conectable por un agente/sistema para llevarla al 200%** ("oídos
+> para un agente", mercado agéntico; foso = integración con el cerebro de OPS vía API/MCP). Esto
+> CONVIERTE la Ola 4 de "limpieza" en **la palanca que habilita el producto**: el criterio de éxito
+> del reorden NO es solo "misma UI antes/después", sino que **cada feature exponga un contrato de
+> servicio limpio que consuman por igual la UI, el MCP y una futura API de agentes** (regla OPS
+> `era-agentica.md` + `arquitectura.md` feature-first: interfaz pública mínima por módulo). El debate
+> 4.0 debe incorporar este criterio; 4.2 (blueprints) y 4.4 (encarpetar core/) se juzgan por si dejan
+> esos contratos limpios, no solo por mover archivos. Unidad nueva **4.5** (abajo) materializa la
+> superficie agéntica una vez existan los contratos. Ver memorias privadas
+> `[[vflow-vision-macrosistema-ops]]` y `[[vflow-arquitectura-agent-ready]]`.
 
 | Unidad | Qué | Dificultad | Ejecutar con | Por qué |
 |---|---|---|---|---|
@@ -313,7 +323,8 @@ y abrir el debate 4.4.
 | 4.1 | Extraer el frontend inline a `web/templates/` (Jinja2) y `web/static/` SIN cambiar comportamiento: HTML_TEMPLATE (~2.770 líneas) y MEETING_PAGE (~875 líneas) salen de web/server.py; render_template; los tokens/design system a CSS propio; vflow.spec actualizado (aunque el build siga pospuesto, no dejarlo roto a sabiendas) | Delicada | Sonnet 5 · high por vista (subagentes en serie sobre web/), director verifica cada vista | Riesgo de romper la UI entera por un placeholder/escape mal migrado; verificación UI completa POR VISTA (estados computados + overlays trío oculto/abre/cierra) |
 | 4.2 | Blueprints Flask por feature: dictados/historial, reunión, diccionario, cola URL, ajustes+keys, meetings API; web/server.py queda como app factory + registro (shim delgado). Los handlers NO cambian de lógica, solo de casa | Delicada | Sonnet 5 · high | Mover 112 rutas sin alterar CSRF before_request global ni el arranque del worker; un olvido deja un endpoint fuera de la protección |
 | 4.3 | Catálogo único de config: inventario de los ~90 os.getenv fuera de config.py; los de lectura ÚNICA migran a constantes de config.py; los de lectura PEREZOSA deliberada (flags que se releen sin reiniciar) migran a helpers `config.get_*()` documentados que preservan esa semántica. CLAUDE.md apunta al catálogo | Delicada | Opus 4.8 · high dirige el inventario y clasifica; Haiku 4.5 ejecuta los lotes mecánicos | El riesgo NO es el edit (mecánico) sino clasificar mal una variable perezosa como estática: eso cambia comportamiento en caliente (kill-switches, backends) |
-| 4.4 | 🙋 GATE decisión: ¿encarpetar core/ por features (meetings/, dictation/, llm/)? Alto blast radius, valor alto solo si el proyecto sigue creciendo. NO ejecutar sin tu sí explícito; si va, se planifica como ola nueva con su propio debate | (decisión) | 🙋 Johann | Es la única pieza donde el costo puede superar al beneficio si Vflow entra en modo mantenimiento |
+| 4.4 | 🙋 GATE decisión: ¿encarpetar core/ por features (meetings/, dictation/, llm/)? Alto blast radius. **Con D1:B + visión agéntica, el valor ya está justificado** (Vflow va a crecer a móvil + ser consumida por agentes): recomendación = SÍ, pero como ola nueva con su propio debate tras 4.1-4.3. Sigue necesitando tu OK explícito antes de ejecutar | (decisión) | 🙋 Johann | Deja los módulos con fronteras limpias que la capa agéntica (4.5) necesita |
+| 4.5 | **Superficie agéntica de Vflow (agent-ready, era-agentica.md).** Materializa "oídos para un agente": (a) auditar qué capacidades hoy solo viven tras la UI HTTP (iniciar/parar reunión, dictado, nota, highlight, diccionario, cola URL, consultar memoria) y exponerlas por contratos limpios; (b) extender el MCP server (hoy read-only de reuniones) a las capacidades que un agente externo (OPS/Levy) necesite, con permisos acotados; (c) decidir API REST documentada vs MCP por caso de uso (MCP para consumo agéntico local tipo OPS; API para integración remota/móvil futura); (d) datos estructurados/`llms.txt`/`.well-known` si aplica al posicionamiento. Autosuficiencia intacta: nada de esto es requerido para que Vflow funcione sola. GATE G-agent: el CONTRATO de qué se expone y con qué permisos se debate y espera tu ojo ANTES de codear (superficie consumible por terceros, se fosiliza) | Delicada (contrato + seguridad) | Opus 4.8 · high (diseño/contrato) → Sonnet 5 · high (código) | Es la pieza que convierte a Vflow en sensor del macrosistema; depende de que 4.1-4.4 dejen contratos limpios (por eso va DESPUÉS del reorden, no antes — construir la capa agéntica sobre el monolito sería deuda) |
 
 ### Kickoff Ola 4 (copy-paste)
 

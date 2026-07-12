@@ -37,26 +37,38 @@
   Groq→local; si no lo está, avisar en vez de fallar mudo (no auto-descargar en el hot-path). Decisión
   de Johann: **AGREGADA a la Ola 5 (producto) como unidad 5.5** (ver abajo). Esfuerzo bajo-medio,
   simétrico a la lógica ya existente.
-- **Decisiones pendientes que bloquean olas** (responde con número+letra, ej. `D1: A`): **D1**
-  (¿para quién es Vflow? A=solo para mí/limpieza mínima *(recomendada)*, B=venderlo en 6-12m/reorden
-  completo, C=no sé) → bloquea Ola 4 · **D4** (capacidades nuevas: 1=auto-highlights, 2=nombre/rol
-  en prompts, 3=chat cross-reunión, 4=pendientes→OPS; elige varias o ninguna) → bloquea Ola 5 ·
-  **D5** (FASE3 heredada: 1=silenciar audio al dictar, 2=hotkeys configurables, ninguna
-  *(recomendada: archivar)*) → bloquea Ola 6. Detalle completo de opciones: bloque "🚦 DECISIONES"
-  del plan. D2/D3/D6/D7/D8 no bloquean este run pero ajustan prioridades futuras.
+- **Decisiones RESPONDIDAS por Johann (2026-07-12): D1:B · D4: las 4 · D5: ambas.**
+  - **D1:B → Ola 4 alcance COMPLETO** (4.1 extraer frontend + 4.2 blueprints Flask + 4.3 catálogo
+    config + abrir debate 4.4 encarpetar core/ por features). Contexto ampliado (NO es solo "vender en
+    6-12m"): Johann quiere Vflow como pieza de un MACROSISTEMA vinculado al cerebro de OPS, con roadmap
+    tipo Plaud.ai — (1) refinar la versión de escritorio (ahora), (2) app móvil, (3) hardware grabador
+    dedicado (ODM China) como último paso. El foso NO es el hardware (commodity) sino la integración
+    con OPS. Visión completa guardada en memoria privada (engram), NO en este repo (puede ser
+    compartido; estrategia de negocio/monetización va a lo privado). Implicación para Ola 4: el reorden
+    feature-first ahora tiene justificación fuerte (va a crecer a móvil + integrarse), no es limpieza
+    cosmética → priorizar la partición limpia.
+  - **D4: las 4 → Ola 5 corre 5.1 + 5.2 + 5.3 + 5.4** (+ 5.5 fallback ya elegida). Orden por ROI/
+    esfuerzo del plan: 5.2 (contexto personal, mínima) → 5.4 (pendientes→OPS, GATE G1 contrato) →
+    5.1 (auto-highlights) → 5.3 (chat cross-reunión) → 5.5 (fallback). OJO 5.4 es la PRIMERA prueba
+    real de la tesis del macrosistema (Vflow como sensor del OPS): tratarla como validación, no solo
+    feature.
+  - **D5: ambas → Ola 6 corre 6.1 (mute al dictar, pycaw) + 6.2 (hotkeys configurables)**, con
+    re-validación del spec desactualizado como primera tarea (regla dura de la ola).
+  - Sigue pendiente investigación estratégica (pedida por Johann): aterrizar la visión Plaud.ai + OPS
+    con realidad de mercado/competencia/hardware antes de comprometer el roadmap. NO ejecutada aún
+    (esperando scope de Johann). D2/D3/D6/D7/D8 sin responder (no bloquean el run).
 
 ## En curso (PLAN-MEJORAS)
-- [ ] Ola 2 — Suite de verificación en verde  (SIN ARRANCAR; siguiente para una ventana nueva)
-  - Last checkpoint: Olas 0 y 1 COMPLETAS y commiteadas (ver Completado). Suite actual:
-    441 pass / 10 fallos preexistentes (mocks Groq incompatibles con Python 3.14, todos en
-    tests/test_sflow.py — son EXACTAMENTE el objetivo de la unidad 2.1).
-  - Next action: abrir ventana nueva con el Kickoff Orquestador Autónomo del plan (o el Kickoff
-    Ola 2). El director hace el debate breve de la ola (Opus 4.8 high: ¿qué tests huérfanos de la
-    raíz protegen invariantes que tests/ no cubre?) y ejecuta 2.1 (suite verde) → 2.2 (triage de
-    los 8 tests huérfanos de la raíz) → 2.3 (cobertura core/secrets.py + funciones puras de
-    url_transcribe: detect_platform, parser VTT, mapeo error_kind→HTTP — OJO: 1.8 ya cubrió
-    dedup/resiliencia/crypt32, no duplicar). Después: Ola 3 (polling incremental + retención).
-    Olas 4/5/6 siguen gateadas por D1/D4/D5 (ver PARA JOHANN).
+- [ ] Ola 2 — Suite de verificación en verde  (@fable-5 orquestador, IN_PROGRESS 2026-07-12 09:40)
+  - Last checkpoint: debate adversarial de la ola CERRADO (APROBAR CON CAMBIOS, 9 objeciones
+    aceptadas — ver Decisiones; corrige el diagnóstico: los 10 fallos son drift arquitectónico,
+    NO Python 3.14). Baseline re-confirmado: 441 pass / 10 fallos, todos en tests/test_sflow.py.
+    Unidad 2.1 despachada a Sonnet 5 con el brief corregido del debate.
+  - Next action: verificar retorno de 2.1 (diff + suite 451/0) → commit → 2.2 (reescribir 5
+    huérfanos a pytest, mover 2 tal cual, dual_capture queda como diagnóstico, pytest.ini
+    testpaths + CLAUDE.md comando canónico) → 2.3 (roundtrip secrets + detect_platform +
+    _parse_vtt_to_text + error_kind→HTTP vía test client). Después: Ola 3. Olas 4/5/6
+    DESBLOQUEADAS por Johann (D1:B, D4:las 4, D5:ambas) — van en ventanas nuevas.
 
 ## Completado (PLAN-MEJORAS)
 - [x] **OLA 1 COMPLETA** (2026-07-12, 8 commits, 0 regresiones; suite final 441 pass / 10
@@ -87,6 +99,32 @@
   6 tests nuevos de carrera. Suite 346 pass / 10 preexistentes, 0 regresiones.
 
 ## Decisiones (PLAN-MEJORAS, append-only)
+- 2026-07-12 Debate adversarial Ola 2 (Fable propone el plan literal, Opus 4.8 high ataca con código real;
+  veredicto: APROBAR CON CAMBIOS; 9 objeciones, 9 ACEPTADAS, 0 refutadas). O1 (ALTA) el diagnóstico "10
+  fallos = mocks Groq incompatibles con Python 3.14" es FALSO: son drift arquitectónico pre-Olas (commit
+  c70a617 movió Groq a core/backends/groq_backend.py:16; transcriber ya no lo importa) → fix = retarget
+  del patch a core.backends.groq_backend.Groq, y el fix DEBILITANTE (mockear _get_backend o
+  backend.transcribe) queda PROHIBIDO porque saltaría el filtro de alucinaciones que
+  test_transcribe_filters_hallucination valida · O2 (ALTA) 2 fallos son drift de firma del recorder
+  (_callback hoy toma 1 arg, recorder.py:261) · O3 test_hands_free_stop_on_shift_tap es test stale (la
+  parada vive en _on_release, hotkey.py:327-330; NO es regresión de la Ola 0.3) → añadir _on_release ·
+  O4 _alt_gr_space_mode renombrado a _alt_gr_t_mode · O5 (ALTA) "mover" los huérfanos = verde falso: 4 de
+  los 6 útiles son scripts __main__ con 0 def test_ (pytest colectaría 0 tests) → el verbo de 2.2 es
+  REESCRIBIR a pytest, no git mv; solo test_openrouter_backend.py (5 pass) y test_reasoning_router.py
+  (18 pass) se mueven tal cual; test_dual_capture.py queda como script de diagnóstico HW (clase
+  test_loopback) · O6 test_chapters.py ERRORA bajo pytest (manipula stdout) → reescribir sin eso ·
+  O7 el mapeo error_kind→HTTP NO vive en url_transcribe: es dict inline del endpoint (web/server.py:
+  4884-4890) → se testea vía Flask test client con transcribe_url monkeypatcheado (conservador: sin
+  tocar código de producción en una ola de tests) · O8 la migración de key en claro vive en config.py
+  import-time, no en secrets.py → 2.3 secrets = solo roundtrip encrypt/decrypt (testeable no-interactivo
+  en Windows) · O9 no existe pytest.ini/testpaths: pytest a secas desde la raíz colecta los huérfanos y
+  rompe → 2.2 añade [pytest] testpaths=tests y documenta el comando canónico. Confirmado por el
+  adversario: 1.8 NO cubrió detect_platform ni _parse_vtt_to_text (2.3 es aditivo real; el dedup de cues
+  VTT es DISTINTO del dedup de solape de chunks de 1.8). : gatillo regla 6 del kickoff : @fable-5 + @opus-4.8
+- 2026-07-12 Johann respondió D1:B · D4:las 4 · D5:ambas (ver PARA JOHANN) → Olas 4/5/6 desbloqueadas.
+  Este run mantiene el techo de ~2 olas/ventana (regla 8): esta ventana = Olas 2 y 3; la 4 (alcance
+  COMPLETO 4.1+4.2+4.3+debate 4.4), la 5 (orden 5.2→5.4[G1]→5.1→5.3→5.5) y la 6 (re-validar spec
+  primero) van en ventanas nuevas con sus kickoffs. : decisiones de Johann, no interpretadas : @fable-5
 - 2026-07-12 Arranque del run: D1/D4/D5 sin responder → Olas 4/5/6 quedan como gates; ejecutable de
   este run = Olas 0→1→2→3 en ese orden. : regla del kickoff (no interpretar decisiones de Johann) : @fable-5
 - 2026-07-12 Debate adversarial Ola 0 (Fable propone, Opus 4.8 high ataca con código real; veredicto:
