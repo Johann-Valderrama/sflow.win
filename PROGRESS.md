@@ -165,6 +165,16 @@
     _is_network_error + breaker 120s + warmup al abrir + seek(0); scope SOLO dictado vía
     kwarg net_fallback (reunión/URL intactas, pineado); notificación tray sin Qt en core/;
     checkbox visible solo con backend groq (verificado computed-state en navegador). +36 tests.
+  - INCIDENTE cazado y cerrado durante 5.5 (commit a9eead4 del ejecutor, auditado por el
+    director): los tests de settings persistían al `.env` REAL del usuario vía
+    web.state._set_env_key (dev: APP_DATA_DIR = raíz) — quedaron rutas tmp en
+    PENDING_EXPORT_DIR/OPS_BRIEFING_PATH y una retención destructiva
+    MEETING_RETENTION_DAYS=30 que Johann nunca configuró. Saneado (unset de las 5 claves) +
+    conftest de sesión que redirige _ENV_PATH y APP_DATA_DIR a tmp. VERIFICADO sin pérdida:
+    reunión más vieja 2026-06-16 (26d < 30d) y transcripciones desde 2026-03-16 intactas —
+    la retención contaminada nunca purgó nada. Desviación de proceso anotada: el ejecutor
+    commiteó pese al brief (contenido correcto; el candado de "solo el director integra"
+    se refuerza en el próximo brief).
   - Cierre: CLAUDE.md actualizado (sección 18 nueva, dead-drop v1 en sección 16, env vars
     nuevas); 5.6/5.7 como pregunta opt-in en PARA JOHANN; screenshots de navegador no
     disponibles en el entorno del run (timeout de la tool) → la pasada visual queda en G2/G3.
