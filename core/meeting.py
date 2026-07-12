@@ -117,6 +117,18 @@ class MeetingSession:
         # y congela todo el proceso (audio + servidor). RLock lo evita de forma segura.
         self._lock = threading.RLock()
         self._active = False
+        # Token de generación de reunión (F1, fix de concurrencia jul 2026): cada
+        # start() real lo incrementa bajo el lock. Los daemons de insights/consolidación
+        # lo capturan al lanzarse y lo re-verifican antes de mergear su resultado en
+        # self._insights — así un daemon de una reunión YA cerrada (o sobrescrita por
+        # una B que arrancó durante el stop() lento de A) descarta su merge en vez de
+        # corromper el estado de la reunión vigente.
+        self._session_gen = 0
+        # True mientras stop() está drenando/generando el acta (puede tardar segundos-
+        # minutos: joins + 2 llamadas LLM). Mientras tanto self._active YA es False, así
+        # que start() debe usar ESTE flag (no is_active()) para rechazar un 2º start que
+        # pisaría los atributos de instancia que stop() sigue leyendo/mutando.
+        self._stopping = False
         self._mic_frames: list = []
         self._sys_frames: list = []
         self._segments: list = []          # [{"t": float, "speaker": str, "text": str}]
@@ -203,6 +215,12 @@ class MeetingSession:
 
     def is_active(self) -> bool:
         return self._active
+
+    def is_stopping(self) -> bool:
+        """True mientras un stop() está en curso (drenaje + acta), aunque ``is_active()``
+        ya devuelva False. Ver comentario de ``self._stopping`` en ``__init__``."""
+        with self._lock:
+            return self._stopping
 
     def get_levels(self) -> tuple:
         """(level_mic, level_sys) RMS 0..1 del último chunk, sin el lock (unidad 5.3).
@@ -474,6 +492,15 @@ class MeetingSession:
         with self._lock:
             if self._active:
                 return {"ok": True, "already_active": True}
+            if self._stopping:
+                # stop() de la reunión anterior sigue drenando/generando el acta:
+                # arrancar ahora pisaría self.* que ese stop() todavía lee/muta.
+                return {
+                    "ok": False,
+                    "stopping": True,
+                    "error": "La reunión anterior aún se está guardando. Espera unos segundos e intenta de nuevo.",
+                }
+            self._session_gen += 1
             self._mic_frames = []
             self._sys_frames = []
             self._segments = []
@@ -556,163 +583,175 @@ class MeetingSession:
                 self._paused = False
                 self._pause_started = None
             self._active = False  # los callbacks dejan de acumular frames
-        duration = self._elapsed()
-
-        # Detener fuentes (no llegan más frames)
-        for src in (self._mic, self._sys):
-            if src is not None:
-                try:
-                    src.stop()
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Reunión: error al detener fuente: %s", exc)
-
-        # Señalar al loop que termine: hará un último flush antes de salir
-        if self._stop_event is not None:
-            self._stop_event.set()
-        if self._chunk_thread is not None:
-            self._chunk_thread.join(timeout=120)
-
-        # Drenar la cola de transcripción pendiente ANTES del acta: el chunk loop hizo
-        # un último flush (encoló los frames restantes); el sentinela None cierra el worker
-        # tras procesar todo lo pendiente, dejando el transcript completo para el acta.
-        if self._transcribe_q is not None:
-            self._transcribe_q.put(None)
-        if self._transcribe_thread is not None:
-            self._transcribe_thread.join(timeout=120)
-
-        self._mic = None
-        self._sys = None
-        self._drain_viz_queue()
-
-        transcript = self.transcript_text()
-        segments = self.transcript_segments()
-        insights = self.get_insights()
-
-        # Métricas de conversación Yo/Ellos (unidad 3.1): puras, sin LLM. El worker
-        # ya terminó (join arriba), así que _speech está completo y estable.
-        with self._lock:
-            speech_copy = {k: list(v) for k, v in self._speech.items()}
-        has_speech = any(speech_copy.values())
-        meeting_metrics = _metrics.compute_metrics(speech_copy, segments, duration)
-        with self._lock:
-            self._last_metrics = meeting_metrics  # para el panel, junto a _last_minutes
-
-        # Acta post-reunión: una sola llamada LLM sobre el transcript completo, alimentada
-        # con el análisis en vivo para que sea consistente con lo que vio el usuario.
-        # Fail-safe: si el LLM no está disponible devuelve un acta vacía.
-        with self._lock:
-            highlights = list(self._highlights)
-            notes = list(self._notes)
-            feedback = list(self._feedback)
-            detections = list(self._detections)
-            template = self._template
-        minutes = _insights.generate_minutes(transcript, self._store_to_plain(),
-                                             highlights=highlights, notes=notes,
-                                             segments=segments, template=template)
-        with self._lock:
-            self._last_minutes = minutes  # para que el dashboard la muestre aunque se terminara por hotkey/tray
-
-        # Línea de tiempo de momentos clave (capítulos etiquetados por LLM).
-        # Fail-safe: cualquier fallo devuelve [] y nunca bloquea el insert/acta.
+            # F1 (fix concurrencia): marca que el cierre está en curso ANTES de soltar
+            # el lock. start() rechaza mientras este flag siga True (ver start()),
+            # aunque _active ya sea False. El finally de más abajo SIEMPRE lo baja,
+            # incluso si algo dentro del cuerpo de abajo lanza una excepción.
+            self._stopping = True
         try:
-            chapters = _insights.generate_chapters(transcript, segments)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Reunión: error generando capítulos (se continúa sin ellos): %s", exc)
-            chapters = []
+            duration = self._elapsed()
 
-        # Persistencia ÚNICA aquí (no en los callers): así da igual si la reunión
-        # se terminó desde el hotkey, el tray o el dashboard — se guarda una sola vez.
-        meeting_id = None
-        saved = False
-        if transcript and os.getenv("SAVE_HISTORY", "true").lower() == "true":
+            # Detener fuentes (no llegan más frames)
+            for src in (self._mic, self._sys):
+                if src is not None:
+                    try:
+                        src.stop()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Reunión: error al detener fuente: %s", exc)
+
+            # Señalar al loop que termine: hará un último flush antes de salir
+            if self._stop_event is not None:
+                self._stop_event.set()
+            if self._chunk_thread is not None:
+                self._chunk_thread.join(timeout=120)
+
+            # Drenar la cola de transcripción pendiente ANTES del acta: el chunk loop hizo
+            # un último flush (encoló los frames restantes); el sentinela None cierra el worker
+            # tras procesar todo lo pendiente, dejando el transcript completo para el acta.
+            if self._transcribe_q is not None:
+                self._transcribe_q.put(None)
+            if self._transcribe_thread is not None:
+                self._transcribe_thread.join(timeout=120)
+
+            self._mic = None
+            self._sys = None
+            self._drain_viz_queue()
+
+            transcript = self.transcript_text()
+            segments = self.transcript_segments()
+            insights = self.get_insights()
+
+            # Métricas de conversación Yo/Ellos (unidad 3.1): puras, sin LLM. El worker
+            # ya terminó (join arriba), así que _speech está completo y estable.
+            with self._lock:
+                speech_copy = {k: list(v) for k, v in self._speech.items()}
+            has_speech = any(speech_copy.values())
+            meeting_metrics = _metrics.compute_metrics(speech_copy, segments, duration)
+            with self._lock:
+                self._last_metrics = meeting_metrics  # para el panel, junto a _last_minutes
+
+            # Acta post-reunión: una sola llamada LLM sobre el transcript completo, alimentada
+            # con el análisis en vivo para que sea consistente con lo que vio el usuario.
+            # Fail-safe: si el LLM no está disponible devuelve un acta vacía.
+            with self._lock:
+                highlights = list(self._highlights)
+                notes = list(self._notes)
+                feedback = list(self._feedback)
+                detections = list(self._detections)
+                template = self._template
+            minutes = _insights.generate_minutes(transcript, self._store_to_plain(),
+                                                 highlights=highlights, notes=notes,
+                                                 segments=segments, template=template)
+            with self._lock:
+                self._last_minutes = minutes  # para que el dashboard la muestre aunque se terminara por hotkey/tray
+
+            # Línea de tiempo de momentos clave (capítulos etiquetados por LLM).
+            # Fail-safe: cualquier fallo devuelve [] y nunca bloquea el insert/acta.
             try:
-                if self._db is None:
-                    self._db = TranscriptionDB()
-                title = f"Reunión {self._started_at or ''}".strip()
-                insert_kwargs = dict(
-                    title=title,
-                    transcript=transcript,
-                    segments_json=json.dumps(segments, ensure_ascii=False),
-                    duration_seconds=duration,
-                    started_at=self._started_at,
-                    insights_json=json.dumps(insights, ensure_ascii=False),
-                    minutes_json=json.dumps(minutes, ensure_ascii=False),
-                    chapters_json=json.dumps(chapters, ensure_ascii=False),
-                    template=template,
-                )
-                if highlights:
-                    insert_kwargs["highlights_json"] = json.dumps(highlights, ensure_ascii=False)
-                if notes:
-                    insert_kwargs["notes_json"] = json.dumps(notes, ensure_ascii=False)
-                if feedback:
-                    insert_kwargs["feedback_json"] = json.dumps(feedback, ensure_ascii=False)
-                # Rastro de detecciones proactivas (unidad 5.1): insumo del bucle
-                # de mejora junto a feedback_json. Patrón notes_json: NULL si no hubo.
-                if detections:
-                    insert_kwargs["detections_json"] = json.dumps(detections, ensure_ascii=False)
-                # Patrón notes_json: solo se persiste si hubo voz detectada (sin
-                # speech las métricas serían todo ceros — mejor columna NULL).
-                if has_speech:
-                    insert_kwargs["metrics_json"] = json.dumps(meeting_metrics, ensure_ascii=False)
-                meeting_id = self._db.meeting_insert(**insert_kwargs)
-                saved = True
+                chapters = _insights.generate_chapters(transcript, segments)
             except Exception as exc:  # noqa: BLE001
-                logger.error("No se pudo guardar la reunión en la DB: %s", exc)
+                logger.warning("Reunión: error generando capítulos (se continúa sin ellos): %s", exc)
+                chapters = []
 
-        # Export a Markdown (contrato OPS), best-effort. Se hace al terminar para que la
-        # carpeta esté siempre al día sin necesidad de un programador de tareas.
-        if saved and meeting_id is not None:
+            # Persistencia ÚNICA aquí (no en los callers): así da igual si la reunión
+            # se terminó desde el hotkey, el tray o el dashboard — se guarda una sola vez.
+            meeting_id = None
+            saved = False
+            if transcript and os.getenv("SAVE_HISTORY", "true").lower() == "true":
+                try:
+                    if self._db is None:
+                        self._db = TranscriptionDB()
+                    title = f"Reunión {self._started_at or ''}".strip()
+                    insert_kwargs = dict(
+                        title=title,
+                        transcript=transcript,
+                        segments_json=json.dumps(segments, ensure_ascii=False),
+                        duration_seconds=duration,
+                        started_at=self._started_at,
+                        insights_json=json.dumps(insights, ensure_ascii=False),
+                        minutes_json=json.dumps(minutes, ensure_ascii=False),
+                        chapters_json=json.dumps(chapters, ensure_ascii=False),
+                        template=template,
+                    )
+                    if highlights:
+                        insert_kwargs["highlights_json"] = json.dumps(highlights, ensure_ascii=False)
+                    if notes:
+                        insert_kwargs["notes_json"] = json.dumps(notes, ensure_ascii=False)
+                    if feedback:
+                        insert_kwargs["feedback_json"] = json.dumps(feedback, ensure_ascii=False)
+                    # Rastro de detecciones proactivas (unidad 5.1): insumo del bucle
+                    # de mejora junto a feedback_json. Patrón notes_json: NULL si no hubo.
+                    if detections:
+                        insert_kwargs["detections_json"] = json.dumps(detections, ensure_ascii=False)
+                    # Patrón notes_json: solo se persiste si hubo voz detectada (sin
+                    # speech las métricas serían todo ceros — mejor columna NULL).
+                    if has_speech:
+                        insert_kwargs["metrics_json"] = json.dumps(meeting_metrics, ensure_ascii=False)
+                    meeting_id = self._db.meeting_insert(**insert_kwargs)
+                    saved = True
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("No se pudo guardar la reunión en la DB: %s", exc)
+
+            # Export a Markdown (contrato OPS), best-effort. Se hace al terminar para que la
+            # carpeta esté siempre al día sin necesidad de un programador de tareas.
+            if saved and meeting_id is not None:
+                try:
+                    _export.export_meeting({
+                        "id": meeting_id,
+                        "started_at": self._started_at,
+                        "duration_seconds": duration,
+                        "transcript": transcript,
+                        "minutes_json": json.dumps(minutes, ensure_ascii=False),
+                        "insights_json": json.dumps(insights, ensure_ascii=False),
+                    }, MEETINGS_DIR)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Export a markdown falló: %s", exc)
+
+            # Webhook saliente + dead-drop de pendientes (unidad 6.1), fire-and-forget en
+            # hilo daemon: un fallo de red JAMÁS bloquea ni propaga a stop(). Si la reunión
+            # NO se persistió (meeting_id None) el webhook no dispara (lo loguea dentro).
             try:
-                _export.export_meeting({
+                _webhook.dispatch_async({
                     "id": meeting_id,
+                    "title": (f"Reunión {self._started_at or ''}".strip()),
                     "started_at": self._started_at,
                     "duration_seconds": duration,
-                    "transcript": transcript,
                     "minutes_json": json.dumps(minutes, ensure_ascii=False),
                     "insights_json": json.dumps(insights, ensure_ascii=False),
-                }, MEETINGS_DIR)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Export a markdown falló: %s", exc)
+                    "chapters_json": json.dumps(chapters, ensure_ascii=False),
+                }, meeting_id)
+            except Exception as exc:  # noqa: BLE001  (defensa extra; dispatch_async ya aísla)
+                logger.warning("No se pudo disparar el webhook: %s", exc)
 
-        # Webhook saliente + dead-drop de pendientes (unidad 6.1), fire-and-forget en
-        # hilo daemon: un fallo de red JAMÁS bloquea ni propaga a stop(). Si la reunión
-        # NO se persistió (meeting_id None) el webhook no dispara (lo loguea dentro).
-        try:
-            _webhook.dispatch_async({
-                "id": meeting_id,
-                "title": (f"Reunión {self._started_at or ''}".strip()),
-                "started_at": self._started_at,
+            metrics = self._fluidity_metrics()
+            logger.info("Reunión detenida: %.0fs, %d segmentos (guardada=%s).", duration, len(segments), saved)
+            logger.info(
+                "Fluidez: %d updates, churn_avg=%.3f, retracciones=%d, intervalo=%.1fs (jitter=%.1fs)",
+                metrics["updates"], metrics["churn_avg"], metrics["retractions"],
+                metrics["interval_avg_s"], metrics["interval_jitter_s"],
+            )
+            return {
+                "ok": True,
                 "duration_seconds": duration,
-                "minutes_json": json.dumps(minutes, ensure_ascii=False),
-                "insights_json": json.dumps(insights, ensure_ascii=False),
-                "chapters_json": json.dumps(chapters, ensure_ascii=False),
-            }, meeting_id)
-        except Exception as exc:  # noqa: BLE001  (defensa extra; dispatch_async ya aísla)
-            logger.warning("No se pudo disparar el webhook: %s", exc)
-
-        metrics = self._fluidity_metrics()
-        logger.info("Reunión detenida: %.0fs, %d segmentos (guardada=%s).", duration, len(segments), saved)
-        logger.info(
-            "Fluidez: %d updates, churn_avg=%.3f, retracciones=%d, intervalo=%.1fs (jitter=%.1fs)",
-            metrics["updates"], metrics["churn_avg"], metrics["retractions"],
-            metrics["interval_avg_s"], metrics["interval_jitter_s"],
-        )
-        return {
-            "ok": True,
-            "duration_seconds": duration,
-            "transcript": transcript,
-            "segments": segments,
-            "insights": insights,
-            "minutes": minutes,
-            "metrics": metrics,
-            # "metrics" ya lo ocupan las métricas de fluidez (instrumentación);
-            # las de conversación Yo/Ellos van bajo su propia clave.
-            "meeting_metrics": meeting_metrics,
-            "started_at": self._started_at,
-            "meeting_id": meeting_id,
-            "saved": saved,
-            "template": template,
-        }
+                "transcript": transcript,
+                "segments": segments,
+                "insights": insights,
+                "minutes": minutes,
+                "metrics": metrics,
+                # "metrics" ya lo ocupan las métricas de fluidez (instrumentación);
+                # las de conversación Yo/Ellos van bajo su propia clave.
+                "meeting_metrics": meeting_metrics,
+                "started_at": self._started_at,
+                "meeting_id": meeting_id,
+                "saved": saved,
+                "template": template,
+            }
+        finally:
+            # Fase 3 (F1): pase lo que pase arriba (incluida una excepción), el
+            # cierre se marca terminado. Así una excepción en el acta jamás deja
+            # la sesión bloqueada rechazando cualquier start() futuro.
+            with self._lock:
+                self._stopping = False
 
     def toggle(self) -> dict:
         """Inicia si está parada, detiene si está activa. Devuelve el nuevo estado."""
@@ -919,8 +958,11 @@ class MeetingSession:
             self._insight_buffer = []
             self._insight_running = True
             state = self._store_to_plain_locked()  # ya estamos dentro del lock
+            # Token de generación (F1): si para cuando este daemon termine ya arrancó
+            # una reunión B (self._session_gen cambió), el merge se descarta.
+            gen = self._session_gen
 
-        threading.Thread(target=self._run_insight_update, args=(state, delta), daemon=True).start()
+        threading.Thread(target=self._run_insight_update, args=(state, delta, gen), daemon=True).start()
 
     def _maybe_consolidate(self):
         """Dispara la consolidación por evento (cambio de tema con cooldown) o por tiempo máximo.
@@ -944,12 +986,22 @@ class MeetingSession:
             self._insight_running = True
             self._last_consolidate_at = now
             self._topic_changed_pending = False
+            # Token de generación (F1): ver _maybe_update_insights.
+            gen = self._session_gen
 
-        threading.Thread(target=self._run_consolidation, daemon=True).start()
+        threading.Thread(target=self._run_consolidation, args=(gen,), daemon=True).start()
 
-    def _run_consolidation(self):
+    def _run_consolidation(self, gen: int):
         """Pasada de consolidación (bloqueante, en hilo). Aplica el resultado de forma
-        aditiva/refinada al store (preserva IDs, no retira ítems). Siempre libera el flag."""
+        aditiva/refinada al store (preserva IDs, no retira ítems). Siempre libera el flag.
+
+        ``gen`` es el token de generación de reunión capturado al lanzar este hilo
+        (F1, fix de concurrencia): si para cuando el LLM responde ya arrancó una
+        reunión B (``self._session_gen`` cambió), el merge se descarta — de lo
+        contrario esta pasada tardía de A contaminaría el estado de B. El check es
+        SOLO por gen (no por ``_active``): un daemon del gen vigente es legítimo
+        aunque ``_active`` haya volteado durante su propio cierre.
+        """
         plain = self._store_to_plain()
         transcript = self.transcript_text()
         try:
@@ -957,22 +1009,31 @@ class MeetingSession:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Reunión: error en consolidación: %s", exc)
             consolidated = plain
-        with self._lock:
-            self._merge_plain_into_store(consolidated)
-            self._prev_topic_count = len(self._insights["temas"])
-            self._insight_running = False
-            self._last_insight_at = time.monotonic()
-        logger.info("Reunión: consolidación aplicada con transcript completo.")
-
-        # Memoria cruzada en vivo (unidad 5.2): retrieval puro (cero LLM) sobre
-        # actas pasadas, fuera del lock. Best-effort total: un fallo aquí JAMÁS
-        # rompe la consolidación.
+        cross_memory_ok = False
         try:
-            self._cross_memory_check()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Reunión: error en memoria cruzada (se ignora): %s", exc)
+            with self._lock:
+                if gen != self._session_gen:
+                    logger.info("Reunión: consolidación descartada (gen obsoleto, reunión ya cerrada/reemplazada).")
+                else:
+                    self._merge_plain_into_store(consolidated)
+                    self._prev_topic_count = len(self._insights["temas"])
+                    cross_memory_ok = True
+                self._last_insight_at = time.monotonic()
+        finally:
+            with self._lock:
+                self._insight_running = False
+        if cross_memory_ok:
+            logger.info("Reunión: consolidación aplicada con transcript completo.")
 
-    def _run_insight_update(self, plain_prev: dict, delta: str):
+            # Memoria cruzada en vivo (unidad 5.2): retrieval puro (cero LLM) sobre
+            # actas pasadas, fuera del lock. Best-effort total: un fallo aquí JAMÁS
+            # rompe la consolidación.
+            try:
+                self._cross_memory_check()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Reunión: error en memoria cruzada (se ignora): %s", exc)
+
+    def _run_insight_update(self, plain_prev: dict, delta: str, gen: int):
         """Llama al LLM (texto plano) y fusiona el resultado en el store con IDs.
 
         El LLM extrae; el código mantiene la estabilidad: IDs estables por similitud,
@@ -981,6 +1042,11 @@ class MeetingSession:
         Detecciones proactivas (unidad 5.1): la MISMA llamada devuelve además las
         detecciones vía out-param (no gasta cuota extra). Se procesan al final,
         fuera del lock del merge; su fallo nunca afecta el estado.
+
+        ``gen`` (F1, fix de concurrencia): token de generación capturado al lanzar
+        este hilo. Si para cuando el LLM responde ya arrancó una reunión B
+        (``self._session_gen`` cambió), el merge y las detecciones se descartan —
+        de lo contrario esta respuesta tardía de A contaminaría el estado de B.
         """
         detections: dict = {}
         with self._lock:
@@ -994,24 +1060,35 @@ class MeetingSession:
             logger.warning("Reunión: error en Insight Stream: %s", exc)
             llm_state = plain_prev
         now = time.monotonic()
-        with self._lock:
-            if self._last_insight_at:
-                self._insight_intervals.append(now - self._last_insight_at)
-            prev_total = sum(len(self._insights.get(k, [])) for k in ("temas", "pendientes", "propuestas", "citas"))
-            _added, changed = self._merge_plain_into_store(llm_state)
-            if prev_total:
-                self._churn_samples.append(changed / prev_total)
-            self._updates_count += 1
+        stale = False
+        try:
+            with self._lock:
+                if gen != self._session_gen:
+                    stale = True
+                    logger.info("Reunión: actualización de insights descartada (gen obsoleto).")
+                else:
+                    if self._last_insight_at:
+                        self._insight_intervals.append(now - self._last_insight_at)
+                    prev_total = sum(len(self._insights.get(k, [])) for k in ("temas", "pendientes", "propuestas", "citas"))
+                    _added, changed = self._merge_plain_into_store(llm_state)
+                    if prev_total:
+                        self._churn_samples.append(changed / prev_total)
+                    self._updates_count += 1
 
-            n_temas = len(self._insights["temas"])
-            if n_temas > self._prev_topic_count:
-                self._topic_changed_pending = True  # tema nuevo → señal para consolidación (paso D)
-            self._prev_topic_count = n_temas
-            self._insight_running = False
-            self._last_insight_at = now
-            # Surfacing del error del backend de insights (p. ej. LM Studio caído):
-            # que el panel muestre el fallo en vez de parecer "congelado".
-            self._last_error = _insights.last_error()
+                    n_temas = len(self._insights["temas"])
+                    if n_temas > self._prev_topic_count:
+                        self._topic_changed_pending = True  # tema nuevo → señal para consolidación (paso D)
+                    self._prev_topic_count = n_temas
+                    # Surfacing del error del backend de insights (p. ej. LM Studio caído):
+                    # que el panel muestre el fallo en vez de parecer "congelado".
+                    self._last_error = _insights.last_error()
+                self._last_insight_at = now
+        finally:
+            with self._lock:
+                self._insight_running = False
+
+        if stale:
+            return
 
         # Detecciones proactivas (unidad 5.1): fuera del lock, fail-safe total.
         try:

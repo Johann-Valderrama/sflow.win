@@ -262,7 +262,7 @@ class TestConsolidationReplay:
         monkeypatch.setattr(insights, "last_error", lambda: None)
 
         session._insight_running = True  # como lo deja _maybe_consolidate
-        session._run_consolidation()
+        session._run_consolidation(session._session_gen)
 
         assert session._insight_running is False  # la consolidación cerró bien
         assert fresh_gate.queue_size() == 1
@@ -280,6 +280,6 @@ class TestConsolidationReplay:
                             lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
 
         session._insight_running = True
-        session._run_consolidation()  # no debe lanzar
+        session._run_consolidation(session._session_gen)  # no debe lanzar
         assert session._insight_running is False
         assert fresh_gate.queue_size() == 0

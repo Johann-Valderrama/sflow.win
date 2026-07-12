@@ -4492,7 +4492,15 @@ def meeting_status():
 def meeting_start():
     """Inicia una reunión (captura dual mic + audio del sistema)."""
     res = MEETING.start()
-    code = 200 if res.get("ok") else 500
+    if res.get("ok"):
+        code = 200
+    elif res.get("stopping"):
+        # F1 (fix concurrencia): stop() de la reunión anterior sigue drenando/
+        # generando el acta. 409 Conflict — no es un error de servidor (500), es
+        # un estado transitorio esperado: reintentar en unos segundos basta.
+        code = 409
+    else:
+        code = 500
     return jsonify(res), code
 
 

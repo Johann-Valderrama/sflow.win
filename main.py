@@ -832,7 +832,24 @@ class VflowApp(QObject):
             threading.Thread(target=self._meeting_stop_worker, daemon=True).start()
             return
 
-        # Iniciar
+        if MEETING.is_stopping():
+            # F1 (fix concurrencia): is_active() ya es False pero el stop() anterior
+            # sigue drenando/generando el acta — arrancar ahora pisaría atributos que
+            # ese stop() todavía lee/muta. Mismo feedback que un start fallido (mic).
+            self.pill.set_state(PillWidget.STATE_ERROR)
+            if self.tray:
+                self.tray.showMessage(
+                    "Vflow — Reunión",
+                    "Guardando la reunión anterior… espera unos segundos e intenta de nuevo.",
+                    QSystemTrayIcon.MessageIcon.Warning,
+                    3000,
+                )
+            return
+
+        # Iniciar (start() re-verifica is_stopping bajo su propio lock: cubre la
+        # carrera si el stop() anterior terminó justo entre el check de arriba y esta
+        # llamada — en ese caso procede normal; si sigue en curso, rechaza igual con
+        # el mismo shape de error que maneja el "else" de abajo).
         res = MEETING.start()
         if res.get("ok"):
             self._meeting_active_seen = True  # sincronizar con el poller
