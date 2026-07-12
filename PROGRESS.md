@@ -54,23 +54,49 @@
     feature.
   - **D5: ambas → Ola 6 corre 6.1 (mute al dictar, pycaw) + 6.2 (hotkeys configurables)**, con
     re-validación del spec desactualizado como primera tarea (regla dura de la ola).
-  - Sigue pendiente investigación estratégica (pedida por Johann): aterrizar la visión Plaud.ai + OPS
-    con realidad de mercado/competencia/hardware antes de comprometer el roadmap. NO ejecutada aún
-    (esperando scope de Johann). D2/D3/D6/D7/D8 sin responder (no bloquean el run).
+  - **Investigación estratégica EJECUTADA (2026-07-12, alcance A/acotada):** informe completo en
+    `C:\OPS\_VelOS\cerebro-investigacion\inbox\2026-07-12_investigacion-vflow-mercado-captura-ia.md`
+    (pendiente ingesta formal por cerebro-manager; anotado en _LOG de la biblioteca). Conclusiones
+    que afectan el plan: hueco vacante = local-first + sin taxímetro de minutos + combo dictado/
+    reuniones/memoria personal; MCP es table stakes (Plaud/Granola/Fireflies/Otter ya lo tienen) →
+    el foso se reformula como SER el cerebro (contexto acumulado de OPS), no la conexión; hardware
+    propio aún más "diamante" de lo pensado (wearables consolidados: Limitless→Meta, Bee→Amazon);
+    5.4 = experimento de validación de toda la tesis; riesgo a vigilar: Wispr Flow (~$2B, master
+    plan second-brain) y Plaud Team convergiendo al mismo terreno. El **Apéndice C** del informe
+    lista qué copiar/mejorar que NO está en ruta (notas híbridas estilo Granola, panel de
+    privacidad verificable, CLI junto al MCP de 4.5, sync a Obsidian/Notion del cliente, pricing
+    sin minutos + opción lifetime; y 2 ajustes de diseño: el contrato de 4.5 como "paquete de
+    contexto consolidado" y el cierre de 5.3 como entregable accionado) — **TAREA para el
+    orquestador al llegar a las Olas 4/5**: transferir esos ítems a docs/PENDIENTES.md o a
+    unidades, y llevar el Apéndice C al debate de diseño de 4.0/4.5. D2/D3/D6/D7/D8 sin responder
+    (no bloquean el run).
 
 ## En curso (PLAN-MEJORAS)
-- [ ] Ola 2 — Suite de verificación en verde  (@fable-5 orquestador, IN_PROGRESS 2026-07-12 09:40)
-  - Last checkpoint: debate adversarial de la ola CERRADO (APROBAR CON CAMBIOS, 9 objeciones
-    aceptadas — ver Decisiones; corrige el diagnóstico: los 10 fallos son drift arquitectónico,
-    NO Python 3.14). Baseline re-confirmado: 441 pass / 10 fallos, todos en tests/test_sflow.py.
-    Unidad 2.1 despachada a Sonnet 5 con el brief corregido del debate.
-  - Next action: verificar retorno de 2.1 (diff + suite 451/0) → commit → 2.2 (reescribir 5
-    huérfanos a pytest, mover 2 tal cual, dual_capture queda como diagnóstico, pytest.ini
-    testpaths + CLAUDE.md comando canónico) → 2.3 (roundtrip secrets + detect_platform +
-    _parse_vtt_to_text + error_kind→HTTP vía test client). Después: Ola 3. Olas 4/5/6
-    DESBLOQUEADAS por Johann (D1:B, D4:las 4, D5:ambas) — van en ventanas nuevas.
+- [ ] Ola 3 — Escalabilidad del panel en vivo  (@fable-5 orquestador, IN_PROGRESS 2026-07-12)
+  - Last checkpoint: 3.1 CERRADA (commit c32f7cc; suite 604/0; payload por poll 29.122→916
+    bytes, −96,9%; verificación en navegador real: dashboard + /reunion + trío de paleta.
+    La pasada de navegador cazó un bug que los tests no veían: el helper JS solo existía en
+    el documento del dashboard y /reunion moría con ReferenceError — fix: constante Python
+    única _MT_INCREMENTAL_JS inyectada en ambos documentos + test guardián; reintento 1 del
+    circuit breaker). 3.2 despachada a Sonnet 5 (retención con prune FTS-antes-que-filas,
+    patrón meeting_delete, boot-only como HISTORY, default 0 = no-op).
+  - Next action: verificar retorno de 3.2 (diff + suite + test crítico "0 no borra nada")
+    → commit → cerrar Ola 3 y la ventana (handoff). Olas 4/5/6 (desbloqueadas por Johann)
+    en ventanas nuevas. OJO cambios AJENOS sin commitear en PLAN-MEJORAS-2026-07-06.md
+    (otra sesión: unidades 5.6/5.7 nuevas + contrato macrosistema adelantado en
+    docs/CONTRATO-MACROSISTEMA.md): NO commitearlos, coexistencia regla 7.
 
 ## Completado (PLAN-MEJORAS)
+- [x] **OLA 2 COMPLETA** (2026-07-12, 3 commits, suite 441/10 → 588 pass / 0 fail). Debate
+  adversarial previo (Opus 4.8, APROBAR CON CAMBIOS, 9/9 objeciones aceptadas — ver Decisiones;
+  corrigió el diagnóstico "mocks 3.14" → drift arquitectónico, y evitó el verde falso de mover
+  scripts __main__ sin def test_). Unidades: 2.1 suite verde, 10 fallos reparados sin debilitar
+  contratos (94f32a1) · 2.2 triage de huérfanos: 5 reescritos a pytest hermético (+83 tests,
+  2 bugs de hermeticidad de suite cazados de paso), 2 movidos tal cual, dual_capture/loopback
+  quedan como diagnósticos HW, pytest.ini testpaths=tests + CLAUDE.md sección Testing (30deb3d)
+  · 2.3 cobertura nueva: secrets DPAPI roundtrip + detect_platform + _parse_vtt_to_text +
+  error_kind→HTTP vía test client, +54 tests, cero producción tocada (e97f431). Comando
+  canónico documentado: venv\Scripts\python.exe -m pytest
 - [x] **OLA 1 COMPLETA** (2026-07-12, 8 commits, 0 regresiones; suite final 441 pass / 10
   preexistentes). Debate adversarial previo (Opus 4.8, APROBAR CON CAMBIOS: 1.6 eliminada por
   premisa falsa, 1.4 recortada a _SILENCE_RMS y fusionada con 1.1 — ver Decisiones). Unidades:
@@ -99,6 +125,24 @@
   6 tests nuevos de carrera. Suite 346 pass / 10 preexistentes, 0 regresiones.
 
 ## Decisiones (PLAN-MEJORAS, append-only)
+- 2026-07-12 Debate adversarial Ola 3 (Fable propone el plan literal, Opus 4.8 ataca con código real;
+  veredicto: APROBAR CON CAMBIOS; 8 objeciones, 8 ACEPTADAS). O1 (BLOCKER) `since` sin token de
+  generación pierde la reunión nueva (A deja since=50, B resetea _segments → cliente nunca ve B) →
+  el modo incremental devuelve `gen` (=_session_gen de la Ola 0.1); cliente resetea since=0 y limpia
+  DOM si gen cambia o total<since · O2 (BLOCKER) copiar prune_older_than tal cual deja huérfano
+  meetings_fts (FTS mantenido a mano, sin triggers; el patrón correcto es el de meeting_delete:
+  borrar fts por rowid ANTES del DELETE) · O3 NO fundir loadMeeting/loadLive (renderizan DOM distinto
+  con ciclos de vida distintos): comparten helper de fetch+cursor, cada una conserva su render · O4
+  el slice incremental va EN EL HANDLER (web/server.py), nunca dentro de transcript_segments() —
+  snapshot()/chat en vivo y test_assistant_live fijan la lista completa · O5 el sorted() de
+  transcript_segments SE CONSERVA (append-only estable, n~cientos, coste despreciable; el premio real
+  es payload JSON, no CPU — recorte del alcance del plan "ordenado incrementalmente") · O6 cursor =
+  índice de lista (nº de segmentos en mano), NO timestamp (mic y sys comparten t idéntico) NI
+  segment_count de status() (dos snapshots) · O7 validar since: type=int, clamp [0,len], ausente →
+  respuesta completa byte-idéntica · O8 3.2 reusa el patrón boot de main.py:502-508 con
+  MEETING_RETENTION_DAYS (boot-only como HISTORY; la UI advierte "aplica al reiniciar"; guard
+  days<=0 = no-op ya existente en el patrón). Dato clave del adversario: el HUD Qt NO consume
+  /api/meeting (lee MEETING in-proc) — intocable. : gatillo regla 6 del kickoff : @fable-5 + @opus-4.8
 - 2026-07-12 Debate adversarial Ola 2 (Fable propone el plan literal, Opus 4.8 high ataca con código real;
   veredicto: APROBAR CON CAMBIOS; 9 objeciones, 9 ACEPTADAS, 0 refutadas). O1 (ALTA) el diagnóstico "10
   fallos = mocks Groq incompatibles con Python 3.14" es FALSO: son drift arquitectónico pre-Olas (commit
@@ -162,8 +206,21 @@
   Orden de ejecución por clusters: batch1 paralelo {1.9 insights · 1.8 url_transcribe · 1.10
   dictation_modes · 1.7 inline main.py} → batch2 paralelo {1.1+1.4 proactive/insights/meeting · 1.2
   main+db · 1.3 web/server} → batch3 {1.5 db+web/server+groq_backend}. : gatillo §10.2 : @fable-5 + @opus-4.8
-
-## PARA JOHANN (gates pendientes de su ojo; el orquestador sigue con lo no bloqueado)
+- 2026-07-12 Debate adversarial del CONTRATO MACROSISTEMA (diseño anticipado de 5.4 + núcleo de 4.5,
+  ventana Fable; Fable propuso, Opus 4.8 atacó con código real; veredicto APROBAR CON CAMBIOS, 11
+  objeciones TODAS aceptadas/mitigadas). Contrato final + registro completo del debate:
+  **`docs/CONTRATO-MACROSISTEMA.md`** (fuente de verdad; las unidades 5.4 y 4.5 se implementan
+  CONTRA ese spec, tras el reorden). Cambios clave que forzó el debate:
+  id por hash por pendiente + gate ≥1 pendiente; due/transcript_offset en vez del t ambiguo y sin
+  enum de responsable (no existe en el schema real); create-only con machine_id+hash (meeting_id no
+  es clave global); get_related_context (nombre honesto, retrieval) en vez de "consolidado" — la
+  consolidación real es unidad v2; list_pending_actions FUERA de v1 (no existe señal de cierre);
+  módulo puro core/context_pack.py como prerequisito de MCP+CLI; señal de cobertura FTS en cada
+  respuesta; advertencia explícita read-only≠confidencial. **Gates G1 y G-agent APROBADOS por
+  Johann en chat (2026-07-12): G1 con buzón nuevo `C:\OPS\_inbox-vflow\` (creado, con _LEEME.md
+  para el consumidor); G-agent alcance v1 completo. Las unidades 5.4 y 4.5 ya NO tienen gate:
+  se implementan directo contra docs/CONTRATO-MACROSISTEMA.md tras el reorden.** : gatillo §10.2
+  + gates G1/G-agent resueltos : @fable-5 + @opus-4.8 + Johann
 - **G2 — Prueba física de 1.3 Highlight AltGr+H** (5 min): (1) inicia una reunión real con AltGr+R y audio sonando; (2) pulsa AltGr+H dos o tres veces en momentos distintos → debes oír un beep agudo y ver la notificación "✓ Momento destacado (mm:ss)"; (3) MANTÉN AltGr+H apretado 2s → debe registrar UN solo highlight (anti auto-repeat); (4) pulsa AltGr+H SIN reunión activa → no debe pasar nada; (5) termina la reunión y revisa que el acta (dashboard → Reunión → historial) tenga la sección "⭐ Momentos destacados" con contexto correcto; (6) con el IDE abierto, verifica que Ctrl+Alt+H de tu IDE no dispare nada raro (AltGr ≡ Ctrl+Alt físico en Windows; la app distingue AltGr real). Nota: en layouts ES/LatAm H no es dead-key (verificado en debate).
 - **G3 — Gusto visual**: la sección "⭐ Momentos destacados" en el acta (vista en vivo e historial) sigue los tokens del rediseño; revísala async cuando pruebes G2 y pide ajustes si no convence.
 - **G2 Ola 2 — Prueba física del panel en vivo** (10 min, requiere reiniciar Vflow): (1) AltGr+R con audio del sistema sonando → en /reunion: pestañas En vivo/Preguntar, timer corriendo, VU "Yo" se mueve al hablar y VU "Ellos" con el audio del PC; (2) el pill debe mostrar anillo ámbar + timer mm:ss + punto cian cuando "Ellos" suena; clic corto en el pill abre /reunion; (3) botón ⏸: el timer se congela y al reanudar NO cuenta el tiempo pausado; (4) botón ⭐ y una nota 📝 → al terminar, el acta trae momentos destacados y la reunión guarda notes_json; (5) espera un pendiente detectado → tarjeta con ✓/✗, dale ✓, no debe reaparecer y caduca ~3 min; (6) pestaña Preguntar durante la reunión: chips fijos + pregunta libre → responde sobre lo dicho con timestamps.
