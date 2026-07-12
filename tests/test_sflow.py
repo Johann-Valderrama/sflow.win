@@ -118,7 +118,7 @@ class TestAudioRecorder:
         mock_stream.start.assert_called_once()
         # Simulate some audio data
         fake_audio = np.zeros((1024, 1), dtype=np.int16)
-        self.recorder._callback(fake_audio, 1024, None, None)
+        self.recorder._callback(fake_audio)
         duration = self.recorder.stop()
         assert self.recorder.is_recording is False
         assert duration > 0
@@ -140,7 +140,7 @@ class TestAudioRecorder:
         fake_audio = np.zeros((1024, 1), dtype=np.int16)
         # Add many frames — should all be stored (no limit)
         for _ in range(5000):
-            self.recorder._callback(fake_audio, 1024, None, None)
+            self.recorder._callback(fake_audio)
         assert len(self.recorder.frames) == 5000
 
     def test_extract_chunk_empty(self):
@@ -206,6 +206,11 @@ class TestAudioRecorder:
 class TestTranscriber:
     @pytest.fixture(autouse=True)
     def transcriber(self):
+        # El backend "groq" es un singleton por nombre (core.backends.get_backend);
+        # sin este reset, un test reutilizaría el cliente Groq (mock) cacheado por
+        # el test anterior en vez del que este test acaba de parchear.
+        import core.backends as backends_module
+        backends_module._instances.pop("groq", None)
         from core.transcriber import Transcriber
         self.transcriber = Transcriber()
 
@@ -227,7 +232,7 @@ class TestTranscriber:
         with pytest.raises(ValueError, match="GROQ_API_KEY"):
             t.transcribe(buf)
 
-    @patch("core.transcriber.Groq")
+    @patch("core.backends.groq_backend.Groq")
     @patch.dict(os.environ, {"GROQ_API_KEY": "gsk_test_key_12345678901234567890"})
     def test_successful_transcription(self, mock_groq_cls):
         from core.transcriber import Transcriber
@@ -239,7 +244,7 @@ class TestTranscriber:
         result = t.transcribe(buf)
         assert result == "Hello world"
 
-    @patch("core.transcriber.Groq")
+    @patch("core.backends.groq_backend.Groq")
     @patch.dict(os.environ, {"GROQ_API_KEY": "gsk_test_key_12345678901234567890"})
     def test_api_error(self, mock_groq_cls):
         from core.transcriber import Transcriber
@@ -251,7 +256,7 @@ class TestTranscriber:
         with pytest.raises(RuntimeError):
             t.transcribe(buf)
 
-    @patch("core.transcriber.Groq")
+    @patch("core.backends.groq_backend.Groq")
     @patch.dict(os.environ, {"GROQ_API_KEY": "gsk_test_key_12345678901234567890"})
     def test_transcribe_with_prompt(self, mock_groq_cls):
         """Verify prompt parameter is passed to the API call."""
@@ -267,7 +272,7 @@ class TestTranscriber:
         assert call_kwargs.kwargs.get("prompt") == "previous context" or \
                (call_kwargs[1].get("prompt") == "previous context")
 
-    @patch("core.transcriber.Groq")
+    @patch("core.backends.groq_backend.Groq")
     @patch.dict(os.environ, {"GROQ_API_KEY": "gsk_test_key_12345678901234567890"})
     def test_transcribe_without_prompt(self, mock_groq_cls):
         """Verify prompt is NOT passed when None."""
@@ -300,7 +305,7 @@ class TestTranscriber:
                     "muchas gracias por venir hoy a la reunión de equipo"):
             assert _is_hallucination(txt) is False, txt
 
-    @patch("core.transcriber.Groq")
+    @patch("core.backends.groq_backend.Groq")
     @patch.dict(os.environ, {"GROQ_API_KEY": "gsk_test_key_12345678901234567890"})
     def test_transcribe_filters_hallucination(self, mock_groq_cls):
         """transcribe() devuelve '' cuando la API alucina en silencio."""
@@ -429,8 +434,10 @@ class TestHotkeyListener:
         self.listener._on_release(keyboard.Key.shift_l)
         assert self.listener._hands_free is True
         assert self.listener._recording is True
-        # Single Shift tap to stop
+        # Single Shift tap to stop (la decisión de parada vive en _on_release,
+        # el press por sí solo no detiene nada)
         self.listener._on_press(keyboard.Key.shift_l)
+        self.listener._on_release(keyboard.Key.shift_l)
         assert self.listener._recording is False
         assert self.listener._hands_free is False
         assert self.released_count == 1
@@ -451,7 +458,7 @@ class TestHotkeyListener:
         self.listener.reset()
         assert self.listener._recording is False
         assert self.listener._hands_free is False
-        assert self.listener._alt_gr_space_mode is False
+        assert self.listener._alt_gr_t_mode is False
         assert self.listener._shift_tap_count == 0
 
         # A new triple-tap should fire pressed again (listener not blocked)
@@ -567,10 +574,31 @@ class TestFlaskEndpoints:
 class TestChunkedTranscription:
     """Integration-style tests for the chunked transcription flow."""
 
-    @patch("core.transcriber.Groq")
-    @patch.dict(os.environ, {"GROQ_API_KEY": "gsk_test_key_12345678901234567890"})
+    @patch("core.backends.groq_backend.Groq")
+    @patch.dict(os.environ, {
+        "GROQ_API_KEY": "gsk_test_key_12345678901234567890",
+        # El audio simulado es silencio puro (np.zeros); con VAD activo (default)
+        # Silero correctamente no detecta voz y GroqBackend.transcribe() devuelve
+        # "" sin llamar a la API (comportamiento correcto documentado en
+        # core/vad.py). Este test valida el chunking/join del Transcriber, no el
+        # VAD, así que se desactiva para poder observar la respuesta mockeada.
+        "VAD_ENABLED": "false",
+    })
     def test_multi_chunk_join(self, mock_groq_cls):
         """Simulate multiple chunks being transcribed and joined."""
+        # El backend "groq" es un singleton por nombre; sin este reset se
+        # reutilizaría el cliente (mock) cacheado por la última clase de test.
+        import core.backends as backends_module
+        backends_module._instances.pop("groq", None)
+        # La caché de core.dictionary es un singleton de módulo (mismo patrón
+        # de aislamiento que tests/test_raw_undo.py::_reset_dictionary_cache):
+        # sin este reset, un test anterior de la suite (que sí invalida la
+        # caché contra la DB real de dev) dejaría vocabulario real filtrado
+        # dentro del prompt esperado aquí como texto exacto.
+        from core import dictionary
+        dictionary._db = None
+        dictionary._cache = dictionary._EMPTY_CACHE
+
         from core.transcriber import Transcriber
         from core.recorder import AudioRecorder
         from config import SAMPLE_RATE, BLOCK_SIZE, CHUNK_OVERLAP_SECONDS
