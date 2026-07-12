@@ -87,6 +87,19 @@ def fake_audio_sources(monkeypatch):
     monkeypatch.setattr("core.meeting.LoopbackSource", _FakeSource)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_stop_side_effects(monkeypatch, tmp_path):
+    """Los tests de stop() ejecutan el flujo REAL de cierre, que incluye el
+    dead-drop de pendientes y el webhook (core/webhook.py). Si el .env del
+    desarrollador (cargado al importar config) trae PENDING_EXPORT_DIR o
+    WEBHOOK_ENABLED, la suite escribiría en carpetas reales del usuario y
+    get_machine_id() persistiría machine_id.txt en la raíz del repo (el data
+    dir de dev). Aislamiento total: env limpio + APP_DATA_DIR a tmp."""
+    monkeypatch.delenv("PENDING_EXPORT_DIR", raising=False)
+    monkeypatch.delenv("WEBHOOK_ENABLED", raising=False)
+    monkeypatch.setattr("core.webhook.APP_DATA_DIR", str(tmp_path / "appdata"))
+
+
 @pytest.fixture
 def fast_llm(monkeypatch):
     """Acta/capítulos instantáneos y vacíos por defecto (sin red, sin LLM real)."""

@@ -524,13 +524,18 @@ def export_pendientes(meeting: dict, export_dir: str) -> "str | None":
     if meeting.get("id") is None:
         return None
     try:
-        machine_id = get_machine_id()
-        tarea = build_tarea(meeting, machine_id)
-        if tarea is None:
+        # Gate O7 ANTES de resolver machine_id: get_machine_id() persiste un archivo
+        # en el data dir la primera vez, y ese side effect no debe ocurrir cuando la
+        # reunión no va a generar export alguno.
+        if not _collect_pendientes(meeting):
             logger.debug(
                 "Export de pendientes: reunión #%s sin pendientes, no se escribe archivo (O7).",
                 meeting.get("id"),
             )
+            return None
+        machine_id = get_machine_id()
+        tarea = build_tarea(meeting, machine_id)
+        if tarea is None:
             return None
 
         yaml_text = render_tarea_yaml(tarea)

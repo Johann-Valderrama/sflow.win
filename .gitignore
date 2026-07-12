@@ -39,3 +39,6 @@ vflow.log.*
 
 # Actas de reuniones exportadas (datos de usuario)
 meetings/
+
+# Id de instalacion (dato local, lo escribe get_machine_id en el data dir; en dev = raiz)
+machine_id.txt
