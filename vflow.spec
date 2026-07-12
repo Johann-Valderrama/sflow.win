@@ -31,6 +31,9 @@ datas = [
     # Assets web auto-hospedados (Tailwind Play + fuente Inter) para funcionar offline.
     # Se montan en %_MEIPASS%/web/static; config.WEB_STATIC_DIR apunta ahí en bundle.
     ('web/static', 'web/static'),
+    # Templates Jinja2 del dashboard/reunión.
+    # Se montan en %_MEIPASS%/web/templates; config.WEB_TEMPLATES_DIR apunta ahí en bundle.
+    ('web/templates', 'web/templates'),
 ]
 datas += sounddevice_datas
 datas += ct2_datas

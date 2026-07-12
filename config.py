@@ -149,6 +149,10 @@ LOGO_PATH = os.path.join(_RESOURCE_DIR, "logo_small.png")
 # En dev = <proyecto>/web/static; en bundle = %_MEIPASS%/web/static (ver vflow.spec).
 WEB_STATIC_DIR = os.path.join(_RESOURCE_DIR, "web", "static")
 
+# Templates Jinja2 del dashboard/reunión — read-only bundled.
+# En dev = <proyecto>/web/templates; en bundle = %_MEIPASS%/web/templates (ver vflow.spec).
+WEB_TEMPLATES_DIR = os.path.join(_RESOURCE_DIR, "web", "templates")
+
 # Audio Visualizer
 NUM_BARS = 20
 VIZ_FPS = 60

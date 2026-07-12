@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from flask import Flask, jsonify, render_template_string, request, send_file
 from dotenv import set_key
 from db.database import TranscriptionDB
-from config import APP_DATA_DIR, MEETINGS_DIR, WEB_STATIC_DIR
+from config import APP_DATA_DIR, MEETINGS_DIR, WEB_STATIC_DIR, WEB_TEMPLATES_DIR
 from core import dictionary as _dictionary
 from core.meeting import MEETING
 from core import meeting_export as _meeting_export
@@ -177,7 +177,7 @@ def _start_url_queue_worker() -> None:
     t.start()
 
 
-app = Flask(__name__, static_folder=WEB_STATIC_DIR, static_url_path="/static")
+app = Flask(__name__, static_folder=WEB_STATIC_DIR, static_url_path="/static", template_folder=WEB_TEMPLATES_DIR)
 app.config["JSON_AS_ASCII"] = False
 app.config["SECRET_KEY"] = secrets.token_hex(32)
 
