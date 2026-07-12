@@ -569,7 +569,11 @@ class VflowApp(QObject):
         temprano para mantener la semántica de fallo puntual de micrófono.
         """
         try:
-            self._generation += 1
+            # Unidad 1.7: el bump de generación va BAJO _chunk_state_lock, igual que
+            # el check+escritura de _chunk_worker — sin esto quedaba una data race
+            # residual entre este incremento y la lectura del worker bajo el lock.
+            with self._chunk_state_lock:
+                self._generation += 1
             _play_sound(880)  # beep alto = inicio de grabación
             save_frontmost_app()
             try:
@@ -609,7 +613,9 @@ class VflowApp(QObject):
         y el reset de _translate_mode para dejar el estado limpio ante fallo de micrófono.
         """
         try:
-            self._generation += 1
+            # Unidad 1.7: bump bajo el lock (ver _on_hotkey_pressed).
+            with self._chunk_state_lock:
+                self._generation += 1
             self._translate_mode = True
             _play_sound(880)
             save_frontmost_app()
@@ -669,14 +675,20 @@ class VflowApp(QObject):
             t.start()
 
     def _chunk_worker(self, wav_buffer, prompt, idx: int, gen: int):
-        """Transcribe un chunk en background; descarta resultado si la generación cambió."""
+        """Transcribe un chunk en background; descarta resultado si la generación cambió.
+
+        Unidad 1.7: el check de generación y la escritura del resultado ocurren
+        JUNTOS bajo _chunk_state_lock — con el check fuera del lock había una
+        ventana TOCTOU donde un chunk de la sesión anterior podía colarse en
+        _chunk_results DESPUÉS del clear() de la sesión nueva.
+        """
         try:
             text, raw = self.transcriber.transcribe(wav_buffer, prompt=prompt, return_raw=True)
-            if gen != self._generation:
-                # Sesión vieja: descartar resultado
-                return
-            if text:
-                with self._chunk_state_lock:
+            with self._chunk_state_lock:
+                if gen != self._generation:
+                    # Sesión vieja: descartar resultado
+                    return
+                if text:
                     self._chunk_results[idx] = text
                     if raw is not None:
                         self._chunk_raw[idx] = raw
@@ -1256,7 +1268,9 @@ class VflowApp(QObject):
             except Exception as exc:
                 logger.warning("Watchdog: error al cerrar stream del recorder: %s", exc)
             # Incrementar generación para invalidar chunks en vuelo de esta sesión
-            self._generation += 1
+            # (unidad 1.7: bajo el lock, como todos los bumps de _generation)
+            with self._chunk_state_lock:
+                self._generation += 1
             self.pill.set_state(PillWidget.STATE_ERROR)
             if self.tray:
                 self.tray.showMessage(
