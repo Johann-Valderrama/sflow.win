@@ -17,3 +17,54 @@ try:
 except Exception:  # noqa: BLE001
     # Sin onnxruntime los tests de audio se saltan/fail-open por su cuenta.
     pass
+
+import sys
+
+import pytest
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _aislar_entorno_real(tmp_path_factory):
+    """Aísla la suite del entorno real del usuario (sesión completa).
+
+    Dos fugas reales que esta fixture cierra:
+
+    1. POST /api/settings persiste vía web.state._set_env_key al .env REAL
+       (en dev, APP_DATA_DIR = raíz del repo). Los tests de settings dejaban
+       rutas tmp de pytest guardadas en el .env del usuario entre corridas.
+       → _ENV_PATH se redirige a un .env temporal de la sesión.
+
+    2. dispatch_async (core/webhook.py) corre en un hilo daemon fire-and-forget
+       que puede leer PENDING_EXPORT_DIR y APP_DATA_DIR DESPUÉS del teardown de
+       monkeypatch del test que lo lanzó. Si el .env real traía un
+       PENDING_EXPORT_DIR (p. ej. el contaminado por la fuga 1), el hilo escribía
+       machine_id.txt en la raíz del repo — intermitente, según timing.
+       → Baseline de sesión: dead-drop y webhook apagados, y el APP_DATA_DIR que
+       ve core.webhook apunta a un tmp. Los tests que necesitan otro valor lo
+       parchean por encima con su monkeypatch function-scoped, como ya hacen.
+
+    Se usa pytest.MonkeyPatch de sesión (la fixture monkeypatch es function-scoped).
+    Los imports van aquí y no arriba: la colección ya cargó estos módulos vía los
+    test modules, y el orden onnxruntime-antes-de-PyQt6 del top de este archivo
+    debe seguir intacto.
+    """
+    mp = pytest.MonkeyPatch()
+    tmp = tmp_path_factory.mktemp("vflow-aislamiento")
+
+    mp.setenv("PENDING_EXPORT_DIR", "")
+    mp.setenv("WEBHOOK_ENABLED", "false")
+
+    import core.webhook as _webhook
+    mp.setattr(_webhook, "APP_DATA_DIR", str(tmp / "appdata"))
+
+    if "web.state" in sys.modules:
+        mp.setattr(sys.modules["web.state"], "_ENV_PATH", str(tmp / ".env"))
+    else:
+        try:
+            import web.state as _state
+            mp.setattr(_state, "_ENV_PATH", str(tmp / ".env"))
+        except Exception:  # noqa: BLE001  (sin flask instalado, no hay endpoint que persista)
+            pass
+
+    yield
+    mp.undo()
