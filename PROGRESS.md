@@ -16,6 +16,16 @@
 > locales, sin push. 1 unidad = 1 commit.
 
 ## PARA JOHANN (PLAN-MEJORAS)
+- **G2 Ola 3 (nueva) — Prueba física del polling incremental + retención** (5-10 min, con la app
+  reiniciada tras estos commits): (1) inicia una reunión real (AltGr+R) y ten abierto /reunion un
+  rato largo → el transcript debe crecer con fluidez y sin saltos/duplicados (por dentro ahora
+  solo viajan los segmentos nuevos por poll, ~97% menos datos); (2) termina esa reunión y arranca
+  OTRA sin recargar la página → el transcript debe LIMPIARSE solo y mostrar únicamente la reunión
+  nueva (es el caso que el diseño protege con el token de generación); (3) el panel embebido del
+  dashboard debe seguir comportándose igual que siempre; (4) retención: NO actives
+  MEETING_RETENTION_DAYS si quieres conservar todo (default 0 = para siempre); si algún día lo
+  activas en Ajustes → Reuniones, recuerda que borra actas y transcripts definitivamente y aplica
+  al reiniciar la app.
 - **G2 Ola 0 — VERIFICADO 2026-07-12** (Johann + orquestador con la app viva): (1) re-pulsar AltGr+R
   durante el guardado → notificación "Guardando la reunión anterior…" + ninguna reunión rota ✓;
   (2) AltGr+R/T sostenido → sin ráfaga de beeps (confirmado por log: ciclos deliberados, no
@@ -72,21 +82,31 @@
     (no bloquean el run).
 
 ## En curso (PLAN-MEJORAS)
-- [ ] Ola 3 — Escalabilidad del panel en vivo  (@fable-5 orquestador, IN_PROGRESS 2026-07-12)
-  - Last checkpoint: 3.1 CERRADA (commit c32f7cc; suite 604/0; payload por poll 29.122→916
-    bytes, −96,9%; verificación en navegador real: dashboard + /reunion + trío de paleta.
-    La pasada de navegador cazó un bug que los tests no veían: el helper JS solo existía en
-    el documento del dashboard y /reunion moría con ReferenceError — fix: constante Python
-    única _MT_INCREMENTAL_JS inyectada en ambos documentos + test guardián; reintento 1 del
-    circuit breaker). 3.2 despachada a Sonnet 5 (retención con prune FTS-antes-que-filas,
-    patrón meeting_delete, boot-only como HISTORY, default 0 = no-op).
-  - Next action: verificar retorno de 3.2 (diff + suite + test crítico "0 no borra nada")
-    → commit → cerrar Ola 3 y la ventana (handoff). Olas 4/5/6 (desbloqueadas por Johann)
-    en ventanas nuevas. OJO cambios AJENOS sin commitear en PLAN-MEJORAS-2026-07-06.md
-    (otra sesión: unidades 5.6/5.7 nuevas + contrato macrosistema adelantado en
-    docs/CONTRATO-MACROSISTEMA.md): NO commitearlos, coexistencia regla 7.
+- [ ] Ola 4 — Partir el monolito web/server.py  (SIN ARRANCAR; siguiente para ventana nueva)
+  - Last checkpoint: Olas 0-3 COMPLETAS y commiteadas (ver Completado); suite 617 pass / 0
+    fail; techo de ~2 olas/ventana alcanzado (regla 8), ventana cerrada limpia. D1:B →
+    alcance COMPLETO de la ola: 4.0 (debate de diseño) + 4.1 + 4.2 + 4.3 + abrir debate 4.4.
+  - Next action: abrir ventana nueva con el Kickoff Ola 4 del plan (o el Kickoff Orquestador
+    Autónomo, que la tomará como siguiente). El director ejecuta 4.0 PRIMERO (debate con
+    Opus 4.8 y código real) y DEBE llevar a ese debate el Apéndice C de la investigación
+    2026-07-12 (contrato de 4.5 como "paquete de contexto consolidado" — tarea anotada en
+    PARA JOHANN) + los cambios AJENOS ya presentes en PLAN-MEJORAS (4.5 con CLI, 5.6, 5.7,
+    docs/CONTRATO-MACROSISTEMA.md) que esta ventana NO commiteó (regla 7): el director de
+    la Ola 4 decide si los commitea como docs antes de arrancar. Después de la 4: Ola 5
+    (orden 5.2→5.4[G1]→5.1→5.3→5.5, + decidir encaje de 5.6/5.7) y Ola 6 (re-validar
+    docs/FASE3_SPEC.md primero).
 
 ## Completado (PLAN-MEJORAS)
+- [x] **OLA 3 COMPLETA** (2026-07-12, 2 commits, suite final 617 pass / 0 fail). Debate
+  adversarial previo (Opus 4.8, APROBAR CON CAMBIOS, 8/8 objeciones aceptadas — 2 BLOCKERs:
+  cursor sin token de generación y prune sin limpieza FTS; ver Decisiones). Unidades: 3.1
+  polling incremental ?since=N con gen de invalidación, helper JS único inyectado en ambos
+  documentos, payload por poll 29.122→916 bytes (−96,9%), verificado en navegador real —
+  la pasada de navegador cazó un ReferenceError en /reunion que los tests no veían, fix +
+  test guardián en reintento 1 (c32f7cc) · 3.2 retención opcional MEETING_RETENTION_DAYS
+  default 0 = conservar siempre, prune FTS-antes-que-filas, boot-only, advertencia UI,
+  test crítico "0 no borra nada" (eb934bd). Hallazgo colateral anotado en docs/PENDIENTES.md
+  (HISTORY_RETENTION_DAYS sin validador). Gate físico G2 Ola 3 en PARA JOHANN.
 - [x] **OLA 2 COMPLETA** (2026-07-12, 3 commits, suite 441/10 → 588 pass / 0 fail). Debate
   adversarial previo (Opus 4.8, APROBAR CON CAMBIOS, 9/9 objeciones aceptadas — ver Decisiones;
   corrigió el diagnóstico "mocks 3.14" → drift arquitectónico, y evitó el verde falso de mover

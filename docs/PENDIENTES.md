@@ -518,3 +518,11 @@ Hoy el copiloto en vivo es DELIBERADAMENTE ciego a OPS: claude-cli corre con cwd
 OPS sería visible a terceros. Mitigación: el briefing solo contiene lo compartible + usar
 modo Silencioso al compartir pantalla (ya existe el modo).
 **La dirección inversa ya existe**: OPS lee las reuniones de Vflow vía el MCP server (unidad 1.1).
+
+## Higiene menor (hallazgos colaterales de ejecución)
+
+- [ ] `HISTORY_RETENTION_DAYS` sin validador numérico en `/api/settings` (hallado al ejecutar la
+  unidad 3.2, 2026-07-12): a diferencia de `MEETING_RETENTION_DAYS` (que ya valida y usa
+  `_safe_int_env` en el GET), un valor no numérico guardado para el setting de dictados podría
+  dejar `GET /api/settings` en error persistente. Fix mecánico: registrar el mismo validador y
+  leerlo con `_safe_int_env`. (Candidato a colarse en cualquier unidad futura que toque settings.)
