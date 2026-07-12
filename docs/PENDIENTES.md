@@ -526,6 +526,25 @@ modo Silencioso al compartir pantalla (ya existe el modo).
   `_safe_int_env` en el GET), un valor no numérico guardado para el setting de dictados podría
   dejar `GET /api/settings` en error persistente. Fix mecánico: registrar el mismo validador y
   leerlo con `_safe_int_env`. (Candidato a colarse en cualquier unidad futura que toque settings.)
+- [ ] `LOCAL_WHISPER_MODEL` no recarga el backend local en caliente (hallado al ejecutar la unidad
+  4.3, 2026-07-12): `LocalBackend.__init__` lee `LOCAL_WHISPER_MODEL` una sola vez en el
+  constructor (`core/backends/local_backend.py`); el singleton de `get_backend("local")`
+  (`core/backends/__init__.py`) se reutiliza mientras el nombre de backend no cambie, así que
+  cambiar el tamaño de modelo desde el dashboard sin reiniciar la app NO tiene efecto hasta la
+  próxima vez que se reconstruya la instancia (p. ej. cambiar de backend y volver a "local").
+  Fix candidato: releer `LOCAL_WHISPER_MODEL` al inicio de cada transcripción, o invalidar la
+  instancia cacheada al guardar el setting.
+- [ ] Defaults inconsistentes de `CLAUDE_CLI_MODEL_BATCH`/`CLAUDE_CLI_MODEL_LIVE` en
+  `core/insights.py` (hallado al ejecutar la unidad 4.3, 2026-07-12): `_model()` (~línea 218)
+  SIEMPRE resuelve `CLAUDE_CLI_MODEL_BATCH` para `backend='claude-cli'`, sin importar el `task`
+  pedido — nunca lee `CLAUDE_CLI_MODEL_LIVE` desde esa función. El dispatch REAL de inferencia
+  (`_chat_claude_cli`, ~líneas 574-577) sí branchea correctamente por `task`. Efecto: cualquier
+  código que use `_model(task="live", backend="claude-cli")` solo para mostrar/loguear el nombre
+  del modelo (no para inferir) reporta el modelo de batch en vez del de vivo. Documentado y
+  pineado por un test (`tests/test_env_catalog.py::TestClaudeCliModelBugPinned`, que empezará a
+  fallar si se corrige) y en `config.ENV_CATALOG` (campo `known_divergence` de ambas variables);
+  no corregido en la unidad 4.3 por estar fuera de su alcance (catálogo + limpieza de constantes
+  muertas, no fixes de comportamiento).
 
 ---
 

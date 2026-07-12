@@ -64,7 +64,7 @@ from core.proactive import PROACTIVE, LullDetector, MonologueWatch
 from core import assistant as _assistant
 from db.database import TranscriptionDB
 from web.server import start_web_server
-from config import LOGO_PATH, APP_DATA_DIR, GROQ_API_KEY, CHUNK_SECONDS, MAX_RECORDING_SECONDS, APP_VERSION, AUDIO_SOURCE
+from config import LOGO_PATH, APP_DATA_DIR, CHUNK_SECONDS, MAX_RECORDING_SECONDS, APP_VERSION
 
 logger = logging.getLogger(__name__)
 

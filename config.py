@@ -81,45 +81,15 @@ if not os.getenv("WEBHOOK_SECRET") and os.getenv("WEBHOOK_SECRET_ENC"):
 APP_VERSION = "1.0.0"
 
 # Groq API
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = "whisper-large-v3-turbo"
-WHISPER_LANGUAGE = "es"  # Explicit language for accurate accents (é, ó, ñ, etc.)
 
-# Backend de transcripción activo.  Valores posibles: "groq" (default) o "local".
-# "groq"  → Groq Whisper API (requiere GROQ_API_KEY, necesita internet).
-# "local" → faster-whisper corriendo en CPU (sin internet, requiere modelo descargado).
-# Se puede cambiar desde el dashboard sin reiniciar la app.
-TRANSCRIPTION_BACKEND = os.getenv("TRANSCRIPTION_BACKEND", "groq")
-
-# Backend local (faster-whisper)
-# LOCAL_WHISPER_MODEL: tamaño del modelo a usar.  Opciones: "small" (~466 MB, rápido)
-#   o "medium" (~1.5 GB, más preciso).  El modelo se descarga desde Hugging Face la
-#   primera vez y queda en LOCAL_MODELS_DIR para uso offline posterior.
-LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "small")
-
-# LOCAL_MODEL_IDLE_MINUTES: minutos de inactividad antes de liberar el modelo de la RAM.
-#   0 = nunca liberar (útil si el equipo tiene RAM suficiente y se usa frecuentemente).
-LOCAL_MODEL_IDLE_MINUTES = int(os.getenv("LOCAL_MODEL_IDLE_MINUTES", "10") or "10")
-
-# GROQ_FALLBACK: si "true", cuando el backend local falla (modelo no descargado,
-#   error de inferencia, etc.) la app reintenta automáticamente con Groq Whisper API,
-#   siempre que GROQ_API_KEY esté configurada.  Solo aplica cuando
-#   TRANSCRIPTION_BACKEND=local.  Por defecto "false" (apagado) para garantizar que
-#   el audio nunca salga a internet sin consentimiento explícito del usuario.
-GROQ_FALLBACK = os.getenv("GROQ_FALLBACK", "false").lower() == "true"
-
-# AUDIO_SOURCE: fuente de captura de audio.  Valores posibles: "mic" (default) o "system".
-# "mic"    → micrófono del dispositivo (comportamiento original, sounddevice).
-# "system" → audio del sistema vía WASAPI loopback (pyaudiowpatch); captura lo que
-#            suena por los altavoces sin necesidad de micrófono.
-# Cambiable desde el menú de bandeja o el panel Configuración del dashboard.
-AUDIO_SOURCE = os.getenv("AUDIO_SOURCE", "mic")
-
-# VAD_ENABLED: aplica Silero VAD al audio ANTES de enviarlo a la API Groq para
-#   recortar silencios (reduce costo, latencia y alucinaciones).  El backend local
-#   ya tiene su propio VAD interno, por lo que este ajuste solo afecta a Groq.
-#   Apagar en caso de problemas (el audio se envía sin modificar — fail-open).
-VAD_ENABLED = os.getenv("VAD_ENABLED", "true").lower() == "true"
+# Nota: TRANSCRIPTION_BACKEND, LOCAL_WHISPER_MODEL, LOCAL_MODEL_IDLE_MINUTES,
+# GROQ_FALLBACK, AUDIO_SOURCE, VAD_ENABLED, GROQ_API_KEY y WHISPER_LANGUAGE ya NO
+# tienen constante aquí (eran constantes muertas — sin uso — o una constante-trampa
+# que no leía el entorno; unidad 4.3). Las variables de entorno SIGUEN vivas: se
+# releen perezosamente en cada call-site (core/*, web/*) para soportar hot-reload
+# desde el dashboard sin reiniciar la app. Ver ENV_CATALOG al final de este archivo
+# (fuente de verdad programática, verificada por tests/test_env_catalog.py).
 
 # Directorio donde se almacenan los modelos descargados.
 # En modo bundle → %APPDATA%\Vflow\models; en dev → <proyecto>/models/
@@ -217,14 +187,13 @@ MEETINGS_DIR = os.getenv("MEETINGS_DIR", os.path.join(_DATA_DIR, "meetings"))
 #       insight stream. Vacío = apagado.
 
 # Capa inteligente del modo reunión (Insight Stream + acta LLM)
-# INSIGHTS_ENABLED: activa/desactiva temas-pendientes-propuestas en vivo + acta final.
-# INSIGHTS_BACKEND: 'groq' (default; reutiliza GROQ_API_KEY). 'local'/'endpoint' = siguiente fase.
-# INSIGHTS_MODEL: modelo LLM (Groq). 70B por defecto: calidad alta, ~$0.04/reunión.
+# INSIGHTS_ENABLED, INSIGHTS_BACKEND, INSIGHTS_MODEL, INSIGHTS_ENDPOINT_URL,
+# INSIGHTS_ENDPOINT_KEY, INSIGHTS_ENDPOINT_MODEL e INSIGHTS_ENDPOINT_MAX_TOKENS ya
+# NO tienen constante aquí (eran constantes muertas sin uso real — unidad 4.3); las
+# variables de entorno siguen vivas, releídas perezosamente en core/insights.py y
+# documentadas en ENV_CATALOG al final de este archivo.
 # INSIGHTS_MIN_WORDS / INSIGHTS_INTERVAL_SECONDS: disparo del rolling state por delta acumulado
 #   (cuántas palabras nuevas) O por tiempo, lo que ocurra primero. Prefiere callar a inventar.
-INSIGHTS_ENABLED = os.getenv("INSIGHTS_ENABLED", "true")
-INSIGHTS_BACKEND = os.getenv("INSIGHTS_BACKEND", "groq")
-INSIGHTS_MODEL = os.getenv("INSIGHTS_MODEL", "llama-3.3-70b-versatile")
 INSIGHTS_MIN_WORDS = int(os.getenv("INSIGHTS_MIN_WORDS", "30"))
 # Umbral reducido para la PRIMERA actualización: que el análisis aparezca pronto
 # (tras la primera ventana con algo de contenido) en vez de sentirse "congelado"
@@ -235,26 +204,12 @@ INSIGHTS_FIRST_WORDS = int(os.getenv("INSIGHTS_FIRST_WORDS", "12"))
 # Bajado de 90 a 60s para una cadencia más regular (evidencia: políticas adaptativas
 # y deltas pequeños/regulares se perciben más fluidos que saltos grandes y espaciados).
 INSIGHTS_INTERVAL_SECONDS = int(os.getenv("INSIGHTS_INTERVAL_SECONDS", "60"))
-# Backend 'endpoint' (servidor OpenAI-compatible: LM Studio en local, o servidor on-prem).
-# Camino B (probar modelos con LM Studio). El camino A (llama-cpp embebido) queda como
-# evolución futura cuando haya un modelo satisfactorio. Para LM Studio: INSIGHTS_BACKEND=endpoint,
-# INSIGHTS_ENDPOINT_URL=http://localhost:1234/v1, INSIGHTS_MODEL=<id del modelo, ej. qwen/qwen3.5-9b>.
-INSIGHTS_ENDPOINT_URL = os.getenv("INSIGHTS_ENDPOINT_URL", "http://localhost:1234/v1")
-INSIGHTS_ENDPOINT_KEY = os.getenv("INSIGHTS_ENDPOINT_KEY", "lm-studio")
-# Modelo para el backend 'endpoint' (LM Studio). Separado de INSIGHTS_MODEL (Groq) porque
-# los nombres difieren: así conmutar nube↔local desde el dashboard no rompe nada.
-# Recomendados (probados): qwen/qwen2.5-vl-7b (calidad) o llama-3.2-3b-instruct (rápido).
-INSIGHTS_ENDPOINT_MODEL = os.getenv("INSIGHTS_ENDPOINT_MODEL", "qwen/qwen2.5-vl-7b")
 # Consolidación por evento (paso D): una pasada que revisa el análisis con el transcript
 # completo (corrige deriva temprana, fusiona duplicados, añade lo que el incremental perdió).
 # Se dispara por cambio de tema (con cooldown) o como máximo cada N segundos. UNA sola pasada
 # (más iteraciones añaden alucinaciones, según la evidencia). 0 = desactivar consolidación.
 INSIGHTS_CONSOLIDATE_SECONDS = int(os.getenv("INSIGHTS_CONSOLIDATE_SECONDS", "240"))
 INSIGHTS_CONSOLIDATE_COOLDOWN = int(os.getenv("INSIGHTS_CONSOLIDATE_COOLDOWN", "120"))
-# Suelo de max_tokens para el endpoint: los modelos de razonamiento (Qwen3, R1) gastan
-# muchos tokens "pensando" antes del JSON; sin holgura se truncan y devuelven vacío.
-# Los modelos sin razonamiento paran antes (finish=stop), así que subirlo no los penaliza.
-INSIGHTS_ENDPOINT_MAX_TOKENS = int(os.getenv("INSIGHTS_ENDPOINT_MAX_TOKENS", "2500"))
 
 # Recording safety net
 MAX_RECORDING_SECONDS = 600  # Auto-stop forgotten recordings (e.g. hands-free mode)
@@ -269,3 +224,374 @@ DB_PATH = os.path.join(_DATA_DIR, "transcriptions.db")
 
 # Exported for other modules
 APP_DATA_DIR = _DATA_DIR
+
+
+# ---------------------------------------------------------------------------
+# ENV_CATALOG — catálogo único de variables de entorno (unidad 4.3, PLAN-MEJORAS)
+# ---------------------------------------------------------------------------
+# CONTRATO (opción A — registro documentado, NO una capa de indirección):
+#   - Fuente de verdad PROGRAMÁTICA de toda variable de entorno leída en el código
+#     de producción (main.py, config.py, core/, web/, db/, mcp_server/). Verificada
+#     por tests/test_env_catalog.py, que falla si el código y el catálogo divergen.
+#   - Los call-sites SIGUEN haciendo os.getenv(...)/os.environ.get(...) directamente
+#     en su propio archivo — la relectura perezosa (hot-reload: cambiar el valor
+#     desde el dashboard sin reiniciar la app) es intencional y SAGRADA. Este
+#     catálogo documenta, no envuelve ni reemplaza esas llamadas.
+#   - Claves por variable:
+#       default    -> el literal EXACTO pasado como default en el/los call-site(s)
+#                     REALES (consumidores en core/*, web/*, main.py; no el chequeo
+#                     de presencia de config.py previo al descifrado DPAPI de un
+#                     secreto — ver ENV_KNOWN_DIVERGENCES para esos casos).
+#                     None cuando el default NO es un literal (p. ej. un
+#                     os.path.join(...) o una constante de otro módulo): el test
+#                     de sincronía tolera y documenta estos casos por nombre, no
+#                     los compara por valor.
+#       kind       -> "static" (config.py lo lee UNA vez al arranque y lo expone
+#                     como constante que otros módulos importan) o "lazy" (se
+#                     relee en cada call-site).
+#       killswitch -> True si es un flag booleano on/off de una feature completa
+#                     (no un selector de modo/valor como "mic"/"system").
+#       doc        -> una línea en español explicando qué hace.
+#       dynamic    -> True si el/los call-site(s) reales leen la variable con un
+#                     NOMBRE COMPUTADO (no un string literal en el propio
+#                     os.getenv), por lo que el escaneo AST no puede encontrarlos
+#                     como lecturas nombradas de esta variable. Documentada aquí a
+#                     mano; el test de sincronía la excluye de la comprobación de
+#                     default (no hay AST que comparar) pero SÍ exige que exista.
+#       known_divergence -> nota (o None) de una divergencia de comportamiento real
+#                     y conocida entre call-sites, NO corregida en esta unidad
+#                     (deuda documentada en docs/PENDIENTES.md). El test de
+#                     sincronía la asserta explícitamente para AVISAR si el bug se
+#                     arregla algún día (en cuyo caso la nota sobra y debe borrarse).
+#
+#   ENV_KNOWN_DIVERGENCES (aparte): variables cuyo DEFAULT literal diverge entre
+#   call-sites de forma benigna (ambos valores son falsy y ningún código distingue
+#   entre ellos) — típicamente el chequeo de presencia de config.py antes de
+#   descifrar un secreto (`os.getenv("X")` → None) contra el default real usado
+#   por los consumidores (`os.getenv("X", "")` → ""). El test tolera exactamente
+#   los defaults listados en "allowed_defaults" para esa variable.
+# ---------------------------------------------------------------------------
+
+ENV_CATALOG = {
+    # --- Estáticas: leídas una vez en config.py, exportadas como constante ----
+    "MEETING_CHUNK_SECONDS": {
+        "default": "12", "kind": "static", "killswitch": False,
+        "doc": "Objetivo mínimo (segundos) de ventana de captura en modo reunión.",
+    },
+    "MEETING_CHUNK_MAX_SECONDS": {
+        "default": "22", "kind": "static", "killswitch": False,
+        "doc": "Tope máximo (segundos): corta la ventana aunque no haya pausa de silencio.",
+    },
+    "MEETING_POLL_SECONDS": {
+        "default": "1.0", "kind": "static", "killswitch": False,
+        "doc": "Cada cuántos segundos el loop de reunión revisa el buffer de audio.",
+    },
+    "MEETING_SILENCE_MS": {
+        "default": "400", "kind": "static", "killswitch": False,
+        "doc": "Ventana de cola (ms) para medir silencio y decidir el corte de ventana.",
+    },
+    "MEETING_SILENCE_RMS": {
+        "default": "0.012", "kind": "static", "killswitch": False,
+        "doc": "Umbral RMS (0-1): por debajo se considera silencio.",
+    },
+    "MEETINGS_DIR": {
+        "default": None, "kind": "static", "killswitch": False,
+        "doc": "Carpeta donde se exporta un .md por reunión (acta+transcript+frontmatter). "
+               "Default computado: <data dir>/meetings (no literal, ver nota de 'default').",
+    },
+    "INSIGHTS_MIN_WORDS": {
+        "default": "30", "kind": "static", "killswitch": False,
+        "doc": "Palabras nuevas acumuladas que disparan una actualización del Insight Stream.",
+    },
+    "INSIGHTS_FIRST_WORDS": {
+        "default": "12", "kind": "static", "killswitch": False,
+        "doc": "Umbral reducido para la PRIMERA actualización del Insight Stream (evita sensación de congelado).",
+    },
+    "INSIGHTS_INTERVAL_SECONDS": {
+        "default": "60", "kind": "static", "killswitch": False,
+        "doc": "Techo de tiempo (fallback) entre actualizaciones del Insight Stream aunque no se acumulen palabras.",
+    },
+    "INSIGHTS_CONSOLIDATE_SECONDS": {
+        "default": "240", "kind": "static", "killswitch": False,
+        "doc": "Intervalo máximo entre pasadas de consolidación del acta en vivo; 0 desactiva.",
+    },
+    "INSIGHTS_CONSOLIDATE_COOLDOWN": {
+        "default": "120", "kind": "static", "killswitch": False,
+        "doc": "Cooldown (segundos) entre consolidaciones disparadas por cambio de tema.",
+    },
+
+    # --- Transcripción / audio (lazy) -----------------------------------------
+    "TRANSCRIPTION_BACKEND": {
+        "default": "groq", "kind": "lazy", "killswitch": False,
+        "doc": "Backend de transcripción activo: 'groq' (API, requiere internet) o 'local' (faster-whisper offline).",
+    },
+    "LOCAL_WHISPER_MODEL": {
+        "default": "small", "kind": "lazy", "killswitch": False,
+        "doc": "Tamaño del modelo local: 'small' (~466 MB) o 'medium' (~1.5 GB).",
+    },
+    "LOCAL_MODEL_IDLE_MINUTES": {
+        "default": "10", "kind": "lazy", "killswitch": False,
+        "doc": "Minutos de inactividad antes de liberar el modelo local de RAM; 0 = nunca liberar.",
+    },
+    "GROQ_FALLBACK": {
+        "default": "false", "kind": "lazy", "killswitch": True,
+        "doc": "Si 'true', reintenta con Groq cuando el backend local falla (requiere GROQ_API_KEY).",
+    },
+    "AUDIO_SOURCE": {
+        "default": "mic", "kind": "lazy", "killswitch": False,
+        "doc": "Fuente de captura de audio: 'mic' o 'system' (WASAPI loopback).",
+    },
+    "VAD_ENABLED": {
+        "default": "true", "kind": "lazy", "killswitch": True,
+        "doc": "Aplica Silero VAD al audio antes de enviarlo a Groq para recortar silencios.",
+    },
+    "AUDIO_DEVICE_NAME": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Substring del nombre del micrófono a usar; vacío = dispositivo por defecto del sistema.",
+    },
+    "WHISPER_LANGUAGE": {
+        "default": "es", "kind": "lazy", "killswitch": False,
+        "doc": "Idioma de entrada para la transcripción (código Whisper).",
+    },
+    "TRANSLATE_TARGET_LANG": {
+        "default": "en", "kind": "lazy", "killswitch": False,
+        "doc": "Idioma destino para el modo traducción.",
+    },
+
+    # --- Secretos / API keys (lazy) -------------------------------------------
+    "GROQ_API_KEY": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Clave de API de Groq (se cifra con DPAPI en disco vía GROQ_API_KEY_ENC).",
+    },
+    "GROQ_API_KEY_ENC": {
+        "default": None, "kind": "lazy", "killswitch": False,
+        "doc": "Valor cifrado (DPAPI) de GROQ_API_KEY persistido en disco; variable interna, no se edita a mano.",
+    },
+    "ANTHROPIC_API_KEY": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Clave de API oficial de Anthropic para el backend de insights 'anthropic'.",
+    },
+    "ANTHROPIC_API_KEY_ENC": {
+        "default": None, "kind": "lazy", "killswitch": False,
+        "doc": "Valor cifrado (DPAPI) de ANTHROPIC_API_KEY; variable interna.",
+    },
+    "OPENROUTER_API_KEY": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Clave de API de OpenRouter para el backend de insights 'openrouter'.",
+    },
+    "OPENROUTER_API_KEY_ENC": {
+        "default": None, "kind": "lazy", "killswitch": False,
+        "doc": "Valor cifrado (DPAPI) de OPENROUTER_API_KEY; variable interna.",
+    },
+    "WEBHOOK_SECRET": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Secreto de firma HMAC-SHA256 del webhook saliente.",
+    },
+    "WEBHOOK_SECRET_ENC": {
+        "default": None, "kind": "lazy", "killswitch": False,
+        "doc": "Valor cifrado (DPAPI) de WEBHOOK_SECRET; variable interna.",
+    },
+
+    # --- Insights / backends LLM (lazy) ---------------------------------------
+    "INSIGHTS_ENABLED": {
+        "default": "true", "kind": "lazy", "killswitch": True,
+        "doc": "Activa/desactiva el Insight Stream (temas/pendientes/propuestas en vivo) y el acta final.",
+    },
+    "INSIGHTS_BACKEND": {
+        "default": "groq", "kind": "lazy", "killswitch": False,
+        "doc": "Backend LLM de insights (fallback global si no hay override por tarea): "
+               "groq | endpoint | openrouter | anthropic | claude-cli.",
+    },
+    "INSIGHTS_BACKEND_BATCH": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Override del backend de insights SOLO para tareas batch (acta/consolidación/chat); vacío = usa INSIGHTS_BACKEND.",
+    },
+    "INSIGHTS_BACKEND_LIVE": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Override del backend de insights SOLO para el análisis en vivo; vacío = usa INSIGHTS_BACKEND.",
+    },
+    "INSIGHTS_MODEL": {
+        "default": "llama-3.3-70b-versatile", "kind": "lazy", "killswitch": False,
+        "doc": "Modelo LLM para el backend Groq de insights.",
+    },
+    "INSIGHTS_ENDPOINT_URL": {
+        "default": "http://localhost:1234/v1", "kind": "lazy", "killswitch": False,
+        "doc": "URL del servidor OpenAI-compatible (LM Studio local u on-prem) para el backend 'endpoint'.",
+    },
+    "INSIGHTS_ENDPOINT_KEY": {
+        "default": "lm-studio", "kind": "lazy", "killswitch": False,
+        "doc": "API key para el backend 'endpoint' (LM Studio no la valida, pero el cliente OpenAI la exige).",
+    },
+    "INSIGHTS_ENDPOINT_MODEL": {
+        "default": "qwen/qwen2.5-vl-7b", "kind": "lazy", "killswitch": False,
+        "doc": "Modelo para el backend 'endpoint' (LM Studio).",
+    },
+    "INSIGHTS_ENDPOINT_MAX_TOKENS": {
+        "default": "2500", "kind": "lazy", "killswitch": False,
+        "doc": "Suelo de max_tokens para el backend 'endpoint' (modelos de razonamiento necesitan holgura).",
+    },
+    "INSIGHTS_FALLBACK": {
+        "default": "true", "kind": "lazy", "killswitch": True,
+        "doc": "Si 'true', reintenta con groq/openrouter cuando el backend primario de insights falla.",
+    },
+    "INSIGHTS_FALLBACK_COOLDOWN": {
+        "default": "300", "kind": "lazy", "killswitch": False,
+        "doc": "Segundos que el circuit breaker de fallback evita reintentar un backend roto.",
+    },
+    "OPENROUTER_MODEL": {
+        "default": "google/gemini-3.1-flash-lite", "kind": "lazy", "killswitch": False,
+        "doc": "Modelo LLM para el backend OpenRouter de insights.",
+    },
+    "OPENROUTER_BASE_URL": {
+        "default": "https://openrouter.ai/api/v1", "kind": "lazy", "killswitch": False,
+        "doc": "URL base de la API de OpenRouter.",
+    },
+    "OPENROUTER_REASONING_EFFORT": {
+        "default": "medium", "kind": "lazy", "killswitch": False,
+        "doc": "Esfuerzo de razonamiento extendido para OpenRouter cuando se solicita reasoning.",
+    },
+    "ASSISTANT_CONTEXT_BUDGET_CHARS": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Override manual (caracteres) del presupuesto de contexto del prompt; vacío = calculado por backend.",
+    },
+    "ANTHROPIC_MODEL_BATCH": {
+        "default": "claude-sonnet-5", "kind": "lazy", "killswitch": False,
+        "doc": "Modelo Anthropic para tareas batch (acta/consolidación/chat) cuando el backend activo es 'anthropic'.",
+    },
+    "ANTHROPIC_MODEL_LIVE": {
+        "default": "claude-haiku-4-5", "kind": "lazy", "killswitch": False,
+        "doc": "Modelo Anthropic para el análisis en vivo cuando el backend activo es 'anthropic'.",
+    },
+    "CLAUDE_CLI_PATH": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Ruta explícita al binario de Claude Code CLI; vacío = autodescubrir (PATH, npm global).",
+    },
+    "CLAUDE_CLI_MODEL_BATCH": {
+        "default": "sonnet", "kind": "lazy", "killswitch": False,
+        "doc": "Alias de modelo para tareas batch cuando el backend activo es 'claude-cli'.",
+        "known_divergence": (
+            "core/insights.py _model() (~línea 218) usa SIEMPRE esta variable para "
+            "backend='claude-cli', incluso cuando task='live' — nunca lee "
+            "CLAUDE_CLI_MODEL_LIVE desde esa función. El dispatch real de inferencia "
+            "(_chat_claude_cli, ~líneas 574-577) SÍ branchea correctamente por task. "
+            "Bug conocido, no corregido en unidad 4.3 (ver docs/PENDIENTES.md)."
+        ),
+    },
+    "CLAUDE_CLI_MODEL_LIVE": {
+        "default": "haiku", "kind": "lazy", "killswitch": False,
+        "doc": "Alias de modelo para el análisis en vivo cuando el backend activo es 'claude-cli'.",
+        "known_divergence": (
+            "Ver known_divergence de CLAUDE_CLI_MODEL_BATCH: _model() nunca lee esta "
+            "variable para backend='claude-cli' (siempre resuelve a CLAUDE_CLI_MODEL_BATCH "
+            "en esa función), aunque el dispatch real de inferencia sí la usa para task='live'."
+        ),
+    },
+
+    # --- Historial / retención (lazy) -----------------------------------------
+    "SAVE_HISTORY": {
+        "default": "true", "kind": "lazy", "killswitch": True,
+        "doc": "Si 'false', las transcripciones se pegan pero nunca se guardan en la base de datos.",
+    },
+    "HISTORY_RETENTION_DAYS": {
+        "default": "0", "kind": "lazy", "killswitch": False,
+        "doc": "Días de retención de transcripciones; 0 = conservar siempre. Se aplica al arrancar.",
+    },
+    "MEETING_RETENTION_DAYS": {
+        "default": "0", "kind": "lazy", "killswitch": False,
+        "doc": "Días de retención de reuniones (actas+transcripts); 0 = conservar siempre. Se aplica al arrancar.",
+    },
+
+    # --- Audio feedback / portapapeles (lazy) ---------------------------------
+    "SOUNDS_ENABLED": {
+        "default": "true", "kind": "lazy", "killswitch": True,
+        "doc": "Habilita los beeps de feedback de audio.",
+    },
+    "BEEP_VOLUME_STEPS": {
+        "default": "2", "kind": "lazy", "killswitch": False,
+        "doc": "Volumen del beep (1-10).",
+    },
+    "RESTORE_CLIPBOARD": {
+        "default": "false", "kind": "lazy", "killswitch": True,
+        "doc": "Si 'true', restaura el contenido del portapapeles tras pegar.",
+    },
+
+    # --- Webhook saliente (unidad 6.1, lazy) ----------------------------------
+    "WEBHOOK_ENABLED": {
+        "default": "false", "kind": "lazy", "killswitch": True,
+        "doc": "Activa el POST saliente firmado al cerrar una reunión persistida con acta.",
+    },
+    "WEBHOOK_URL": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "URL destino del webhook saliente (patrón Fireflies).",
+    },
+    "WEBHOOK_SCOPE": {
+        "default": "pendientes", "kind": "lazy", "killswitch": False,
+        "doc": "Alcance del payload del webhook: 'pendientes' o 'acta'.",
+    },
+    "WEBHOOK_ALLOW_LOCAL": {
+        "default": "false", "kind": "lazy", "killswitch": True,
+        "doc": "Si 'true', permite destinos loopback/privados como URL del webhook (desactiva la protección anti-SSRF).",
+    },
+    "PENDING_EXPORT_DIR": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Carpeta del dead-drop local de pendientes; vacío = desactivado.",
+    },
+
+    # --- Modos de dictado por app activa (unidad 6.3, lazy) -------------------
+    "DICTATION_MODES_ENABLED": {
+        "default": "false", "kind": "lazy", "killswitch": True,
+        "doc": "Activa el reformateo LLM post-dictado según la app en foco.",
+    },
+    "DICTATION_MODE_MAP": {
+        "default": None, "kind": "lazy", "killswitch": False,
+        "doc": "Mapa 'exe:preset,...' que asigna un preset de reformateo por ejecutable en foco. "
+               "Default computado: core.dictation_modes.DEFAULT_MODE_MAP (no literal).",
+    },
+
+    # --- Proactividad en reunión (Ola 5, lazy) --------------------------------
+    "PROACTIVE_MODE": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Modo proactivo: silent | copilot | trainer. El literal del getenv es '' "
+               "(no reconocido); core.proactive.get_mode() cae a 'copilot' por fallback interno.",
+    },
+    "PROACTIVE_DETECT_PREGUNTAS": {
+        "default": "true", "kind": "lazy", "killswitch": True, "dynamic": True,
+        "doc": "5.1: detección de preguntas sin responder.",
+    },
+    "PROACTIVE_DETECT_COMPROMISOS": {
+        "default": "true", "kind": "lazy", "killswitch": True, "dynamic": True,
+        "doc": "5.1: detección de compromisos adquiridos.",
+    },
+    "PROACTIVE_DETECT_ACUERDOS": {
+        "default": "true", "kind": "lazy", "killswitch": True, "dynamic": True,
+        "doc": "5.1: detección de acuerdos vagos (sin fecha/dueño).",
+    },
+    "PROACTIVE_DETECT_CRUZADA": {
+        "default": "true", "kind": "lazy", "killswitch": True,
+        "doc": "5.2: memoria cruzada en vivo (retrieval puro contra actas pasadas, cero LLM).",
+    },
+
+    # --- Copiloto con contexto OPS (unidad 7.1, lazy) -------------------------
+    "OPS_BRIEFING_PATH": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Ruta a un .md curado por el usuario, inyectado SOLO en el chat en vivo 'Preguntar'.",
+    },
+}
+
+# Divergencias de DEFAULT toleradas explícitamente (benignas: ambos valores son
+# falsy y ningún código distingue None de "" para estas 4 claves de secreto — ver
+# contrato arriba). config.py las lee sin default (None) SOLO en su chequeo de
+# presencia previo al descifrado DPAPI; todo consumidor real usa default "".
+ENV_KNOWN_DIVERGENCES = {
+    "GROQ_API_KEY": {"allowed_defaults": [None, ""]},
+    "ANTHROPIC_API_KEY": {"allowed_defaults": [None, ""]},
+    "OPENROUTER_API_KEY": {"allowed_defaults": [None, ""]},
+    "WEBHOOK_SECRET": {"allowed_defaults": [None, ""]},
+}
+
+# Variables de entorno del SISTEMA OPERATIVO (Windows) usadas para resolver rutas
+# (APPDATA para %APPDATA%\npm y el cwd neutro de claude-cli; SystemRoot/ProgramFiles*
+# para la blacklist anti-SSRF de PENDING_EXPORT_DIR). NO son configuración de Vflow
+# (el usuario nunca las setea en su .env) y quedan fuera de ENV_CATALOG a propósito;
+# tests/test_env_catalog.py las excluye explícitamente por este motivo.
+ENV_CATALOG_EXCLUDED_SYSTEM_VARS = {"APPDATA", "SystemRoot", "ProgramFiles", "ProgramFiles(x86)"}

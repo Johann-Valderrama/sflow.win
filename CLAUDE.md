@@ -494,6 +494,8 @@ Edit `config.py`:
 
 ### Environment Variables (`.env`)
 
+> Fuente de verdad programática: `config.ENV_CATALOG` (catálogo único, con default/kind/killswitch/doc por variable), verificada por `tests/test_env_catalog.py`. Esta lista es prosa para lectura humana; ante duda o drift, `ENV_CATALOG` manda.
+
 - `GROQ_API_KEY` — Your Groq API key (automatically encrypted)
 - `SAVE_HISTORY` (default: `true`) — Set to `false` to disable recording transcriptions to database
 - `HISTORY_RETENTION_DAYS` (default: `0`) — Auto-delete transcriptions older than N days; `0` keeps forever
