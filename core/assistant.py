@@ -677,6 +677,9 @@ def answer_live(message: str, history=None, max_tokens: int = 1024,
     live_extra = _template_live_extra(meeting)
     if live_extra:
         system_content += "\n\n" + live_extra
+    identity_line = insights.user_identity_line()
+    if identity_line:
+        system_content += "\n\n" + identity_line
     if meta.get("briefing_included"):
         # Instrucción condicional (unidad 7.1): solo se añade cuando el briefing
         # se incluyó DE VERDAD en el contexto (no sacrificado por la válvula, no
@@ -774,7 +777,11 @@ def answer(db, message: str, history=None, meeting_id=None, max_tokens: int = 10
         context = ""
         used = []
 
-    system_content = ASSISTANT_SYSTEM + "\n\n" + context
+    system_content = ASSISTANT_SYSTEM
+    identity_line = insights.user_identity_line()
+    if identity_line:
+        system_content += "\n\n" + identity_line
+    system_content += "\n\n" + context
 
     messages = [{"role": "system", "content": system_content}]
 

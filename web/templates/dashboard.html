@@ -800,6 +800,33 @@
                 </div>
             </div>
 
+            <!-- Sección: Identidad (unidad 5.2) -->
+            <div class="set-sec collapsed" id="sec-identity" style="--sec-accent:rgba(52,211,153,.6)">
+                <button type="button" class="set-sec-head" onclick="toggleSetSec('identity')" aria-expanded="false" aria-controls="sec-identity-body">
+                    <span class="set-sec-title"><svg class="set-sec-chev ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span class="set-dot" style="background:rgba(52,211,153,.85)"></span>Identidad</span>
+                    <span class="set-sec-toggle"><span class="set-sec-toggle-label">Mostrar</span></span>
+                </button>
+                <div id="sec-identity-body" class="set-sec-body space-y-3">
+                    <p class="text-xs text-white/55">Tu nombre, rol y dominio se usan para que las actas y los pendientes atribuyan responsable real (p. ej. "Yo" → tu nombre) en lugar de quedarse genéricos. <strong>Apagado por defecto</strong> (nombre vacío = sin efecto).</p>
+                    <div>
+                        <label for="cfg-user-name" class="text-xs text-white/55 block mb-1">Nombre</label>
+                        <input type="text" id="cfg-user-name" placeholder="Johann" autocomplete="off"
+                            class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-emerald-500/60 focus:border-white/45 w-full">
+                    </div>
+                    <div>
+                        <label for="cfg-user-role" class="text-xs text-white/55 block mb-1">Rol (opcional)</label>
+                        <input type="text" id="cfg-user-role" placeholder="Fundador" autocomplete="off"
+                            class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-emerald-500/60 focus:border-white/45 w-full">
+                    </div>
+                    <div>
+                        <label for="cfg-user-domain" class="text-xs text-white/55 block mb-1">Dominio (opcional)</label>
+                        <input type="text" id="cfg-user-domain" placeholder="SaaS ambiental" autocomplete="off"
+                            class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-emerald-500/60 focus:border-white/45 w-full">
+                        <p class="text-xs text-white/40 mt-1">Tu nombre entra en las actas guardadas (visibles para clientes MCP conectados) y en los prompts de análisis. No se inyecta en vivo con el modo proactivo "Silencioso".</p>
+                    </div>
+                </div>
+            </div>
+
             <!-- Sección: API Keys -->
             <div class="set-sec collapsed" id="sec-apikeys" style="--sec-accent:rgba(251,191,36,.6)">
                 <button type="button" class="set-sec-head" onclick="toggleSetSec('apikeys')" aria-expanded="false" aria-controls="sec-apikeys-body">
@@ -1692,6 +1719,10 @@
             document.getElementById('cfg-dictation-mode-map').value = settings.dictation_mode_map || '';
             // Copiloto con contexto OPS — briefing v1 (unidad 7.1)
             document.getElementById('cfg-ops-briefing-path').value = settings.ops_briefing_path || '';
+            // Identidad del usuario en prompts (unidad 5.2)
+            document.getElementById('cfg-user-name').value = settings.user_name || '';
+            document.getElementById('cfg-user-role').value = settings.user_role || '';
+            document.getElementById('cfg-user-domain').value = settings.user_domain || '';
             // Retención opcional de reuniones (unidad 3.2)
             const meetingRetDays = settings.meeting_retention_days || 0;
             const meetingRetSelect = document.getElementById('cfg-meeting-retention-days');
@@ -1730,6 +1761,9 @@
                 dictation_modes_enabled: document.getElementById('cfg-dictation-modes-enabled').checked ? 'true' : 'false',
                 dictation_mode_map: document.getElementById('cfg-dictation-mode-map').value.trim(),
                 ops_briefing_path: document.getElementById('cfg-ops-briefing-path').value.trim(),
+                user_name: document.getElementById('cfg-user-name').value.trim(),
+                user_role: document.getElementById('cfg-user-role').value.trim(),
+                user_domain: document.getElementById('cfg-user-domain').value.trim(),
                 meeting_retention_days: document.getElementById('cfg-meeting-retention-days').value,
             };
             await fetch('/api/settings', {

@@ -619,6 +619,55 @@ def _chat_claude_cli(messages: list, *, task: str = "live", json_mode: bool = Fa
 
 
 # ---------------------------------------------------------------------------
+# Identidad del usuario en prompts (unidad 5.2)
+# ---------------------------------------------------------------------------
+# Contexto personal opt-in (USER_NAME/USER_ROLE/USER_DOMAIN, lazy, ver
+# config.ENV_CATALOG): una línea de identidad que se inyecta en los system
+# prompts para que las actas/pendientes atribuyan responsable real ("Yo" ->
+# nombre) en lugar de quedarse genéricas. La coletilla anti-atribución es
+# OBLIGATORIA: los prompts de insights ya tienen reglas estrictas "prefiere
+# OMITIR a inventar" que esta línea no debe erosionar.
+
+def user_identity_line() -> str:
+    """Línea de identidad del usuario, o "" si USER_NAME no está seteado (apagado).
+
+    USER_ROLE/USER_DOMAIN son opcionales y solo complementan cuando hay nombre.
+    Lectura perezosa (sin caché): hot-reload sin reiniciar la app, igual que el
+    resto de flags lazy de la app.
+    """
+    name = os.getenv("USER_NAME", "").strip()
+    if not name:
+        return ""
+    role = os.getenv("USER_ROLE", "").strip()
+    domain = os.getenv("USER_DOMAIN", "").strip()
+    parts = [f"El usuario se llama {name}"]
+    if role:
+        parts.append(f"su rol es {role}")
+    if domain:
+        parts.append(f"su dominio es {domain}")
+    sentence = ", ".join(parts) + "."
+    return (
+        f"{sentence} Usa su nombre SOLO donde hoy usarías \"Yo\" (p. ej. responsable "
+        "de un pendiente); NO atribuyas nada a nadie sin evidencia explícita en el "
+        "transcript."
+    )
+
+
+def _identity_line_for_live() -> str:
+    """Línea de identidad para el Insight Stream (update_state), con gate de
+    privacidad: en modo proactivo "silent" (pantalla compartida) NO se inyecta,
+    mismo criterio que el briefing OPS (core/assistant.py _briefing_block_for_live).
+    Fail-safe: "" ante cualquier error al resolver el modo (nunca rompe el stream)."""
+    try:
+        from core import proactive as _proactive  # noqa: PLC0415 — evita ciclo de import
+        if _proactive.get_mode() == "silent":
+            return ""
+    except Exception:  # noqa: BLE001
+        return ""
+    return user_identity_line()
+
+
+# ---------------------------------------------------------------------------
 # Insight Stream (rolling state)
 # ---------------------------------------------------------------------------
 
@@ -767,6 +816,9 @@ def update_state(state: dict, delta_text: str, *, detections_out: "dict | None" 
             listed = "\n".join(f"- {str(t).strip()}" for t in ya_reportadas if str(t).strip())
             if listed:
                 user_content += f"\n\nYA_REPORTADAS (no repetir en 'detecciones'):\n{listed}"
+    identity_line = _identity_line_for_live()
+    if identity_line:
+        system_content = system_content + "\n\n" + identity_line
     try:
         content = _chat(
             messages=[
@@ -1285,6 +1337,9 @@ def generate_minutes(transcript: str, insights: dict | None = None,
         acta_extra = _templates.get(template).get("acta_extra") or ""
         if acta_extra:
             system_content = f"{_MINUTES_SYSTEM}\n\n{acta_extra}"
+    identity_line = user_identity_line()
+    if identity_line:
+        system_content = f"{system_content}\n\n{identity_line}"
 
     extra = ""
     if insights:

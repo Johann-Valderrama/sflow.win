@@ -186,6 +186,18 @@ MEETINGS_DIR = os.getenv("MEETINGS_DIR", os.path.join(_DATA_DIR, "meetings"))
 #       en el chat en vivo "Preguntar" (core/assistant.py answer_live), nunca en el
 #       insight stream. Vacío = apagado.
 
+# Identidad del usuario en prompts (unidad 5.2) — flags de entorno de lectura
+# PEREZOSA (se leen en cada llamada, en core/insights.py y core/assistant.py, NO
+# aquí: así se actualizan sin reiniciar la app). OPT-IN: USER_NAME vacío = apagado,
+# nada se inyecta en ningún prompt.
+#   USER_NAME (default "")   — nombre del usuario; motor de la feature. Se inyecta
+#       como 1 línea de identidad en el Insight Stream (solo si el modo proactivo
+#       no es "silent"), en el acta batch (generate_minutes) y en el Asistente de
+#       reuniones (answer/answer_live), siempre con coletilla anti-atribución.
+#   USER_ROLE (default "")   — rol del usuario; solo complementa si hay USER_NAME.
+#   USER_DOMAIN (default "") — dominio/industria del usuario; solo complementa si
+#       hay USER_NAME.
+
 # Capa inteligente del modo reunión (Insight Stream + acta LLM)
 # INSIGHTS_ENABLED, INSIGHTS_BACKEND, INSIGHTS_MODEL, INSIGHTS_ENDPOINT_URL,
 # INSIGHTS_ENDPOINT_KEY, INSIGHTS_ENDPOINT_MODEL e INSIGHTS_ENDPOINT_MAX_TOKENS ya
@@ -575,6 +587,20 @@ ENV_CATALOG = {
     "OPS_BRIEFING_PATH": {
         "default": "", "kind": "lazy", "killswitch": False,
         "doc": "Ruta a un .md curado por el usuario, inyectado SOLO en el chat en vivo 'Preguntar'.",
+    },
+
+    # --- Identidad del usuario en prompts (unidad 5.2, lazy) -------------------
+    "USER_NAME": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Nombre del usuario; motor de la feature. Vacío = apagado (nada se inyecta).",
+    },
+    "USER_ROLE": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Rol del usuario (opcional); solo complementa si USER_NAME está seteado.",
+    },
+    "USER_DOMAIN": {
+        "default": "", "kind": "lazy", "killswitch": False,
+        "doc": "Dominio/industria del usuario (opcional); solo complementa si USER_NAME está seteado.",
     },
 }
 

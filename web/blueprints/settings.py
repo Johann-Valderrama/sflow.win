@@ -94,6 +94,10 @@ def get_settings():
         "dictation_mode_map": os.getenv("DICTATION_MODE_MAP", _dictation_modes.DEFAULT_MODE_MAP),
         # Copiloto con contexto OPS — briefing v1 (unidad 7.1)
         "ops_briefing_path": os.getenv("OPS_BRIEFING_PATH", ""),
+        # Identidad del usuario en prompts (unidad 5.2)
+        "user_name": os.getenv("USER_NAME", ""),
+        "user_role": os.getenv("USER_ROLE", ""),
+        "user_domain": os.getenv("USER_DOMAIN", ""),
         # Retención opcional de reuniones (unidad 3.2). Default 0 = conservar
         # siempre; es la única operación destructiva de este plan, por eso
         # _safe_int_env nunca deja que un valor corrupto tumbe este GET.
@@ -140,6 +144,10 @@ def update_settings():
         "dictation_mode_map": "DICTATION_MODE_MAP",
         # Copiloto con contexto OPS — briefing v1 (unidad 7.1)
         "ops_briefing_path": "OPS_BRIEFING_PATH",
+        # Identidad del usuario en prompts (unidad 5.2)
+        "user_name": "USER_NAME",
+        "user_role": "USER_ROLE",
+        "user_domain": "USER_DOMAIN",
         # Retención opcional de reuniones (unidad 3.2)
         "meeting_retention_days": "MEETING_RETENTION_DAYS",
     }
