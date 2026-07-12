@@ -16,17 +16,25 @@ from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Stubs de dependencias opcionales que pueden no estar instaladas en el env
-# de test (ej. groq SDK). Deben existir antes de importar insights.
+# de test (ej. groq SDK). Solo se stubbean si de verdad FALTA el paquete real
+# (try/except ImportError), nunca por un "if 'x' not in sys.modules" — ese
+# check es frágil dentro de una suite pytest compartida (tests/): el orden de
+# colección determina si el paquete real ya fue importado por OTRO archivo, y
+# si este módulo se colecciona antes, el check reemplaza permanentemente el
+# 'requests' real por un MagicMock para el resto de la sesión (rompía
+# tests/test_webhook.py, que necesita un requests.post real). Fix U2.2.
 # ---------------------------------------------------------------------------
 
-# Stub del módulo 'groq' si no está instalado
-if "groq" not in sys.modules:
+try:
+    import groq  # noqa: F401
+except ImportError:
     groq_stub = types.ModuleType("groq")
     groq_stub.Groq = MagicMock()
     sys.modules["groq"] = groq_stub
 
-# Stub del módulo 'requests' si no está instalado (env de test sin dependencias)
-if "requests" not in sys.modules:
+try:
+    import requests  # noqa: F401
+except ImportError:
     requests_stub = types.ModuleType("requests")
     requests_stub.post = MagicMock()
 
@@ -36,9 +44,9 @@ if "requests" not in sys.modules:
     requests_stub.RequestException = _RequestException
     sys.modules["requests"] = requests_stub
 
-# Stub mínimo de 'config' si existe; insights no lo importa directamente,
-# pero por si alguna importación transitiva lo necesita.
-if "config" not in sys.modules:
+try:
+    import config  # noqa: F401
+except ImportError:
     config_stub = types.ModuleType("config")
     sys.modules["config"] = config_stub
 
@@ -77,6 +85,14 @@ BASE_ENV = {
     "OPENROUTER_MODEL": "google/gemini-2.5-flash",
     "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
     "INSIGHTS_BACKEND": "groq",
+    # Vacíos a propósito: en el entorno real de este proyecto el .env configura
+    # INSIGHTS_BACKEND_LIVE/BATCH="claude-cli" (uso de la suscripción Claude Max,
+    # ver memoria del proyecto). _resolve_backend() da precedencia al per-task
+    # sobre el global — sin limpiar esto aquí, estos tests terminan invocando el
+    # CLI real de Claude en vez del backend mockeado que cada caso pretende
+    # ejercitar. Fix U2.2 (hermeticidad al mover este archivo a tests/).
+    "INSIGHTS_BACKEND_LIVE": "",
+    "INSIGHTS_BACKEND_BATCH": "",
     "INSIGHTS_ENDPOINT_URL": "http://localhost:1234/v1",
     "INSIGHTS_ENDPOINT_KEY": "lm-studio",
     "INSIGHTS_ENDPOINT_MODEL": "qwen/qwen2.5-vl-7b",

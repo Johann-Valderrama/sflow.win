@@ -52,11 +52,27 @@ def _make_openrouter_response(content: str = "respuesta canned"):
 
 class TestReasoningPayload(unittest.TestCase):
 
+    _ENV_KEYS = (
+        "INSIGHTS_BACKEND_BATCH", "INSIGHTS_BACKEND", "OPENROUTER_API_KEY", "OPENROUTER_MODEL",
+    )
+
     def setUp(self) -> None:
+        # Fix U2.2 (hermeticidad al mover este archivo a tests/): el setUp original
+        # no tenía tearDown, así que estas env vars quedaban puestas para el resto
+        # de la sesión de pytest y contaminaban archivos que corren después
+        # alfabéticamente (p. ej. tests/test_webhook.py).
+        self._orig_env = {k: os.environ.get(k) for k in self._ENV_KEYS}
         os.environ["INSIGHTS_BACKEND_BATCH"] = "openrouter"
         os.environ["INSIGHTS_BACKEND"] = "openrouter"
         os.environ["OPENROUTER_API_KEY"] = "fake-key-test"
         os.environ["OPENROUTER_MODEL"] = "google/gemini-3.1-flash-lite"
+
+    def tearDown(self) -> None:
+        for k, orig in self._orig_env.items():
+            if orig is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = orig
 
     def _run_with_fake_requests(self, reasoning_flag: bool):
         import builtins

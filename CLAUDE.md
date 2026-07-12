@@ -76,6 +76,25 @@ The built app is in `dist\Vflow\Vflow.exe`. On first launch, if no API key exist
 - **Política de versiones**: no añadir paquetes con menos de 30 días en PyPI (riesgo de typosquatting / supply-chain). Verifica la fecha de publicación en https://pypi.org/project/<paquete>/#history antes de añadir una dependencia nueva.
 - **Auditoría**: `build.bat` ejecuta `pip-audit` como paso previo (solo warning, no aborta). Para auditoría manual: `pip-audit -r requirements.lock`.
 
+### Testing
+
+Comando canónico de la suite (desde la raíz del repo):
+
+```bash
+venv\Scripts\python.exe -m pytest
+```
+
+`pytest.ini` fija `testpaths = tests`, así que `pytest` a secas (con o sin `-q`) SIEMPRE
+colecta solo `tests/*.py` — nunca los scripts sueltos de la raíz. `test_loopback.py` y
+`test_dual_capture.py` son diagnósticos de **hardware real** (micrófono + loopback del
+sistema); se corren a mano cuando hace falta depurar audio, nunca como parte de la suite
+automatizada:
+
+```bash
+venv\Scripts\python.exe test_loopback.py
+venv\Scripts\python.exe test_dual_capture.py
+```
+
 ## Permissions Required
 
 - **Administrator** (optional): May be needed for global hotkeys in some apps
