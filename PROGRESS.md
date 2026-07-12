@@ -16,6 +16,33 @@
 > locales, sin push. 1 unidad = 1 commit.
 
 ## PARA JOHANN (PLAN-MEJORAS)
+- **🙋 DECISIÓN 5.6/5.7 — Dos features nuevas de la investigación de mercado, especificadas en el
+  plan pero que NO elegiste en D4** (por eso no corren solas): **5.6** = tus notas rápidas de reunión
+  se expanden solas con lo dicho en el transcript al cerrar (estilo Granola; tu texto literal nunca
+  se pierde). **5.7** = panel "Privacidad" que muestra qué datos salieron de tu máquina y cuándo
+  (con backend local muestra cero egresos — el argumento de venta).
+  - **A (recomendada)**: ambas → se ejecutan como cola de la Ola 5 en ventana nueva (validadas por
+    el producto de culto de la categoría + pitch de privacidad; costo medio).
+  - **B**: solo una (di cuál).
+  - **C**: ninguna por ahora → quedan en backlog, nada se pierde.
+  Responde "5.6/5.7: A/B(cuál)/C".
+- **G2 Ola 5 — Prueba física de las 5 features nuevas** (10 min, con la app reiniciada tras
+  estos commits): (1) Ajustes → Identidad: pon tu nombre, cierra una reunión corta con un
+  compromiso tuyo → el pendiente del acta debería decir tu nombre, no "Yo". (2) Ajustes →
+  carpeta de pendientes = `C:\OPS\_inbox-vflow\` → cierra una reunión CON pendientes → aparece
+  `vflow-pendientes-...md` (YAML arriba, checklist abajo); una reunión SIN pendientes no debe
+  crear archivo. (3) En una reunión real, NO pulses AltGr+H: al abrirla luego en /reunion,
+  la sección "⭐ Momentos" puede traer entradas con badge "auto" — juzga si te parecen momentos
+  reales (si molestan: Ajustes/env `AUTO_HIGHLIGHTS_ENABLED=false`); el acta (momentos
+  destacados) debe seguir mostrando SOLO los tuyos manuales. (4) /reunion → historial →
+  selecciona 2-3 reuniones → "Chatear con N reuniones" → prueba el chip "Email de seguimiento"
+  → Copiar y "Exportar a OPS" (debe caer en `_inbox-vflow\entregables\`). (5) Con backend groq:
+  Ajustes → activa "Respaldo local sin internet" (requiere modelo local descargado), corta el
+  wifi y dicta → debería pegar texto igual (aviso "transcribiendo con el modelo local") y al
+  volver el wifi, el siguiente dictado (tras ~2 min) vuelve solo a Groq. G3 visual: mirada
+  rápida a la sección Identidad, "⭐ Momentos" y el overlay del chat multi (los screenshots de
+  la verificación automática no estuvieron disponibles en este entorno; el estado computado sí
+  se verificó).
 - **🙋 DECISIÓN 4.4 — ¿Reordenamos también core/ por features?** (la web ya quedó partida en
   la Ola 4; core/ sigue siendo archivos sueltos: meeting.py, insights.py, transcriber.py...).
   Reordenarlo deja fronteras limpias para la capa de agentes (4.5) y el crecimiento a móvil,
@@ -98,22 +125,51 @@
     (no bloquean el run).
 
 ## En curso (PLAN-MEJORAS)
-- [ ] Ola 5 — Producto (D4: las 4 + 5.5 elegida; orden 5.2 → 5.4 → 5.1 → 5.3 → 5.5, + encaje
-  de 5.6/5.7 del Apéndice C). PENDIENTE de ventana nueva.
-  - Next action: **ventana nueva con el Kickoff Ola 5** (o el Orquestador Autónomo, que la
+- [ ] Ola 6 — FASE3 heredada (D5: ambas → 6.1 mute al dictar + 6.2 hotkeys configurables).
+  PENDIENTE de ventana nueva.
+  - Next action: **ventana nueva con el Kickoff Ola 6** (o el Orquestador Autónomo, que la
     retoma). Régimen: antes del 13 jul 01:59 AM Colombia dirige Fable 5; después Opus 4.8.
-    Primera tarea de esa ventana: **debate adversarial de la ola** (regla 6 del kickoff; Opus
-    4.8 high con código real) sobre las unidades elegidas — EXCEPTO el contrato de 5.4/4.5 que
-    YA está debatido y aprobado (docs/CONTRATO-MACROSISTEMA.md, gates G1/G-agent resueltos por
-    Johann: 5.4 se implementa DIRECTO contra ese contrato, buzón C:\OPS\_inbox-vflow\). El
-    debate debe decidir además el encaje de 5.6 (notas híbridas Granola) y 5.7 (panel de
-    privacidad) como unidades de esta ola o posteriores. Tras Ola 5: Ola 6 (re-validar
-    docs/FASE3_SPEC.md primero, D5: ambas). 4.5 (superficie agéntica MCP+CLI) espera el
-    cierre del reorden (decisión 4.4 de Johann) y se implementa contra el contrato.
-  - Hotspots a serializar: core/meeting.py (5.1, 5.6), core/insights.py (5.1, 5.2, 5.7),
-    core/transcriber.py (5.5, 5.7), web (5.3, 5.7).
+    Primera tarea DURA de esa ventana: re-validar docs/FASE3_SPEC.md contra el código actual
+    (el spec está desactualizado a sabiendas) y registrar la reconciliación aquí; el debate
+    adversarial ataca ESA reconciliación, no el spec original. 6.1 exige pycaw (política de
+    dependencias: 30 días en PyPI + requirements.in + lock regenerado con hashes). Tras Ola 6:
+    si Johann responde 5.6/5.7 (pregunta en PARA JOHANN) se abre su cola como unidades nuevas;
+    4.4 (encarpetar core/) y 4.5 (superficie agéntica MCP+CLI, contrato ya aprobado) esperan
+    la decisión 4.4 de Johann.
 
 ## Completado (PLAN-MEJORAS, cont.)
+- [x] **OLA 5 COMPLETA** (2026-07-12 tarde, ventana 3, director @fable-5, debate @opus-4.8,
+  ejecutores 5×@sonnet-5; 6 commits, suite 636 → 766 pass / 0 fail). Debate adversarial de la
+  ola previo (APROBAR CON CAMBIOS, 16 objeciones, todas reconciliadas — ver Decisiones).
+  Unidades (orden ejecutado 5.2 → 5.4 → 5.1 → 5.3 → 5.5):
+  - 5.2 contexto personal (953b545): USER_NAME/ROLE/DOMAIN lazy + user_identity_line() con
+    coletilla anti-atribución; gate silent en vivo (mismo criterio que el briefing); UI
+    "Identidad" en Ajustes con nota de privacidad. +15 tests.
+  - 5.4 pendientes → OPS (7de1fe7): contrato de tarea v1 (CONTRATO-MACROSISTEMA Parte A) —
+    YAML schema_version 1, gate ≥1 pendiente (O7), create-only con instalacion+hash8 (O3),
+    machine_id persistido, guard SAVE_HISTORY pineado. +14 tests (3 viejos reemplazados).
+  - 5.1 auto-highlights (e692433): momentos_out en update_state (cero LLM extra), max_tokens
+    live 1200→1800 + guardián de no-truncado, source auto/manual en highlights_json con
+    retrocompat, invariante F12 pineada (acta solo manuales), dedup 2s/5s, visor con badge.
+    Calibración real: 4 reuniones, 15 ventanas, 3 candidatos grounded, 0 spam → default true.
+    +34 tests.
+  - 5.3 chat cross-reunión + entregables (9a9e6e4): answer_multi (cap 12 por recencia,
+    actas-nunca-transcripts, presupuesto budget_chars, exclusiones declaradas, citar
+    fecha+reunión), 3 plantillas, endpoints chat-multi y deliverable-export (subcarpeta
+    entregables/, prefijo vflow-entregable-), UI selección+overlay verificada por estado
+    computado en navegador. +36 tests.
+  - hotfix (dce56e7): tests de stop() escribían machine_id.txt en la raíz del repo con
+    PENDING_EXPORT_DIR seteado en el entorno dev → gate O7 antes de get_machine_id() +
+    fixture de aislamiento (PENDING_EXPORT_DIR/WEBHOOK_ENABLED/APP_DATA_DIR) + gitignore.
+  - 5.5 fallback online↔local (433a8f4): TRANSCRIPTION_FALLBACK (indep. de GROQ_FALLBACK) +
+    _is_network_error + breaker 120s + warmup al abrir + seek(0); scope SOLO dictado vía
+    kwarg net_fallback (reunión/URL intactas, pineado); notificación tray sin Qt en core/;
+    checkbox visible solo con backend groq (verificado computed-state en navegador). +36 tests.
+  - Cierre: CLAUDE.md actualizado (sección 18 nueva, dead-drop v1 en sección 16, env vars
+    nuevas); 5.6/5.7 como pregunta opt-in en PARA JOHANN; screenshots de navegador no
+    disponibles en el entorno del run (timeout de la tool) → la pasada visual queda en G2/G3.
+
+## Completado (PLAN-MEJORAS, cont. 2)
 - [x] **OLA 4 COMPLETA en su parte ejecutable** (2026-07-12, ventana 2, director @fable-5,
   ejecutores 3×@sonnet-5; 5 commits, suite 617 → 636 pass / 0 fail; 4.4 queda como GATE de
   Johann y 4.5 espera el reorden — ver PARA JOHANN).
@@ -206,6 +262,45 @@
   6 tests nuevos de carrera. Suite 346 pass / 10 preexistentes, 0 regresiones.
 
 ## Decisiones (PLAN-MEJORAS, append-only)
+- 2026-07-12 **Debate adversarial Ola 5** (Fable propone, Opus 4.8 ataca con código real post-Ola 4;
+  veredicto APROBAR CON CAMBIOS, 16 objeciones). Reconciliación (respuesta a CADA una):
+  · A1 (ALTA, 5.1) "render diferenciado en acta" irrealizable por passthrough (momentos_destacados sin
+  identidad por-ítem, _normalize_momentos gatea por highlights manuales) → ACEPTADA: los auto-highlights
+  NO tocan momentos_destacados ni el acta; van a store propio `_auto_highlights` y se persisten en
+  highlights_json con `source:"auto"` (manuales `source:"manual"`; entradas viejas sin source = manual);
+  render con badge solo en dashboard/HUD + visibles vía highlights_json en MCP.
+  · A2 (MED, 5.1) highlights_json sin campo source → ACEPTADA: se añade source con retrocompat.
+  · A3 (ALTA, 5.1) tercera intención en update_state con max_tokens=1200 trunca JSON y congela el panel →
+  ACEPTADA: max_tokens live sube a 1800, candidatos cap a 2 por ventana con salida corta {t, razon},
+  test guardián de no-truncado; se mantiene en update_state (consolidate perdería granularidad de t).
+  · A4 (ALTA, 5.1) anexar autos a self._highlights debilita el gate anti-alucinación F12 → ACEPTADA:
+  los autos JAMÁS entran a self._highlights ni al gate F12; test que lo verifica.
+  · B1 (MED, 5.4) export_pendientes actual viola O3/O7/naming del contrato → ACEPTADA: se REESCRIBE
+  (create-only "x", gate ≥1 pendiente, naming instalacion+hash8), no "evolución suave".
+  · B2 (BAJA, 5.4) machine_id no existe → ACEPTADA: se crea (persistido en dir de datos de la app).
+  · B3 (MED, 5.4) guard meeting_id None sostiene SAVE_HISTORY → ACEPTADA: guard se preserva + test.
+  · C1 (ALTA, 5.3) FTS 200 + N sin límite desborda presupuesto → ACEPTADA: cap duro 12 actas por
+  recencia ANTES de cargar, truncado declarado en la respuesta.
+  · C2 (5.3) CSRF hereda por before_request global → sin objeción (verificado por el adversario).
+  · C3 (MED, 5.3) entregables al mismo dir que el inbox de tareas confunde al consumidor → ACEPTADA:
+  subcarpeta `entregables/` + prefijo `vflow-entregable-` (nunca `vflow-pendientes-*`).
+  · D1 (ALTA, 5.5) Transcriber.transcribe/translate es COMPARTIDO con reunión/URL → ACEPTADA: kwarg
+  `net_fallback=False` (patrón return_raw); solo el dictado en main.py pasa True.
+  · D2 (MED, 5.5) buffer posicionado tras fallo de red → ACEPTADA: seek(0) en el path de respaldo.
+  · D3 (MED, 5.5) unificar flags rompe guard-tests de ENV_CATALOG → ACEPTADA: NO se unifica;
+  TRANSCRIPTION_FALLBACK var nueva independiente, GROQ_FALLBACK intacta, relación documentada.
+  · D4 (BAJA, 5.5) doble latencia (timeout red + warmup CTranslate2) → MITIGADA: al abrir el breaker
+  se dispara warmup del modelo local en hilo daemon fire-and-forget; 1er dictado post-fallo paga
+  warmup, siguientes no; notificación tray "transcrito localmente (sin internet)".
+  · E1 (MED, 5.2) USER_* entra a artefactos persistidos/MCP sin gate silent → ACEPTADA parcial: la
+  inyección EN VIVO (update_state) respeta el mismo gate silent que el briefing 7.1; acta y chat la
+  llevan siempre (es el propósito de la feature: atribución); nota de privacidad en Ajustes.
+  · E2 (BAJA, 5.2) identidad en prompt anti-callar induce atribución inventada → MITIGADA: la línea
+  inyectada instruye "usa el nombre SOLO donde hoy dirías Yo; no atribuyas sin evidencia".
+  · Encaje 5.6/5.7: acuerdo — NO corren en este run (sin elección explícita de Johann); quedan como
+  pregunta opt-in abajo en PARA JOHANN.
+  · Desviación de estampa: 5.2 sube de Haiku 4.5 med a Sonnet 5 med (el gate silent E1 + fraseo E2
+  añaden juicio; regla §2.0 "ante la duda, sube"). : gatillo regla 6 del kickoff : @fable-5 + @opus-4.8
 - 2026-07-12 **Debate adversarial Ola 4 / unidad 4.0** (director Opus 4.8 propone el diseño de extracción,
   adversario Opus 4.8 ataca con código real; veredicto APROBAR CON CAMBIOS; 7 objeciones, todas aceptadas —
   2 no-op/BAJA). Diseño FINAL reconciliado en **`docs/OLA4-DISENO-EXTRACCION.md`** (sección "RECONCILIACIÓN

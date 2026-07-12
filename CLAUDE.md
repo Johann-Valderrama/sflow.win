@@ -367,10 +367,14 @@ dictado de superwhisper/Wispr Flow (ver `docs/PENDIENTES.md`).
   por default; re-valida en cada reintento (mitiga rebinding básico, sin pinning de IP al socket,
   limitación documentada). Envío fire-and-forget en hilo daemon (timeout 10s + 3 reintentos con
   backoff exponencial); un fallo JAMÁS propaga a `stop()`. Con `meeting_id` `None` (historial
-  apagado o insert fallido) no se envía nada. **Dead-drop local** (`PENDING_EXPORT_DIR`): escribe
-  siempre `vflow-pendientes-<id>-<fecha>.md` con checklist markdown de pendientes, webhook
-  activado o no. El secreto `WEBHOOK_SECRET` se cifra con DPAPI (mismo mecanismo que
-  `GROQ_API_KEY`), write-only (el GET de settings solo expone `has_webhook_secret`).
+  apagado o insert fallido) no se envía nada. **Dead-drop local** (`PENDING_EXPORT_DIR`): desde la
+  unidad 5.4 (jul 2026) escribe el **contrato de tarea v1** (`docs/CONTRATO-MACROSISTEMA.md` Parte
+  A): YAML `schema_version: 1` + vista humana, SOLO si la reunión tiene ≥1 pendiente (gate O7),
+  naming create-only `vflow-pendientes-<instalacion>-<meeting_id>-<hash8>.md` (`instalacion` =
+  machine_id 8-hex persistido en el data dir; acta cambiada → hash distinto → archivo nuevo, el
+  viejo nunca se toca). Buzón sugerido para el consumidor OPS: `C:\OPS\_inbox-vflow\`. El secreto
+  `WEBHOOK_SECRET` se cifra con DPAPI (mismo mecanismo que `GROQ_API_KEY`), write-only (el GET de
+  settings solo expone `has_webhook_secret`).
 - **6.2 — Crudo/Undo + diccionario sugerido**: columna `raw_text` en `transcriptions` (`NULL`
   si coincide con el texto final; migración idempotente). `Transcriber.transcribe`/`translate`
   ganan kwarg `return_raw=False` (con `True` devuelven `(text, raw)`; la firma `str` por defecto
@@ -432,6 +436,39 @@ compromisos, metas), curado en un `.md` externo. **Opt-in, apagado por default.*
 - **Backlog v1.1 (fuera de alcance, no implementado)**: inyectar el briefing en el Insight Stream
   (`core/insights.py`, `update_state`) y tarjetas proactivas "🧭 Contexto" (memoria cruzada con el
   briefing). v1 es deliberadamente solo-pull: decisión de un debate adversarial ya cerrado.
+
+### 18. Producto — Ola 5 del PLAN-MEJORAS (jul 2026)
+
+Cinco unidades opt-in elegidas por decisión D4 + pedido explícito (5.5), todas con debate
+adversarial previo (reconciliación en `PROGRESS.md`, sección Decisiones PLAN-MEJORAS):
+
+- **5.2 — Contexto personal en prompts** (`USER_NAME`/`USER_ROLE`/`USER_DOMAIN`): helper único
+  `insights.user_identity_line()` con coletilla anti-atribución; en vivo respeta el gate `silent`
+  del modo proactivo (mismo criterio que el briefing OPS); acta y Asistente la llevan siempre.
+- **5.4 — Pendientes → OPS**: el dead-drop implementa el contrato de tarea v1
+  (`docs/CONTRATO-MACROSISTEMA.md` Parte A, gate G1 aprobado) — ver "Dead-drop local" en la
+  sección 16 y `PENDING_EXPORT_DIR` en Environment Variables.
+- **5.1 — Auto-highlights** (`AUTO_HIGHLIGHTS_ENABLED`): candidatos del insight stream
+  (`momentos_out` en `update_state`, `max_tokens` live 1200→1800 con test guardián de
+  no-truncado) → `self._auto_highlights` → `highlights_json` con `source:"auto"`. Invariante
+  dura: `generate_minutes(highlights=)` recibe SOLO manuales (gate F12 intacto, test pineado).
+  Dedup: <2s vs manual (el manual manda), <5s entre autos. Calibrado contra 4 reuniones reales
+  (15 ventanas, 3 candidatos grounded, 0 spam) → default `true`. Visor de `/reunion`: sección
+  "⭐ Momentos" con badge `auto`; retrocompat con entradas viejas sin `source` (= manual).
+- **5.3 — Chat cross-reunión + entregables**: `assistant.answer_multi` (ids explícitos > FTS,
+  cap duro 12 actas por recencia ANTES de cargar, contexto = actas nunca transcripts, presupuesto
+  `insights.budget_chars`, exclusiones declaradas, regla de citar fecha+reunión). Endpoints
+  `POST /api/meetings/chat-multi` y `POST /api/meetings/deliverable-export`. 3 plantillas
+  (email_seguimiento / informe / resumen_acuerdos). UI en `/reunion`: selección por checkbox +
+  "por tema" con overlay (prefijo JS `mm`).
+- **5.5 — Fallback simétrico online↔local** (`TRANSCRIPTION_FALLBACK`): ver Environment
+  Variables. Scope SOLO dictado vía kwarg `net_fallback=False` en `Transcriber.transcribe/
+  translate` (patrón `return_raw`; reunión y URL intactas). `_is_network_error` clasifica
+  red-vs-API; breaker + warmup fire-and-forget al abrirse; notificación de tray vía callback
+  plano → señal Qt (core/ sin Qt).
+
+Fuera de este run (pregunta opt-in a Johann en PROGRESS.md): 5.6 notas híbridas estilo Granola
+y 5.7 panel de privacidad verificable.
 
 ## Security & Privacy
 
@@ -522,7 +559,10 @@ Edit `config.py`:
 - `WEBHOOK_SECRET` — Secreto para la firma HMAC-SHA256 (automáticamente cifrado con DPAPI, igual que `GROQ_API_KEY`); write-only, nunca se expone en `GET` settings.
 - `WEBHOOK_SCOPE` (default: `pendientes`) — Alcance del payload: `pendientes` (metadatos + pendientes) o `acta` (+ `minutes_json` + capítulos + notas literales del usuario). El transcript crudo nunca se envía.
 - `WEBHOOK_ALLOW_LOCAL` (default: `false`) — Si `true`, permite URLs loopback/privadas/link-local como destino (desactiva la protección anti-SSRF; solo para pruebas locales).
-- `PENDING_EXPORT_DIR` — Carpeta del dead-drop local de pendientes (`vflow-pendientes-<id>-<fecha>.md`); se escribe siempre al cerrar una reunión con pendientes, con o sin webhook activado.
+- `PENDING_EXPORT_DIR` — Carpeta del dead-drop local de pendientes (contrato de tarea v1, unidad 5.4: YAML + vista humana, `vflow-pendientes-<instalacion>-<meeting_id>-<hash8>.md`, create-only, solo con ≥1 pendiente); con o sin webhook activado. Buzón sugerido: `C:\OPS\_inbox-vflow\`. Los entregables del chat multi-reunión (unidad 5.3) van a la subcarpeta `entregables/` con prefijo `vflow-entregable-` (nunca `vflow-pendientes-*`).
+- `USER_NAME` / `USER_ROLE` / `USER_DOMAIN` (default `""`, unidad 5.2) — Identidad opcional del usuario, inyectada como 1 línea (con coletilla anti-atribución) en insights en vivo (solo si el modo proactivo NO es `silent`), acta y Asistente; "Yo" pasa a ser el nombre real en pendientes. Vacío = apagado. Nota: el nombre entra en actas persistidas (visibles por clientes MCP).
+- `AUTO_HIGHLIGHTS_ENABLED` (default `true`, unidad 5.1) — Candidatos automáticos a momento destacado como intención adicional del MISMO update_state (cero LLM extra, máx 2/ventana); se persisten en `highlights_json` con `source:"auto"` y JAMÁS entran al acta ni al gate anti-alucinación de `momentos_destacados` (solo los manuales AltGr+H alimentan el acta). Kill-switch en caliente.
+- `TRANSCRIPTION_FALLBACK` (default `false`, unidad 5.5) — Espejo de `GROQ_FALLBACK`: con backend primario groq, un fallo de RED en el DICTADO (nunca reunión/URL) cae al modelo local si ya está descargado (sin auto-descarga; aviso de tray si falta). Breaker con cooldown `TRANSCRIPTION_FALLBACK_COOLDOWN` (default `120`s): dentro del cooldown el dictado va directo a local; un éxito de Groq lo resetea. translate solo con target `en`.
 - `DICTATION_MODES_ENABLED` (default: `false`) — Activa el reformateo post-dictado por app activa (Ola 6).
 - `DICTATION_MODE_MAP` — Mapa `exe:preset` (p. ej. `outlook.exe:email,slack.exe:chat,code.exe:codigo`) que asigna un preset de reformateo por `.exe` en foco; parseo tolerante a espacios/mayúsculas.
 - `OPS_BRIEFING_PATH` (default: `""`) — Ruta a un `.md` curado por el usuario (proyectos activos, compromisos, metas); si está seteado, su contenido se inyecta SOLO en el chat en vivo "Preguntar" (Ola 7, unidad 7.1). Vacío = apagado.
