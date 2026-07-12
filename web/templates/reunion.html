@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vflow — Reunión</title>
+<script src="/static/vendor/tailwind.js"></script>
+<style>
+  @font-face { font-family:'Inter'; font-style:normal; font-weight:300 600; font-display:swap; src:url('/static/vendor/inter-variable.woff2') format('woff2'); }
+  body { background:#0a0a0f; color:#e5e7eb; font-family:Inter,system-ui,sans-serif; }
+  .glass { background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); }
+  .mt-fade { animation:mtFade .25s ease-out; }
+  @keyframes mtFade { from{opacity:0;transform:translateY(3px);} to{opacity:1;transform:none;} }
+  .btn { font-size:.8rem; padding:.4rem .8rem; border-radius:.5rem; cursor:pointer; }
+  #asst-messages ul{list-style:disc;margin:.25rem 0;padding-left:1.2rem;}
+  #asst-messages ol{list-style:decimal;margin:.25rem 0;padding-left:1.4rem;}
+  #asst-messages li{margin:.1rem 0;}
+  #asst-messages code{background:rgba(255,255,255,.1);padding:0 .25rem;border-radius:3px;font-family:monospace;font-size:.92em;}
+  #asst-messages strong{font-weight:600;}
+  #asst-messages .md-h{font-weight:600;margin:.3rem 0 .15rem;}
+  #asst-messages .md-p{margin:.15rem 0;}
+  #asst-messages .md-cite{color:#c4b5fd;text-decoration:underline;cursor:pointer;font-size:.92em;}
+  svg.ic{width:1em;height:1em;display:inline-block;vertical-align:-0.125em;flex-shrink:0}
+  @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important;}}
+</style></head>
+<body class="min-h-screen p-6">
+<div class="max-w-5xl mx-auto">
+  <main>
+  <div class="flex items-center justify-between mb-5">
+    <h1 class="text-2xl font-semibold" data-icon="mic">Reunión</h1>
+    <div class="flex items-center gap-2">
+      <select id="mt-template-select" onchange="setMeetingTemplate(this.value)" title="Plantilla de la reunión: moldea el acta y las sugerencias del chat en vivo"
+        class="text-xs px-2 py-1.5 rounded-lg bg-white/[0.05] border border-white/10 text-white/60 hover:text-white/80 focus:outline-none focus:ring-2 focus:ring-violet-500/60">
+        {{ template_options_html|safe }}
+      </select>
+      <button onclick="startMeeting()" id="mt-start" data-icon="play" class="btn bg-purple-600/30 text-purple-200 hover:bg-purple-600/50">Iniciar</button>
+      <button onclick="stopMeeting()" id="mt-stop" data-icon="stop" class="btn bg-red-600/30 text-red-300 hover:bg-red-600/50 hidden">Terminar</button>
+      <button onclick="openFolder()" data-icon="folder" class="btn text-white/55 hover:text-white/80 hover:bg-white/5" title="Abrir la carpeta de actas (.md)">Carpeta</button>
+      <a href="/" class="btn text-white/45 hover:text-white/70 hover:bg-white/5">Dashboard</a>
+    </div>
+  </div>
+  <div id="mt-status" class="text-xs text-white/55 mb-3" aria-live="polite"></div>
+
+  <!-- Pestañas: En vivo | Preguntar (el chat existente vive dentro de "Preguntar") -->
+  <div id="mt-tabs" class="flex items-center gap-1 mb-3 hidden">
+    <button id="mt-tab-btn-live" onclick="mtSetTab('live')" class="text-xs px-3 py-1.5 rounded-t-lg border-b-2 transition-colors">En vivo</button>
+    <button id="mt-tab-btn-ask" onclick="mtSetTab('ask')" class="text-xs px-3 py-1.5 rounded-t-lg border-b-2 transition-colors">Preguntar</button>
+  </div>
+
+  <!-- Panel: En vivo -->
+  <div id="mt-tab-live">
+    <!-- Header de reunión activa: timer + VU por canal + pausa -->
+    <div id="mt-live-header" class="glass rounded-xl p-4 mb-3 hidden">
+      <div class="flex items-center justify-between flex-wrap gap-3">
+        <div class="flex items-center gap-3">
+          <div id="mt-timer" class="text-3xl font-mono font-semibold tabular-nums text-white/90">00:00</div>
+          <div id="mt-paused-badge" class="text-xs px-2 py-1 rounded-md bg-amber-500/20 text-amber-300 hidden">⏸ EN PAUSA</div>
+        </div>
+        <div class="flex items-center gap-4">
+          <div class="flex items-center gap-1.5" title="Nivel de tu micrófono">
+            <span class="text-[11px] text-purple-300/80 w-8">Yo</span>
+            <div class="w-24 h-1.5 rounded-full bg-white/10 overflow-hidden"><div id="mt-vu-yo" class="h-full rounded-full" style="width:0%;background:var(--accent);transition:width .12s linear;"></div></div>
+          </div>
+          <div class="flex items-center gap-1.5" title="Nivel de audio del sistema (Ellos)">
+            <span class="text-[11px] text-sky-300/80 w-10">Ellos</span>
+            <div class="w-24 h-1.5 rounded-full bg-white/10 overflow-hidden"><div id="mt-vu-ellos" class="h-full rounded-full" style="width:0%;background:var(--cyan);transition:width .12s linear;"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid gap-3 mb-3 grid-cols-1 md:grid-cols-[1.4fr_1fr]">
+      <div>
+        <div class="flex items-center justify-between mb-1.5">
+          <span class="text-xs text-white/55">Transcripción en vivo</span>
+          <button onclick="copyEl('mt-transcript', this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5 transition-colors" title="Copiar transcript">Copiar</button>
+        </div>
+        <div id="mt-transcript" class="space-y-1.5 max-h-[28rem] overflow-y-auto glass rounded-xl p-3">
+          <div class="text-xs text-white/45">Inicia una reunión para ver la transcripción (Yo / Ellos).</div>
+        </div>
+      </div>
+      <div>
+        <div class="text-xs text-white/55 mb-1.5">Pendientes</div>
+        <div id="pending-cards" class="space-y-2 max-h-[28rem] overflow-y-auto glass rounded-xl p-3">
+        </div>
+        <div class="mt-3">
+          <div class="text-xs text-white/55 mb-1.5">Nota rápida</div>
+          <div class="flex gap-2">
+            <input id="mt-note-input" type="text" placeholder="Escribe una nota…" aria-label="Nota rápida"
+              class="focus:outline-none focus:ring-2 focus:ring-violet-500/60"
+              style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.35rem .7rem;font-size:.8rem;"
+              onkeydown="if(event.key==='Enter')mtAddNote()">
+            <button onclick="mtAddNote()" class="btn bg-white/[0.06] text-white/60 hover:bg-white/[0.1]">Añadir</button>
+          </div>
+          <div id="mt-notes-list" class="space-y-1 mt-2"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Barra de 4 acciones -->
+    <div id="mt-action-bar" class="flex items-center gap-2 mb-3 hidden">
+      <button onclick="mtHighlight()" class="btn bg-white/[0.06] text-amber-300/90 hover:bg-amber-500/15" title="Marcar momento destacado">⭐ Highlight</button>
+      <button onclick="mtFocusNote()" class="btn bg-white/[0.06] text-white/70 hover:bg-white/[0.1]" title="Añadir una nota rápida">📝 Nota</button>
+      <button id="mt-pause-btn" onclick="mtTogglePause()" class="btn bg-white/[0.06] text-white/70 hover:bg-white/[0.1]" title="Pausar o reanudar la captura">⏸ Pausar</button>
+      <button onclick="stopMeeting()" class="btn bg-red-600/30 text-red-300 hover:bg-red-600/50" title="Terminar la reunión">⏹ Terminar</button>
+    </div>
+
+    <div id="mt-acta" class="glass rounded-xl p-4 mb-8 hidden">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-sm font-medium text-emerald-300/80">Acta de la reunión</span>
+        <button onclick="copyEl('mt-acta-body', this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5 transition-colors" title="Copiar acta">Copiar</button>
+      </div>
+      <div id="mt-acta-body" class="space-y-2 text-sm text-white/80"></div>
+    </div>
+
+    <div class="flex items-center justify-between mb-2 mt-8">
+      <div class="text-sm font-medium text-white/60">Historial de reuniones</div>
+      <div class="flex gap-2">
+        <button onclick="exportAll()" class="btn text-white/45 hover:text-white/70 hover:bg-white/5" title="Exportar todas a Markdown">Exportar todas (.md)</button>
+        <button onclick="clearAll()" class="btn text-white/55 hover:text-red-300 hover:bg-white/5" title="Eliminar todas las reuniones">Limpiar todo</button>
+      </div>
+    </div>
+    <input id="meetingSearch" type="search" placeholder="Buscar en reuniones…" aria-label="Buscar en reuniones"
+      class="focus:outline-none focus:ring-2 focus:ring-violet-500/60"
+      style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.4rem .75rem;font-size:.8rem;margin-bottom:.5rem;"
+      oninput="onSearchInput(this.value)">
+    <div id="mt-history" class="space-y-1"></div>
+    <div id="mt-viewer" class="glass rounded-xl p-4 mt-3 hidden"></div>
+  </div>
+
+  <!-- Panel: Preguntar (Asistente de reuniones — chat de memoria, sin cambios internos) -->
+  <div id="mt-tab-ask" class="hidden">
+    <div class="glass rounded-xl p-4 mt-6">
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-sm font-medium text-violet-300/80" data-icon="chat">Asistente de reuniones &mdash; pregúntale a tus reuniones</div>
+        <div class="flex items-center gap-1">
+          <button id="asst-scope-global" class="text-[11px] px-2 py-0.5 rounded-full border transition-colors">Global</button>
+          <button id="asst-scope-meeting" disabled class="text-[11px] px-2 py-0.5 rounded-full border transition-colors" title="Selecciona una reunión del historial para preguntar solo sobre ella">Esta reunión</button>
+        </div>
+      </div>
+      <div id="asst-live-note" class="hidden text-[11px] text-emerald-300/70 mb-2">&#9679; Respondiendo sobre la reuni&oacute;n en curso</div>
+      <div id="asst-messages" class="space-y-2 overflow-y-auto mb-2" aria-live="polite" style="min-height:60px;max-height:280px;"></div>
+      <div id="asst-chips" class="flex flex-wrap gap-1.5 mb-2"></div>
+      <div class="flex gap-2">
+        <input id="asst-input" type="text" placeholder="Pregunta sobre tus reuniones…" aria-label="Pregunta sobre tus reuniones"
+          class="focus:outline-none focus:ring-2 focus:ring-violet-500/60"
+          style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:.5rem;color:#e5e7eb;padding:.35rem .7rem;font-size:.8rem;"
+          onkeydown="if(event.key==='Enter')asstSend()">
+        <button id="asst-send" onclick="asstSend()" class="btn bg-violet-600/30 text-violet-200 hover:bg-violet-600/50">Enviar</button>
+      </div>
+      <div class="flex items-center gap-1.5 mt-1.5">
+        <input type="checkbox" id="asst-reason" style="accent-color:#7c3aed;cursor:pointer;">
+        <label for="asst-reason" data-icon="spark" class="text-[11px] text-white/35 cursor-pointer select-none"
+          title="Activa razonamiento para preguntas analíticas (más lento/caro)">Pensar más</label>
+      </div>
+    </div>
+  </div>
+  </main>
+</div>
+<script>
+let _seen = new Set(), _segCount = 0, _actaShown = false, _poll = null;
+function mtoast(msg,type){const c=document.body;const t=document.createElement('div');t.style.cssText='position:fixed;top:16px;right:16px;z-index:60;background:rgba(20,20,24,.96);border:1px solid '+(type==='err'?'rgba(239,68,68,.55)':'rgba(255,255,255,.12)')+';color:#eaeaea;padding:10px 14px;border-radius:10px;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.45)';t.textContent=msg;c.appendChild(t);setTimeout(()=>t.remove(),4000);}
+let _meetingIds = new Set();
+// --- Iconos SVG inline (sin dependencia de fuentes; idénticos en Win/Mac/Linux, sin tofu) ---
+function _ic(p){return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>';}
+const ICONS = {
+  mic: _ic('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>'),
+  play: _ic('<polygon points="6 4 20 12 6 20 6 4" fill="currentColor" stroke="none"/>'),
+  stop: _ic('<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>'),
+  folder: _ic('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'),
+  chat: _ic('<path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.5 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8A8.5 8.5 0 0 1 12.5 3 8.5 8.5 0 0 1 21 11.5z"/>'),
+  spark: _ic('<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" fill="currentColor"/>'),
+  bulb: _ic('<path d="M9 18h6M10 22h4M15 14c.2-1 .7-1.7 1.4-2.5A4.6 4.6 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.8.8 1.2 1.5 1.4 2.5"/>'),
+  calendar: _ic('<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'),
+  trash: _ic('<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
+  arrow: _ic('<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>'),
+};
+function _fillIcons(root){(root||document).querySelectorAll('[data-icon]').forEach(el=>{const i=ICONS[el.dataset.icon];if(i&&!el.querySelector('svg.ic')){const hasText=el.textContent.trim().length>0;el.insertAdjacentHTML('afterbegin', i+(hasText?' ':''));}});}
+function esc(s){ const d=document.createElement('div'); d.textContent = (s==null?'':String(s)); return d.innerHTML; }
+function copyEl(id, btn){ const el=document.getElementById(id); if(!el)return; navigator.clipboard.writeText(el.innerText.trim()).then(()=>{ const p=btn.textContent; btn.textContent='✓'; setTimeout(()=>{ btn.textContent=p; },1500); }); }
+function mdInline(x){
+  x=esc(x);
+  x=x.replace(/`([^`]+)`/g,'<code>$1</code>');
+  x=x.replace(/\*\*([^*]+?)\*\*/g,'<strong>$1</strong>');
+  x=x.replace(/__([^_]+?)__/g,'<strong>$1</strong>');
+  x=x.replace(/(^|[^*\w])\*([^*\n]+?)\*(?=[^*\w]|$)/g,'$1<em>$2</em>');
+  x=x.replace(/\[(\d+)\]/g,function(_,n){ return _meetingIds.has(parseInt(n,10))?'<a href="#" class="md-cite" data-mid="'+n+'">['+n+']</a>':'['+n+']'; });
+  return x;
+}
+function mdToHtml(t){
+  if(!t)return '';
+  const lines=t.split(/\r?\n/);
+  let html='',list=null;
+  const close=function(){ if(list){ html+='</'+list+'>'; list=null; } };
+  for(const raw of lines){
+    let m;
+    if(m=raw.match(/^\s*[-*\u2022]\s+(.*)$/)){
+      if(list!=='ul'){ close(); html+='<ul>'; list='ul'; }
+      html+='<li>'+mdInline(m[1])+'</li>';
+    } else if(m=raw.match(/^\s*\d+[.)]\s+(.*)$/)){
+      if(list!=='ol'){ close(); html+='<ol>'; list='ol'; }
+      html+='<li>'+mdInline(m[1])+'</li>';
+    } else if(m=raw.match(/^\s*#{1,6}\s+(.*)$/)){
+      close(); html+='<div class="md-h">'+mdInline(m[1])+'</div>';
+    } else if(raw.trim()===''){
+      close();
+    } else {
+      close(); html+='<div class="md-p">'+mdInline(raw)+'</div>';
+    }
+  }
+  close();
+  return html;
+}
+function pendMeta(p){ const a=[]; if(p&&p.responsable)a.push(esc(p.responsable));
+  const fh=[p&&p.fecha,p&&p.hora].filter(Boolean).map(esc).join(' '); if(fh)a.push(ICONS.calendar+' '+fh);
+  return a.length?' <span class="text-white/35">('+a.join(' \u00b7 ')+')</span>':''; }
+
+// --- Tarjetas genéricas de push ✓/✗ (unidad 2.2 -> generalizado en 5.3) ---
+// cardKey: hash simple del texto NORMALIZADO (minúsculas, sin acentos, sin puntuación,
+// espacios colapsados). NUNCA se usa el id del pendiente: la consolidación LLM puede
+// renumerarlo, lo que crearía tarjetas fantasma (verificado en debate de diseño).
+// Se mantiene el nombre pendKey como alias por compatibilidad con quien lo referencie.
+function cardKey(texto){
+  const norm=(texto||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
+  let h=0; for(let i=0;i<norm.length;i++){ h=((h<<5)-h+norm.charCodeAt(i))|0; }
+  return 'p'+h;
+}
+function pendKey(texto){ return cardKey(texto); }
+
+// Estilo por tipo de tarjeta: clases Tailwind (borde/fondo) + etiqueta. Los tipos
+// futuros (deteccion/coaching/cruzada — unidades 5.1/5.2) solo necesitan una
+// entrada aquí; renderCards() ya sabe pintarlos.
+const CARD_STYLES = {
+  pendiente: {cls:'bg-amber-500/[0.06] border-amber-400/20', label:null},
+  coaching:  {cls:'bg-cyan-500/[0.06] border-cyan-400/20',   label:'Coaching'},
+  deteccion: {cls:'bg-violet-500/[0.06] border-violet-400/20', label:'Detección'},
+  cruzada:   {cls:'bg-violet-500/[0.06] border-violet-400/20', label:'Memoria cruzada'},
+};
+
+const _pendCards = new Map(); // key -> {texto, tipo, responsable, firstSeen, resolved, timer}
+const _PEND_TTL_MS = 180000;   // ~3 min de caducidad
+const _PEND_MAX_VISIBLE = 3;
+
+function _pendRemove(key){
+  const c=_pendCards.get(key); if(!c) return;
+  if(c.timer) clearTimeout(c.timer);
+  const el=document.getElementById('pc-'+key);
+  if(el){ el.style.transition='opacity .3s ease, transform .3s ease'; el.style.opacity='0'; el.style.transform='translateX(8px)';
+    setTimeout(()=>{ if(el.parentNode) el.parentNode.removeChild(el); }, 300); }
+}
+
+function _pendScheduleExpiry(key){
+  const c=_pendCards.get(key); if(!c) return;
+  if(c.timer) clearTimeout(c.timer);
+  const remaining=Math.max(0, _PEND_TTL_MS - (Date.now()-c.firstSeen));
+  c.timer=setTimeout(()=>{ c.expired=true; _pendRemove(key); }, remaining);
+}
+
+function _pendRenderCard(key){
+  const c=_pendCards.get(key); if(!c) return;
+  const container=document.getElementById('pending-cards'); if(!container) return;
+  const style=CARD_STYLES[c.tipo]||CARD_STYLES.pendiente;
+  const div=document.createElement('div');
+  div.id='pc-'+key;
+  div.className='rounded-lg '+style.cls+' p-2.5 mt-fade';
+  const labelHtml = style.label ? '<div class="text-[10px] uppercase tracking-wide text-white/40 mb-1">'+esc(style.label)+'</div>' : '';
+  div.innerHTML =
+    labelHtml+
+    '<div class="text-xs text-white/80 leading-snug mb-1.5">'+esc(c.texto)+pendMeta(c)+'</div>'+
+    '<div class="flex items-center gap-1.5" id="pc-actions-'+key+'">'+
+      '<button class="text-[11px] px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300/90 hover:bg-emerald-500/25" onclick="mtCardFeedback(\''+key+'\',\''+c.tipo+'\',1)" title="Confirmar">\u2713</button>'+
+      '<button class="text-[11px] px-2 py-0.5 rounded bg-white/[0.06] text-white/45 hover:bg-white/[0.1]" onclick="mtCardFeedback(\''+key+'\',\''+c.tipo+'\',-1)" title="Descartar">\u2717</button>'+
+    '</div>';
+  container.appendChild(div);
+}
+
+function _pendEnforceMax(){
+  // Máximo _PEND_MAX_VISIBLE tarjetas visibles: si llega una 4ª, cae la más vieja.
+  const visible=[..._pendCards.entries()].filter(([,c])=>!c.resolved && !c.expired)
+    .sort((a,b)=>a[1].firstSeen-b[1].firstSeen);
+  while(visible.length>_PEND_MAX_VISIBLE){
+    const [oldestKey]=visible.shift();
+    _pendCards.get(oldestKey).expired=true;
+    _pendRemove(oldestKey);
+  }
+}
+
+// renderCards: renderer GENÉRICO (unidad 5.3, corrección O2). card={key,tipo,texto,detail?}.
+// Gating por modo client-side: en modo 'silent' (status().proactive_mode) solo se
+// muestran tarjetas tipo 'pendiente' (contrato inamovible desde 2.2); el resto de
+// tipos se filtra aquí mismo, antes de tocar el DOM.
+function renderCards(cards, proactiveMode){
+  if(!Array.isArray(cards)) return;
+  for(const p of cards){
+    const texto=(p&&p.texto||'').trim(); if(!texto) continue;
+    const tipo=(p&&p.tipo)||'pendiente';
+    if(proactiveMode==='silent' && tipo!=='pendiente') continue;
+    const key=(p&&p.key) || cardKey(texto);
+    if(_pendCards.has(key)) continue; // ya vista (nueva, resuelta o caducada): nunca reaparece
+    const card={texto, tipo, responsable:p.responsable, fecha:p.fecha, hora:p.hora, detail:p.detail,
+      firstSeen: Date.now(), resolved:false, expired:false, timer:null};
+    _pendCards.set(key, card);
+    _pendRenderCard(key);
+    _pendScheduleExpiry(key);
+    _pendEnforceMax();
+  }
+}
+// Alias de compatibilidad: los pendientes del insight stream siguen entrando por
+// aquí (tipo 'pendiente' hardcodeado, forma histórica de esta función).
+function renderPendingCards(pendientes){
+  if(!Array.isArray(pendientes)) return;
+  renderCards(pendientes.map(p=>({...p, tipo:'pendiente'})), null);
+}
+
+async function mtCardFeedback(key, tipo, value){
+  const c=_pendCards.get(key); if(!c || c.resolved) return;
+  c.resolved=true;
+  const actions=document.getElementById('pc-actions-'+key);
+  if(actions){ actions.innerHTML = value===1
+    ? '<span class="text-[11px] text-emerald-300">\u2713 Gracias</span>'
+    : '<span class="text-[11px] text-white/35">\u2717 Descartado</span>'; }
+  try{
+    await fetch('/api/meeting/feedback',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({key:key, tipo:(tipo||c.tipo||'pendiente'), texto:c.texto, value:value})});
+  }catch(e){ /* best-effort: la tarjeta igual se retira */ }
+  setTimeout(()=>{ _pendRemove(key); }, 2000);
+}
+// Alias de compatibilidad con el nombre anterior (unidad 2.2).
+async function mtPendFeedback(key, value){ return mtCardFeedback(key, 'pendiente', value); }
+
+function _pendResetAll(){
+  const container=document.getElementById('pending-cards');
+  if(container) container.innerHTML='';
+  for(const c of _pendCards.values()){ if(c.timer) clearTimeout(c.timer); }
+  _pendCards.clear();
+}
+
+{{ mt_js|safe }}
+
+let _mtNotes = [], _mtPaused = false;
+async function loadLive(){
+  try{
+    const d = await fetchMeetingIncremental('live'); const s = d.status||{};
+    const startB=document.getElementById('mt-start'), stopB=document.getElementById('mt-stop');
+    const liveHeader=document.getElementById('mt-live-header'), actionBar=document.getElementById('mt-action-bar');
+    const tabs=document.getElementById('mt-tabs');
+    // Plantilla activa (unidad 4.3): la verdad es el server (status().template), nunca
+    // localStorage — así el dropdown refleja lo mismo que ve el hotkey AltGr+R.
+    if(s.template && s.template!==_mtTemplate){ _mtTemplate=s.template; asstSyncLiveUi(); }
+    const tplSel=document.getElementById('mt-template-select');
+    if(tplSel && document.activeElement!==tplSel && tplSel.value!==_mtTemplate) tplSel.value=_mtTemplate;
+    if(s.active){ startB.classList.add('hidden'); stopB.classList.remove('hidden');
+      liveHeader.classList.remove('hidden'); actionBar.classList.remove('hidden'); tabs.classList.remove('hidden');
+      let t=(s.paused?'En pausa \u00b7 ':'Grabando ')+(s.elapsed_fmt||'00:00')+' \u00b7 '+(s.segment_count||0)+' intervenciones';
+      if(s.sys_available===false)t+=' \u00b7 solo micr\u00f3fono';
+      if(s.insight_running)t+=' \u00b7 analizando\u2026'; if(s.error)t+=' \u00b7 \u26a0 '+s.error;
+      document.getElementById('mt-status').textContent=t; _actaShown=false;
+      document.getElementById('mt-timer').textContent=s.elapsed_fmt||'00:00';
+      _mtPaused=!!s.paused;
+      document.getElementById('mt-paused-badge').classList.toggle('hidden', !_mtPaused);
+      const pauseBtn=document.getElementById('mt-pause-btn');
+      if(pauseBtn) pauseBtn.textContent=_mtPaused?'\u25b6 Reanudar':'\u23f8 Pausar';
+      const lv=(s.levels||{}), pctYo=Math.round(Math.min(lv.yo||0,1)*100), pctEllos=Math.round(Math.min(lv.ellos||0,1)*100);
+      const vuYo=document.getElementById('mt-vu-yo'), vuEllos=document.getElementById('mt-vu-ellos');
+      if(vuYo) vuYo.style.width=pctYo+'%'; if(vuEllos) vuEllos.style.width=pctEllos+'%';
+      // Pendientes del insight stream (tipo 'pendiente' hardcodeado) + tarjetas
+      // genéricas futuras si el backend ya expone status().cards (5.1/5.2 —
+      // tolerante a su ausencia: hoy status() no trae "cards", no rompe nada).
+      const pendCards=((d.insights||{}).pendientes||[]).map(p=>({...p, tipo:'pendiente'}));
+      const extraCards=Array.isArray(s.cards) ? s.cards : [];
+      renderCards(pendCards.concat(extraCards), s.proactive_mode);
+    } else { startB.classList.remove('hidden'); stopB.classList.add('hidden'); document.getElementById('mt-status').textContent='';
+      liveHeader.classList.add('hidden'); actionBar.classList.add('hidden'); tabs.classList.add('hidden');
+      document.getElementById('mt-paused-badge').classList.add('hidden'); _mtPaused=false;
+      if(_pendCards.size){ _pendResetAll(); }
+      if(d.last_minutes && !_actaShown){ renderActa(d.last_minutes); _actaShown=true; loadHistory(); } }
+    asstSetLive(!!s.active);  // chat "Preguntar": modo vivo sigue al estado de la reunión (unidad 2.3)
+    renderTranscript(s, d.segments||[]);
+  }catch(e){}
+}
+
+// --- Pestañas En vivo / Preguntar ---
+function mtSetTab(tab){
+  const live=document.getElementById('mt-tab-live'), ask=document.getElementById('mt-tab-ask');
+  const btnLive=document.getElementById('mt-tab-btn-live'), btnAsk=document.getElementById('mt-tab-btn-ask');
+  const activeCls='text-white/85 border-violet-400', inactiveCls='text-white/40 border-transparent hover:text-white/70';
+  if(tab==='ask'){ live.classList.add('hidden'); ask.classList.remove('hidden');
+    btnAsk.className='text-xs px-3 py-1.5 rounded-t-lg border-b-2 transition-colors '+activeCls;
+    btnLive.className='text-xs px-3 py-1.5 rounded-t-lg border-b-2 transition-colors '+inactiveCls;
+  } else { live.classList.remove('hidden'); ask.classList.add('hidden');
+    btnLive.className='text-xs px-3 py-1.5 rounded-t-lg border-b-2 transition-colors '+activeCls;
+    btnAsk.className='text-xs px-3 py-1.5 rounded-t-lg border-b-2 transition-colors '+inactiveCls;
+  }
+}
+mtSetTab('live');
+
+// --- Acciones en vivo: highlight, nota rápida, pausa ---
+async function mtHighlight(){
+  try{ const r=await fetch('/api/meeting/highlight',{method:'POST'}); const d=await r.json();
+    if(d.ok && d.item){ mtoast('\u2b50 Momento destacado ('+d.item.time+')','ok'); } else { mtoast('No hay reunión activa.','err'); }
+  }catch(e){ mtoast('Error de red al marcar highlight.','err'); }
+}
+function mtFocusNote(){ const inp=document.getElementById('mt-note-input'); if(inp){ inp.focus(); } }
+async function mtAddNote(){
+  const inp=document.getElementById('mt-note-input'); const text=(inp.value||'').trim(); if(!text) return;
+  try{ const r=await fetch('/api/meeting/note',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text})});
+    const d=await r.json();
+    if(d.ok && d.item){ inp.value=''; _mtNotes.push(d.item); renderMtNotes(); mtoast('Nota añadida.','ok'); }
+    else{ mtoast('No hay reunión activa.','err'); }
+  }catch(e){ mtoast('Error de red al añadir la nota.','err'); }
+}
+function renderMtNotes(){
+  const el=document.getElementById('mt-notes-list'); if(!el) return;
+  if(!_mtNotes.length){ el.innerHTML=''; return; }
+  el.innerHTML=_mtNotes.map(n=>'<div class="text-xs text-white/60"><span class="text-white/30 font-mono mr-1">'+esc(n.time)+'</span>'+esc(n.text)+'</div>').join('');
+}
+async function mtTogglePause(){
+  const url=_mtPaused?'/api/meeting/resume':'/api/meeting/pause';
+  const btn=document.getElementById('mt-pause-btn'); if(btn) btn.disabled=true;
+  try{ const r=await fetch(url,{method:'POST'}); const d=await r.json();
+    if(d.ok!==false){ _mtPaused=!!d.paused; await loadLive(); }
+  }catch(e){ mtoast('Error de red al pausar/reanudar.','err'); }
+  finally{ if(btn) btn.disabled=false; }
+}
+function renderTranscript(s, segs){
+  const c=document.getElementById('mt-transcript');
+  if(!segs.length){ if(_segCount!==0){_segCount=0;c.innerHTML='';} if(!c.innerHTML)c.innerHTML='<div class="text-xs text-white/45">Esperando voz\u2026</div>'; return; }
+  if(segs.length<_segCount){ c.innerHTML=''; _segCount=0; }
+  if(_segCount===0)c.innerHTML='';
+  for(let i=_segCount;i<segs.length;i++){ const sg=segs[i]; const col=sg.speaker==='Yo'?'text-purple-300':'text-sky-300';
+    const div=document.createElement('div'); div.className='text-sm text-white/80 leading-snug mt-fade';
+    div.innerHTML='<span class="text-[10px] font-mono text-white/30 mr-1">'+esc(sg.time)+'</span><span class="text-xs font-medium '+col+' mr-1">'+esc(sg.speaker)+':</span>'+esc(sg.text);
+    c.appendChild(div); }
+  _segCount=segs.length; c.scrollTop=c.scrollHeight;
+}
+// Push→pull: el "Análisis en vivo" (temas/pendientes/propuestas) ya NO se muestra en
+// vivo — va al acta. El único push permitido es la tarjeta de pendientes (unidad 2.2,
+// contenedor #pending-cards). fcl/_seen se conservan para el fade-in de esas tarjetas.
+function fcl(id){ if(id==null)return''; if(_seen.has(id))return''; _seen.add(id); return ' mt-fade'; }
+// ---------------------------------------------------------------------------
+// Métricas de conversación (unidad 3.2) — dona SVG inline + helpers de formato.
+// Tolerante a metrics=null y a campos individuales null (reuniones viejas o sin voz).
+// ---------------------------------------------------------------------------
+function fmtMinSec(s){
+  if(s==null||isNaN(s))return '\u2014';
+  s=Math.max(0,Math.round(s)); const m=Math.floor(s/60), r=s%60;
+  return m+':'+(r<10?'0':'')+r;
+}
+function donutSvg(pctYo, pctEllos, size, stroke){
+  size=size||28; stroke=stroke||(size>=80?10:5);
+  const r=(size-stroke)/2, c=size/2, circ=2*Math.PI*r;
+  const py=Math.max(0,Math.min(100,pctYo||0));
+  const dashYo=circ*(py/100), dashEllos=circ-dashYo;
+  // Arco "Yo" (violeta) empieza arriba (rotado -90deg); arco "Ellos" (cian) completa el resto.
+  return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'" class="ic" style="width:'+size+'px;height:'+size+'px;">'
+    +'<circle cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="var(--cyan)" stroke-width="'+stroke+'" opacity="0.85"/>'
+    +'<circle cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="var(--accent)" stroke-width="'+stroke+'" '
+    +'stroke-dasharray="'+dashYo+' '+dashEllos+'" stroke-dashoffset="0" transform="rotate(-90 '+c+' '+c+')" stroke-linecap="butt"/>'
+    +'</svg>';
+}
+function metricsStrip(metrics){
+  // Franja compacta para la tarjeta del historial. Devuelve '' si no hay metrics
+  // (la tarjeta queda exactamente como antes).
+  if(!metrics)return '';
+  const py=metrics.pct_yo, pe=metrics.pct_ellos;
+  const pyR=(py==null)?'\u2014':Math.round(py), peR=(pe==null)?'\u2014':Math.round(pe);
+  const ttl=metrics.talk_to_listen;
+  return '<div class="flex items-center gap-2 mt-1">'
+    +donutSvg(py||0, pe||0, 22, 4)
+    +'<span class="text-[11px] text-white/40">Yo '+pyR+'% \u00b7 Ellos '+peR+'%</span>'
+    +(ttl!=null?'<span class="text-[11px] text-white/25">\u00b7 T:L '+ttl.toFixed(2)+'</span>':'')
+    +'</div>';
+}
+function metricsPanel(metrics){
+  // Sección "Estadísticas" del visor de detalle. Tolerante a metrics=null y a
+  // campos individuales null.
+  if(!metrics){
+    return '<div class="text-xs text-white/40">Sin datos de conversación para esta reunión.</div>';
+  }
+  const py=metrics.pct_yo, pe=metrics.pct_ellos;
+  const pyR=(py==null)?'\u2014':Math.round(py), peR=(pe==null)?'\u2014':Math.round(pe);
+  const ttl=metrics.talk_to_listen;
+  // El flag global marca que ALGÚN monólogo llegó a 90s; el badge va en el canal
+  // cuyo valor lo cruza (pueden ser ambos), no en un canal fijo.
+  const monoBadge=' <span class="text-[10px] px-1.5 py-0.5 rounded-md" style="background:rgba(245,158,11,0.18);color:#fcd34d;">largo</span>';
+  const monoYoFlag=(metrics.longest_monologue_yo_s||0)>=90;
+  const monoEllosFlag=(metrics.longest_monologue_ellos_s||0)>=90;
+  const turnsStr=(metrics.turns_approx==null)?'\u2014':(metrics.turns_approx+(metrics.approx?' (aprox.)':''));
+  const wpmYo=metrics.wpm_yo, wpmEllos=metrics.wpm_ellos;
+  function metric(label, val, note){
+    return '<div class="glass rounded-lg px-3 py-2">'
+      +'<div class="text-[10px] text-white/35 mb-0.5">'+esc(label)+'</div>'
+      +'<div class="text-sm text-white/80">'+val+'</div>'
+      +(note?'<div class="text-[10px] text-white/25 mt-0.5">'+note+'</div>':'')
+      +'</div>';
+  }
+  let h='<div class="flex items-center gap-4 mb-3">'
+    +donutSvg(py||0, pe||0, 84, 12)
+    +'<div class="text-xs space-y-1">'
+    +'<div class="text-purple-300/80">\u25cf Yo &mdash; '+pyR+'% ('+fmtMinSec(metrics.talk_yo_s)+')</div>'
+    +'<div class="text-sky-300/80">\u25cf Ellos &mdash; '+peR+'% ('+fmtMinSec(metrics.talk_ellos_s)+')</div>'
+    +'</div></div>';
+  h+='<div class="grid grid-cols-2 md:grid-cols-3 gap-2">';
+  h+=metric('Talk-to-listen', (ttl==null?'\u2014':ttl.toFixed(2)), 'benchmark venta ~43/57');
+  h+=metric('Mon\u00f3logo m\u00e1s largo \u2014 Yo', fmtMinSec(metrics.longest_monologue_yo_s)+(monoYoFlag?monoBadge:''));
+  h+=metric('Mon\u00f3logo m\u00e1s largo \u2014 Ellos', fmtMinSec(metrics.longest_monologue_ellos_s)+(monoEllosFlag?monoBadge:''));
+  h+=metric('Turnos', turnsStr);
+  h+=metric('Preguntas \u2014 Yo / Ellos', (metrics.questions_yo==null?'\u2014':metrics.questions_yo)+' / '+(metrics.questions_ellos==null?'\u2014':metrics.questions_ellos));
+  h+=metric('WPM \u2014 Yo / Ellos', (wpmYo==null?'\u2014':Math.round(wpmYo))+' / '+(wpmEllos==null?'\u2014':Math.round(wpmEllos)), 'sano: 140-160');
+  h+='</div>';
+  return h;
+}
+function fmtMmss(t){ const s=Math.round(t); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function traceChip(t){
+  if(t==null||isNaN(t))return '';
+  return ' <button type="button" class="mt-trace-chip text-[10px] text-violet-300/50 hover:text-violet-200 underline decoration-dotted px-1" data-t="'+t+'" title="Ir a este momento en la transcripci\u00f3n">'+fmtMmss(t)+'</button>';
+}
+// Delegado único: los chips de decisiones/pendientes se generan como HTML string
+// (actaHtml) sin listeners individuales; un solo listener en document cubre tanto
+// el acta en vivo (#mt-acta-body) como el visor de reuniones (#viewer-acta-body).
+document.addEventListener('click', function(ev){
+  const chip = ev.target.closest && ev.target.closest('.mt-trace-chip');
+  if(!chip) return;
+  const t = parseFloat(chip.dataset.t || 'NaN');
+  if(!isNaN(t)) jumpToMoment(t);
+});
+function bantHtml(b){
+  if(!b||typeof b!=='object')return '';
+  const fields=[['budget','Presupuesto'],['authority','Autoridad'],['need','Necesidad'],['timeline','Plazo']];
+  const cells=fields.filter(f=>b[f[0]]).map(f=>'<div><div class="text-[10px] text-white/35 uppercase tracking-wide">'+f[1]+'</div><div class="text-xs text-white/75">'+esc(b[f[0]])+'</div></div>');
+  if(!cells.length)return '';
+  return '<div><div class="text-xs text-fuchsia-300/50 mt-2 mb-1">BANT</div><div class="grid grid-cols-2 gap-2">'+cells.join('')+'</div></div>';
+}
+function actaHtml(m){
+  m=m||{}; const dec=m.decisiones||[],tem=m.temas||[],pen=m.pendientes||[],pro=m.propuestas||[],cit=m.citas||[],mom=m.momentos_destacados||[],nus=m.notas_usuario||[]; let h='';
+  if(m.resumen)h+='<p class="text-white/80">'+esc(m.resumen)+'</p>';
+  h+=bantHtml(m.bant);
+  if(nus.length)h+='<div><div class="text-xs text-violet-300/50 mt-2 mb-1">📝 Notas del usuario</div>'+nus.map(x=>'<div class="text-xs text-white/85 mb-0.5"><span class="text-white/50">'+esc(x.time||'')+'</span> '+esc(x.nota||'')+(x.contexto?'<div class="text-[11px] text-white/40 ml-6">IA: '+esc(x.contexto)+'</div>':'')+'</div>').join('')+'</div>';
+  if(mom.length)h+='<div><div class="text-xs text-yellow-300/50 mt-2 mb-1">\u2b50 Momentos destacados</div>'+mom.map(x=>'<div class="text-xs text-white/75">'+ICONS.spark+' <span class="text-white/50">'+esc(x.time||'')+'</span> '+esc(x.texto||'')+'</div>').join('')+'</div>';
+  if(dec.length)h+='<div><div class="text-xs text-white/40 mt-2 mb-1">Decisiones</div>'+dec.map(d=>'<div class="text-xs text-white/75">\u2022 '+esc(typeof d==='string'?d:(d.texto||''))+(typeof d==='string'?'':traceChip(d.t))+'</div>').join('')+'</div>';
+  if(pen.length)h+='<div><div class="text-xs text-amber-300/50 mt-2 mb-1">Pendientes</div>'+pen.map(p=>'<div class="text-xs text-white/75">'+ICONS.arrow+' '+esc(p.texto||p)+pendMeta(p)+(typeof p==='object'?traceChip(p.t):'')+'</div>').join('')+'</div>';
+  if(pro.length)h+='<div><div class="text-xs text-sky-300/50 mt-2 mb-1">Propuestas</div>'+pro.map(p=>'<div class="text-xs text-white/75">'+ICONS.bulb+' '+esc(p.texto!=null?p.texto:p)+'</div>').join('')+'</div>';
+  if(cit.length)h+='<div><div class="text-xs text-emerald-300/50 mt-2 mb-1">Próximas reuniones</div>'+cit.map(c=>'<div class="text-xs text-white/75">'+ICONS.calendar+' '+esc(c.texto||c)+pendMeta({fecha:c.fecha,hora:c.hora})+'</div>').join('')+'</div>';
+  if(tem.length)h+='<div><div class="text-xs text-white/40 mt-2 mb-1">Temas tratados</div>'+tem.map(t=>'<div class="text-xs text-white/75">\u2022 '+esc(t)+'</div>').join('')+'</div>';
+  return h||'<div class="text-xs text-white/30">Acta vacía.</div>';
+}
+function renderActa(m){ document.getElementById('mt-acta-body').innerHTML=actaHtml(m); document.getElementById('mt-acta').classList.remove('hidden'); }
+
+async function setMeetingTemplate(name){
+  const prev=_mtTemplate; _mtTemplate=name;  // optimista; se corrige en el próximo loadLive() si falla
+  try{
+    const r=await fetch('/api/meeting/template',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({template:name})});
+    const d=await r.json();
+    if(!d.ok){ _mtTemplate=prev; const sel=document.getElementById('mt-template-select'); if(sel)sel.value=prev; mtoast('Plantilla inválida.','err'); return; }
+    if(_asstLive) asstSyncLiveUi();  // refresca los chips en vivo si el chat está en modo vivo
+  }catch(e){ _mtTemplate=prev; const sel=document.getElementById('mt-template-select'); if(sel)sel.value=prev; mtoast('Error de red al cambiar la plantilla.','err'); }
+}
+async function startMeeting(){ _seen=new Set(); _segCount=0; _actaShown=false; _mtNotes=[]; renderMtNotes();
+  document.getElementById('mt-acta').classList.add('hidden'); document.getElementById('mt-transcript').innerHTML='';
+  const btn=document.getElementById('mt-start'); btn.disabled=true;
+  try{ const r=await fetch('/api/meeting/start',{method:'POST'}); const d=await r.json();
+    if(!d.ok){ document.getElementById('mt-status').textContent=d.error||'No se pudo iniciar.'; mtoast(d.error||'No se pudo iniciar.','err'); return; }
+    await loadLive(); startPoll(); }catch(e){ mtoast('Error de red al iniciar.','err'); }finally{ btn.disabled=false; } }
+async function stopMeeting(){ document.getElementById('mt-status').textContent='Terminando y generando el acta\u2026';
+  const btn=document.getElementById('mt-stop'); btn.disabled=true;
+  try{ const r=await fetch('/api/meeting/stop',{method:'POST'}); const d=await r.json(); await loadLive();
+    renderActa(d.minutes); _actaShown=true; loadHistory(); }catch(e){ mtoast('Error de red al terminar.','err'); }finally{ btn.disabled=false; } }
+function startPoll(){ if(_poll)return; _poll=setInterval(loadLive,1500); }
+
+async function loadHistory(){
+  try{ const r=await fetch('/api/meetings'); const d=await r.json(); const el=document.getElementById('mt-history');
+    const ms=d.meetings||[]; _meetingIds=new Set(ms.map(m=>m.id)); if(!ms.length){ el.innerHTML='<div class="text-xs text-white/45">Aún no hay reuniones guardadas.</div>'; return; }
+    el.innerHTML=ms.map(m=>{ const dur=Math.round((m.duration_seconds||0)/60);
+      return '<div class="glass rounded-lg px-3 py-2 hover:bg-white/[0.04]">'
+        +'<div class="flex items-center gap-2">'
+        +'<span class="text-xs text-white/70 flex-1 cursor-pointer" onclick="openMeeting('+m.id+')">'+esc(m.started_at||m.created_at||'')+'</span>'
+        +'<span class="text-[11px] text-white/30">'+dur+' min</span>'
+        +'<button onclick="delMeeting('+m.id+')" class="text-white/25 hover:text-red-300 text-sm px-1" title="Eliminar esta reunión">'+ICONS.trash+'</button>'
+        +'</div>'
+        +metricsStrip(m.metrics)
+        +'</div>'; }).join('');
+  }catch(e){} }
+function jumpToMoment(t, segs){
+  // Busca el segmento cuyo data-t sea el más cercano a t y hace scroll + highlight
+  const body=document.getElementById('mt-transcript-body');
+  if(!body) return;
+  const divs=body.querySelectorAll('[data-t]');
+  if(!divs.length) return;
+  let best=null, bestDiff=Infinity;
+  divs.forEach(function(d){ const dt=parseFloat(d.dataset.t||'0'); const diff=Math.abs(dt-t); if(diff<bestDiff){bestDiff=diff;best=d;} });
+  if(!best) return;
+  best.scrollIntoView({behavior:'smooth',block:'center'});
+  best.classList.add('mt-seg-flash');
+  setTimeout(function(){ best.classList.remove('mt-seg-flash'); },1200);
+}
+function _renderTimeline(chapters, meetingId, v){
+  const tl=document.getElementById('mt-timeline');
+  if(!tl) return;
+  if(Array.isArray(chapters) && chapters.length){
+    let h='<div class="flex flex-wrap gap-1.5">';
+    chapters.forEach(function(ch,i){
+      h+='<button data-t="'+ch.t+'" data-idx="'+i+'" class="mt-chapter-btn text-[11px] px-2 py-1 rounded-md bg-white/[0.06] hover:bg-violet-500/20 text-white/60 hover:text-violet-300 transition-colors" title="'+esc(ch.resumen||ch.titulo)+'">'
+        +'<span class="text-white/30">'+esc(ch.inicio)+'</span> <span class="text-white/70">'+esc(ch.titulo)+'</span>'
+        +'</button>';
+    });
+    h+='</div>';
+    tl.innerHTML=h;
+    tl.querySelectorAll('.mt-chapter-btn').forEach(function(btn){
+      btn.addEventListener('click',function(){ jumpToMoment(parseFloat(btn.dataset.t||'0')); });
+    });
+  } else {
+    tl.innerHTML='<button id="mt-gen-chapters-btn" class="btn text-[11px] bg-white/[0.05] text-white/40 hover:text-violet-300 hover:bg-violet-500/15">Generar l\u00ednea de tiempo</button>';
+    const gbtn=document.getElementById('mt-gen-chapters-btn');
+    if(gbtn) gbtn.addEventListener('click',async function(){
+      gbtn.textContent='Generando\u2026'; gbtn.disabled=true;
+      try{
+        const r=await fetch('/api/meetings/'+meetingId+'/chapters',{method:'POST'});
+        const d=await r.json();
+        _renderTimeline(d.chapters||[], meetingId, v);
+      }catch(e){ gbtn.textContent='Error al generar'; gbtn.disabled=false; }
+    });
+  }
+}
+async function openMeeting(id){
+  const v=document.getElementById('mt-viewer'); v.classList.remove('hidden'); v.innerHTML='<div class="text-xs text-white/30">Cargando\u2026</div>';
+  try{ const r=await fetch('/api/meetings/'+id); const m=await r.json();
+    const dateStr=esc(m.started_at||'');
+    // Transcript: por segmentos si existen, si no, <pre> plano (compat reuniones viejas)
+    let transcriptHtml;
+    const segs=Array.isArray(m.segments)&&m.segments.length?m.segments:null;
+    if(segs){
+      transcriptHtml='<div id="mt-transcript-body" class="text-xs max-h-80 overflow-y-auto space-y-0.5">';
+      segs.forEach(function(s,i){
+        const isYo=(s.speaker||'').toLowerCase().indexOf('yo')!==-1||(s.speaker||'')==='Yo';
+        const clr=isYo?'text-violet-300/80':'text-sky-300/80';
+        transcriptHtml+='<div id="mtseg-'+i+'" data-t="'+parseFloat(s.t||0)+'" class="px-1 rounded hover:bg-white/[0.04]">'
+          +'<span class="text-white/25 select-none">['+esc(s.time||'')+'</span>'
+          +' <span class="'+clr+' font-medium select-none">'+esc(s.speaker||'')+'</span>'
+          +'<span class="text-white/25 select-none">]</span>'
+          +' <span class="text-white/65">'+esc(s.text||'')+'</span>'
+          +'</div>';
+      });
+      transcriptHtml+='</div>';
+    } else {
+      transcriptHtml='<pre class="text-xs text-white/60 whitespace-pre-wrap max-h-80 overflow-y-auto">'+esc(m.transcript||'')+'</pre>';
+    }
+    v.innerHTML='<style>.mt-seg-flash{background:rgba(139,92,246,0.18)!important;transition:background 0.1s;}</style>'
+      +'<div class="flex items-center justify-between mb-2"><div class="text-sm font-medium text-white/60">Reuni\u00f3n '+dateStr+'</div>'
+      +'<div class="flex gap-2">'
+      +'<button id="mt-close-btn" class="btn text-white/30 hover:text-white/60">Cerrar</button>'
+      +'</div></div>'
+      +'<div class="text-xs font-medium text-violet-300/50 mb-1">L\u00ednea de tiempo</div><div id="mt-timeline" class="mb-3"></div>'
+      +'<div class="flex items-center justify-between mb-1"><span class="text-xs font-medium text-white/40">Estad\u00edsticas</span></div><div id="viewer-metrics-body" class="mb-3">'+metricsPanel(m.metrics)+'</div>'
+      +'<div class="flex items-center justify-between mb-1"><span class="text-xs font-medium text-emerald-300/70">Acta</span><button onclick="copyEl(&apos;viewer-acta-body&apos;, this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5">Copiar</button></div><div id="viewer-acta-body" class="space-y-2 mb-3">'+actaHtml(m.minutes)+'</div>'
+      +'<div class="flex items-center justify-between mb-1"><span class="text-xs font-medium text-white/40">Transcripci\u00f3n</span><button onclick="copyEl(&apos;viewer-transcript-body&apos;, this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5">Copiar</button></div><div id="viewer-transcript-body">'+transcriptHtml+'</div>';
+    const _cb=document.getElementById('mt-close-btn');
+    if(_cb) _cb.addEventListener('click',function(){
+      document.getElementById('mt-viewer').classList.add('hidden');
+      currentViewerMeetingId=null;
+      const smb=document.getElementById('asst-scope-meeting');
+      smb.disabled=true; smb.textContent='Esta reuni\u00f3n';
+      asstSetScope('global');
+    });
+    // Actualiza estado de ámbito al abrir reunión
+    currentViewerMeetingId=id;
+    currentViewerMeetingDate=m.started_at||'';
+    const smb=document.getElementById('asst-scope-meeting');
+    smb.disabled=false;
+    smb.textContent='Esta reuni\u00f3n ('+(currentViewerMeetingDate.slice(0,10)||'#'+id)+')';
+    asstSetScope('meeting');
+    // Renderizar timeline (capítulos)
+    _renderTimeline(m.chapters||[], id, v);
+  }catch(e){ v.innerHTML='<div class="text-xs text-red-300">No se pudo cargar.</div>'; } }
+async function openFolder(){ try{ const r=await fetch('/api/meetings/open-folder',{method:'POST'}); const d=await r.json();
+  if(!d.ok) mtoast('No se pudo abrir la carpeta: '+(d.error||d.path||''),'err'); }catch(e){ mtoast('No se pudo abrir la carpeta.','err'); } }
+async function exportAll(){ try{ const r=await fetch('/api/meetings/export',{method:'POST'}); const d=await r.json();
+  mtoast(d.ok?('Exportadas '+d.exported+' reuniones a: '+d.path):'Error al exportar', d.ok?'ok':'err'); }catch(e){ mtoast('Error al exportar.','err'); } }
+async function delMeeting(id){ if(!confirm('¿Eliminar esta reunión? No se puede deshacer.'))return;
+  try{ await fetch('/api/meetings/'+id+'/delete',{method:'POST'});
+    document.getElementById('mt-viewer').classList.add('hidden'); loadHistory(); }catch(e){} }
+async function clearAll(){ if(!confirm('¿Eliminar TODAS las reuniones del historial? No se puede deshacer.'))return;
+  try{ const r=await fetch('/api/meetings/clear',{method:'POST'}); const d=await r.json();
+    document.getElementById('mt-viewer').classList.add('hidden'); loadHistory(); mtoast('Eliminadas '+(d.deleted||0)+' reuniones.','ok'); }catch(e){ mtoast('Error al limpiar el historial.','err'); } }
+
+// Búsqueda FTS
+let _searchTimer=null;
+function onSearchInput(val){
+  clearTimeout(_searchTimer);
+  _searchTimer=setTimeout(()=>{ const q=val.trim(); if(!q){loadHistory();}else{runSearch(q);} },250);
+}
+function hl(s){
+  const d=document.createElement('div'); d.textContent=s||''; let h=d.innerHTML;
+  return h.split('').join('<b>').split('').join('</b>');
+}
+async function runSearch(q){
+  const el=document.getElementById('mt-history');
+  try{
+    const r=await fetch('/api/meetings/search?q='+encodeURIComponent(q));
+    const d=await r.json(); const res=d.results||[];
+    if(!res.length){ el.innerHTML='<div class="text-xs text-white/45">Sin resultados para \u201c'+esc(q)+'\u201d.</div>'; return; }
+    el.innerHTML=res.map(m=>{
+      const dateStr=document.createElement('div'); dateStr.textContent=m.started_at||'';
+      return '<div class="glass rounded-lg px-3 py-2 hover:bg-white/[0.04] cursor-pointer" onclick="openMeeting('+m.id+')">'
+        +'<div class="flex items-center gap-2">'
+        +'<span class="text-xs text-white/70 flex-1">'+esc(m.title||m.started_at||'')+'</span>'
+        +'<span class="text-[11px] text-white/30">'+esc(m.started_at||'')+'</span>'
+        +'</div>'
+        +(m.snippet?'<div class="text-[11px] text-white/40 mt-0.5 truncate">'+hl(m.snippet)+'</div>':'')
+        +'</div>';
+    }).join('');
+  }catch(e){ el.innerHTML='<div class="text-xs text-red-300">Error al buscar.</div>'; }
+}
+
+// ---------------------------------------------------------------------------
+// Asistente de reuniones — chat de memoria sobre reuniones
+// ---------------------------------------------------------------------------
+let asstMeetingId = null;
+let asstHistory = [];
+let currentViewerMeetingId = null;
+let currentViewerMeetingDate = '';
+
+const ASST_CHIPS_GLOBAL = [
+  '\u00bfCu\u00e1les son mis pendientes?',
+  'Resume mis \u00faltimas reuniones',
+  '\u00bfQu\u00e9 decisiones tomamos?',
+  'Redacta un email de seguimiento',
+  'Genera un informe de pendientes'
+];
+const ASST_CHIPS_MEETING = [
+  'Resume esta reuni\u00f3n',
+  'Lista los pendientes',
+  '\u00bfQu\u00e9 se decidi\u00f3?',
+  'Redacta email de seguimiento'
+];
+// Chips del chat EN VIVO por plantilla de reunión (unidad 4.3): generados desde
+// core.meeting_templates.TEMPLATES (Python) para no duplicar los textos a mano —
+// ver {{ chips_json|safe }} sustituido en meeting_page() antes de servir.
+const MEETING_TEMPLATE_CHIPS = {{ chips_json|safe }};
+function currentLiveChips(){
+  return MEETING_TEMPLATE_CHIPS[_mtTemplate] || MEETING_TEMPLATE_CHIPS['general'];
+}
+let _asstLive = false;
+let _mtTemplate = 'general';  // plantilla activa (unidad 4.3) — la verdad vive en el server, se refleja aquí desde loadLive()
+// Modo vivo de la pestaña Preguntar: chips fijos + nota "reunión en curso".
+// Lo alimenta loadLive() con el estado del polling de /api/meeting.
+function asstSetLive(active){
+  active = !!active;
+  if(active === _asstLive) return;
+  _asstLive = active;
+  if(active){
+    asstSetScope('global');  // la reunión viva manda: se pregunta sin meeting_id
+  } else {
+    asstSetScope(asstMeetingId && currentViewerMeetingId ? 'meeting' : 'global');
+  }
+}
+// Refleja el modo vivo en la UI (nota + chips). La llama asstSetScope al final,
+// así el vivo sobrevive a los toggles de ámbito y se apaga si se elige una reunión guardada.
+function asstSyncLiveUi(){
+  const liveNow = _asstLive && !asstMeetingId;
+  const note = document.getElementById('asst-live-note');
+  if(note) note.classList.toggle('hidden', !liveNow);
+  if(liveNow) asstRenderChips(currentLiveChips());
+}
+
+function asstRenderChips(chips){
+  const el=document.getElementById('asst-chips');
+  el.innerHTML='';
+  chips.forEach(function(c){
+    const b=document.createElement('button');
+    b.textContent=c;
+    b.className='hover:bg-violet-600/25';
+    b.style.cssText='font-size:.73rem;padding:.25rem .6rem;border-radius:.4rem;cursor:pointer;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.22);color:rgba(196,181,253,0.85);';
+    b.addEventListener('click',function(){ asstSend(c); });
+    el.appendChild(b);
+  });
+}
+
+function asstSetScope(mode){
+  const gb=document.getElementById('asst-scope-global');
+  const mb=document.getElementById('asst-scope-meeting');
+  if(mode==='meeting' && currentViewerMeetingId){
+    asstMeetingId=currentViewerMeetingId;
+    // Activo: Esta reunión
+    gb.className='text-[11px] px-2 py-0.5 rounded-full border transition-colors text-white/40 border-white/10 hover:text-white/70';
+    mb.className='text-[11px] px-2 py-0.5 rounded-full border transition-colors bg-violet-600/30 text-violet-200 border-violet-500/40';
+    asstRenderChips(ASST_CHIPS_MEETING);
+  } else {
+    asstMeetingId=null;
+    // Activo: Global
+    gb.className='text-[11px] px-2 py-0.5 rounded-full border transition-colors bg-violet-600/30 text-violet-200 border-violet-500/40';
+    mb.className='text-[11px] px-2 py-0.5 rounded-full border transition-colors text-white/40 border-white/10'+(mb.disabled?' opacity-40 cursor-not-allowed':' hover:text-white/70');
+    asstRenderChips(ASST_CHIPS_GLOBAL);
+  }
+  asstSyncLiveUi();  // el modo vivo (unidad 2.3) pisa chips/nota si aplica
+}
+
+function asstAddMsg(role, html){
+  const el=document.getElementById('asst-messages');
+  const isUser=(role==='user');
+  const div=document.createElement('div');
+  div.className='text-xs leading-relaxed '+(isUser?'text-white/70':'text-violet-100/90');
+  div.style.cssText='padding:.35rem .6rem;border-radius:.4rem;'+(isUser?'background:rgba(255,255,255,0.04);text-align:right;':'background:rgba(139,92,246,0.10);');
+  div.innerHTML=(isUser?'<span class="text-white/30 mr-1">T\u00fa:</span>':'<span class="text-violet-300/60 mr-1">Asistente:</span>')+html;
+  el.appendChild(div);
+  el.scrollTop=el.scrollHeight;
+  return div;
+}
+
+async function asstSend(text){
+  const inp=document.getElementById('asst-input');
+  const msg=(text!==undefined?text:inp.value).trim();
+  if(!msg)return;
+  inp.value='';
+  asstAddMsg('user', esc(msg).replace(/\n/g,'<br>'));
+  asstHistory.push({role:'user',content:msg});
+  const reasonChk=document.getElementById('asst-reason');
+  const reasoningVal=reasonChk&&reasonChk.checked?true:'auto';
+  const placeholder=asstAddMsg('assistant','<span class="text-white/45 italic">El asistente est\u00e1 pensando\u2026</span>');
+  const sendBtn=document.getElementById('asst-send'); sendBtn.disabled=true;
+  try{
+    const res=await fetch('/api/meetings/chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:msg,history:asstHistory.slice(-6),meeting_id:asstMeetingId,reasoning:reasoningVal,
+        live:(_asstLive&&!asstMeetingId)?true:undefined})
+    });
+    const d=await res.json();
+    if(!res.ok||d.error){
+      placeholder.innerHTML='<span class="text-white/30 mr-1">Asistente:</span><span style="color:#f87171;">'
+        +esc(d.error||'Error al consultar el asistente.')+'</span>';
+    } else {
+      const ans=d.answer||'';
+      const badge=d.reasoned?'<span title="Respuesta con razonamiento extendido" style="font-size:.9em;opacity:.7;margin-right:.25rem;">'+ICONS.spark+'</span>':'';
+      placeholder.innerHTML='<span class="text-violet-300/60 mr-1">Asistente:</span>'
+        +badge+mdToHtml(ans);
+      asstHistory.push({role:'assistant',content:ans});
+    }
+  }catch(e){
+    placeholder.innerHTML='<span class="text-white/30 mr-1">Asistente:</span>'
+      +'<span style="color:#f87171;">Error de red.</span>';
+  }finally{
+    document.getElementById('asst-send').disabled=false;
+  }
+}
+
+// Inicializar estado de ámbito: Global activo, "Esta reunión" deshabilitado
+(function(){
+  document.getElementById('asst-scope-global').addEventListener('click',function(){ asstSetScope('global'); });
+  document.getElementById('asst-scope-meeting').addEventListener('click',function(){
+    if(currentViewerMeetingId) asstSetScope('meeting');
+  });
+  asstSetScope('global');
+})();
+
+// Listener delegado para citas clickables [N]
+(function(){
+  const box=document.getElementById('asst-messages');
+  if(box) box.addEventListener('click',function(e){
+    const a=e.target.closest('.md-cite');
+    if(!a) return;
+    e.preventDefault();
+    const mid=parseInt(a.dataset.mid,10);
+    if(!isNaN(mid) && _meetingIds.has(mid)){
+      openMeeting(mid);
+      const v=document.getElementById('mt-viewer');
+      if(v) v.scrollIntoView({behavior:'smooth',block:'start'});
+    }
+  });
+})();
+
+_fillIcons();  // iconos SVG estáticos (data-icon)
+loadLive(); startPoll(); loadHistory();
+</script></body></html>

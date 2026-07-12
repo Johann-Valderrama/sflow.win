@@ -130,6 +130,7 @@ vflow/
 │   └── server.py           # Servidor MCP local read-only: search_meetings, get_minutes, get_transcript
 ├── web/
 │   ├── server.py           # Flask dashboard at localhost:5678 (auto-finds free port)
+│   ├── templates/          # Templates Jinja2: dashboard.html (ruta /) y reunion.html (/reunion)
 │   └── static/vendor/      # Assets auto-hospedados (tailwind.js Play + inter-variable.woff2) → dashboard offline, sin CDN
 ├── logo.png                # Brand logo (full size)
 ├── logo_small.png          # Brand logo (22x22 for tray + pill)
@@ -214,7 +215,7 @@ The dashboard is a hash-routed SPA (rediseño jul 2026): a fixed left **sidebar*
 
 **Verificación de UI (obligatoria tras tocar templates):** visibilidad por estado computado (`getComputedStyle`, nunca solo `classList`), screenshot/snapshot de cada vista tocada + el shell completo antes de dar por buena la unidad, y overlays (paleta, modales, toasts) con trío oculto-al-cargar/abre/cierra. Lección del bug de la paleta Ctrl+K (jul 2026): una regla CSS por `#id` le gana a `.hidden` de Tailwind — estilar visibilidad por ID sin la regla `#id.hidden{display:none}` es un bug latente. Detalle: feedback OPS `verificar-ui-como-el-usuario`.
 
-**DOS documentos HTML separados (lección unidad 3.1, jul 2026):** `web/server.py` sirve dos documentos independientes — `HTML_TEMPLATE` (el SPA del dashboard, ruta `/`) y `MEETING_PAGE` (la página `/reunion`). NO comparten scope de JS: una función definida en uno NO existe en el otro (un helper usado en ambos pero definido en uno solo mata la otra página con `ReferenceError` en runtime, invisible para los tests del endpoint). JS compartido se define UNA vez como constante Python (patrón `_MT_INCREMENTAL_JS`) y se inyecta en ambos templates por placeholder estático (sin `{{`/`{%`, Jinja los procesa); el test guardián `tests/test_meeting_incremental.py::TestHelperPresentInBothDocuments` verifica que todo documento que invoque el helper también lo defina. El polling de reunión es incremental: `GET /api/meeting?since=N` devuelve solo el delta + `gen` (token de generación) para invalidar el cursor al cambiar de reunión; sin `since` la respuesta completa legada se mantiene.
+**DOS documentos HTML separados (lección unidad 3.1, jul 2026):** `web/server.py` sirve dos documentos independientes — `web/templates/dashboard.html` (el SPA del dashboard, ruta `/`) y `web/templates/reunion.html` (la página `/reunion`), extraídos del inline en la unidad 4.1. NO comparten scope de JS: una función definida en uno NO existe en el otro (un helper usado en ambos pero definido en uno solo mata la otra página con `ReferenceError` en runtime, invisible para los tests del endpoint). JS compartido se define UNA vez como constante Python (patrón `_MT_INCREMENTAL_JS`) y se inyecta como variable de contexto Jinja `{{ mt_js|safe }}` en ambos templates; el test guardián `tests/test_meeting_incremental.py::TestHelperPresentInBothDocuments` verifica que todo documento que invoque el helper también lo defina. El polling de reunión es incremental: `GET /api/meeting?since=N` devuelve solo el delta + `gen` (token de generación) para invalidar el cursor al cambiar de reunión; sin `since` la respuesta completa legada se mantiene.
 
 ### 11. Transcribir desde URL — motor unificado + cola bulk (`core/url_transcribe.py`, `web/server.py`)
 

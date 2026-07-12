@@ -222,6 +222,7 @@ class TestHelperPresentInBothDocuments:
         )
         assert "const _mtCursors" in html
         assert "__MT_INCREMENTAL_JS__" not in html  # el placeholder se sustituyó
+        assert "ó" in html  # acento real intacto (encoding del template extraído, unidad 4.1)
 
     def test_reunion_document_defines_helper(self, client):
         r = client.get("/reunion")
@@ -233,6 +234,7 @@ class TestHelperPresentInBothDocuments:
         )
         assert "const _mtCursors" in html
         assert "__MT_INCREMENTAL_JS__" not in html  # el placeholder se sustituyó
+        assert "ó" in html  # acento real intacto (encoding del template extraído, unidad 4.1)
 
     def test_every_document_that_calls_helper_also_defines_it(self, client):
         """Genérico contra la regresión: CADA documento servido que INVOQUE
