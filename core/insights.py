@@ -785,8 +785,69 @@ def _clean_detections(raw: object) -> dict:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Momentos candidatos (marcado automático de momentos clave) — TAREA ADICIONAL
+# del MISMO update_state, independiente de las detecciones (unidad 5.1 v2).
+# ---------------------------------------------------------------------------
+# Decisión de diseño (no re-litigar): cero llamadas LLM nuevas — viaja como
+# intención adicional de la misma respuesta. core/meeting.py convierte cada
+# candidato en un highlight source="auto"; JAMÁS entran a self._highlights
+# (los manuales) ni al gate anti-alucinación F12 de _normalize_momentos/acta.
+
+_MOMENTOS_SYSTEM_EXTRA = (
+    "\n\nTAREA ADICIONAL (misma respuesta, mismo objeto JSON): añade además la clave "
+    '"momentos_candidatos" con exactamente esta forma:\n'
+    '  "momentos_candidatos": [{"t": "mm:ss"|null, "razon": string}, ...]\n\n'
+    "Un 'momento candidato' es un instante GENUINAMENTE importante de la reunión: una "
+    "decisión tomada, un compromiso adquirido, una cifra o dato clave, o un giro real de "
+    "la conversación. NO es un simple cambio de tema ni un comentario cualquiera.\n"
+    "- Máximo 2 candidatos por respuesta. Ante la MÍNIMA duda, omite: es preferible una "
+    "lista vacía a marcar algo que no lo amerita.\n"
+    '- "t": copia LITERALMENTE el marcador [mm:ss] del TEXTO NUEVO más cercano al '
+    "contenido citado; null si no hay marcador cercano. NUNCA inventes un timestamp.\n"
+    '- "razon": string CORTO (máx. 10 palabras) que explique qué hace importante ese '
+    "instante (p. ej. 'se acordó el presupuesto final', 'compromiso de entrega el viernes').\n"
+    "- En la mayoría de los fragmentos esta lista debe ir VACÍA: son EXCEPCIONALES."
+)
+
+
+def _clean_momentos(raw: object, max_items: int = 2) -> list:
+    """Valida/normaliza la clave "momentos_candidatos" del LLM.
+
+    Fail-safe estricto (mismo criterio que ``_clean_detections``): cualquier
+    ítem que no encaje se DESCARTA en silencio — nunca lanza. Un "t" que no sea
+    un string "mm:ss" parseable (número crudo, texto no temporal, tipo raro) se
+    trata como "no numérico" y descarta SOLO el "t" (el ítem completo se
+    descarta si tampoco tiene "razon"; ver abajo se descarta el ítem entero
+    porque sin tiempo no hay dónde anclar un highlight). El cap a
+    ``max_items`` se aplica DESPUÉS de filtrar, para que un ítem inválido
+    temprano no le robe el cupo a uno válido posterior.
+    """
+    out: list = []
+    if not isinstance(raw, list):
+        return out
+    for it in raw:
+        if not isinstance(it, dict):
+            continue
+        razon = str(it.get("razon") or "").strip()
+        if not razon:
+            continue
+        t_raw = it.get("t")
+        if not isinstance(t_raw, str) or not t_raw.strip():
+            continue  # sin "t" parseable no hay instante que anclar → descarte
+        candidate = t_raw.strip()
+        secs = _mmss_to_seconds(candidate)
+        if secs <= 0 and candidate not in ("0:00", "00:00"):
+            continue  # "t" no numérico / no parseable como mm:ss → descarte silencioso
+        out.append({"time": candidate, "razon": razon})
+        if len(out) >= max_items:
+            break
+    return out
+
+
 def update_state(state: dict, delta_text: str, *, detections_out: "dict | None" = None,
-                 ya_reportadas: "list | None" = None) -> dict:
+                 ya_reportadas: "list | None" = None,
+                 momentos_out: "list | None" = None) -> dict:
     """Actualiza el rolling state con el delta de transcript. Fail-safe.
 
     Devuelve el nuevo estado, o el anterior sin cambios si el LLM no está
@@ -801,10 +862,22 @@ def update_state(state: dict, delta_text: str, *, detections_out: "dict | None" 
     callers que no pasan ``detections_out`` (fallbacks, tests, usos legacy) usan
     el prompt original intacto. ``ya_reportadas`` (lista de textos ya avisados al
     usuario) viaja al LLM como contexto de dedup para no repetir detecciones.
+
+    Momentos candidatos (marcado automático de momentos clave) — mismo patrón NO
+    invasivo que las detecciones: si el caller pasa ``momentos_out`` (una lista),
+    se usa como OUT-PARAM: se vacía y se rellena con los candidatos a "momento
+    destacado" de la MISMA llamada LLM ([{"time": "mm:ss"|None, "razon": str}, ...],
+    máx. 2, [] si el LLM no reportó nada válido o falló). Solo en ese caso el
+    system prompt se extiende con la tarea adicional de momentos; si el caller no
+    pasa ``momentos_out`` (None, kill-switch AUTO_HIGHLIGHTS_ENABLED apagado en
+    core/meeting.py), NO se añade ni un token extra al prompt. Independiente de
+    ``detections_out``: ambas intenciones pueden convivir en la misma respuesta.
     """
     if detections_out is not None:
         detections_out.clear()
         detections_out.update(empty_detections())
+    if momentos_out is not None:
+        momentos_out.clear()
     if not delta_text.strip() or not is_available(task="live"):
         return state
     prev = json.dumps(state, ensure_ascii=False)
@@ -816,6 +889,8 @@ def update_state(state: dict, delta_text: str, *, detections_out: "dict | None" 
             listed = "\n".join(f"- {str(t).strip()}" for t in ya_reportadas if str(t).strip())
             if listed:
                 user_content += f"\n\nYA_REPORTADAS (no repetir en 'detecciones'):\n{listed}"
+    if momentos_out is not None:
+        system_content = system_content + _MOMENTOS_SYSTEM_EXTRA
     identity_line = _identity_line_for_live()
     if identity_line:
         system_content = system_content + "\n\n" + identity_line
@@ -828,7 +903,12 @@ def update_state(state: dict, delta_text: str, *, detections_out: "dict | None" 
             task="live",
             json_mode=True,
             temperature=0.1,
-            max_tokens=1200,
+            # 1800 (antes 1200): la respuesta puede cargar además "detecciones" y/o
+            # "momentos_candidatos" en la MISMA llamada (unidad 5.1 v2) — sin esta
+            # holgura el JSON se trunca antes de cerrar y el fail-safe descarta la
+            # actualización completa. Ver tests/test_momentos_candidatos.py
+            # (TestNoTruncado) para el guardián de no-truncado.
+            max_tokens=1800,
         )
         new_state = _extract_json(content)
         # Validar forma mínima; si falla, conservar el estado anterior (fail-safe)
@@ -839,6 +919,8 @@ def update_state(state: dict, delta_text: str, *, detections_out: "dict | None" 
         _set_last_error("live", None)  # llamada OK
         if detections_out is not None:
             detections_out.update(_clean_detections(new_state.get("detecciones")))
+        if momentos_out is not None:
+            momentos_out.extend(_clean_momentos(new_state.get("momentos_candidatos")))
         return {
             "temas": new_state.get("temas", []) or [],
             "pendientes": new_state.get("pendientes", []) or [],

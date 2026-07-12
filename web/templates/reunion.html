@@ -545,6 +545,22 @@ function actaHtml(m){
 }
 function renderActa(m){ document.getElementById('mt-acta-body').innerHTML=actaHtml(m); document.getElementById('mt-acta').classList.remove('hidden'); }
 
+// Lista cruda de highlights (manuales AltGr+H + candidatos automáticos del
+// Insight Stream, unidad 5.1 v2). Distinta del acta: NO pasa por el LLM ni por
+// el gate F12 — es el registro tal cual se marcó/detectó durante la reunión.
+// Tolerante a reuniones viejas sin el campo (m.highlights ausente/vacío -> '').
+function highlightsHtml(list){
+  const items = Array.isArray(list) ? list : [];
+  if (!items.length) return '';
+  const rows = items.map(function(h){
+    const isAuto = (h.source||'manual') === 'auto';
+    const badge = isAuto ? ' <span class="text-[9px] px-1 py-0.5 rounded bg-white/10 text-white/40 align-middle">auto</span>' : '';
+    const razon = h.razon ? ' <span class="text-white/60">'+esc(h.razon)+'</span>' : '';
+    return '<div class="text-xs text-white/75">'+ICONS.spark+' <span class="text-white/50">'+esc(h.time||'')+'</span>'+razon+badge+'</div>';
+  }).join('');
+  return '<div><div class="text-xs font-medium text-amber-300/70 mt-2 mb-1">⭐ Momentos</div>'+rows+'</div>';
+}
+
 async function setMeetingTemplate(name){
   const prev=_mtTemplate; _mtTemplate=name;  // optimista; se corrige en el próximo loadLive() si falla
   try{
@@ -651,6 +667,7 @@ async function openMeeting(id){
       +'<div class="text-xs font-medium text-violet-300/50 mb-1">L\u00ednea de tiempo</div><div id="mt-timeline" class="mb-3"></div>'
       +'<div class="flex items-center justify-between mb-1"><span class="text-xs font-medium text-white/40">Estad\u00edsticas</span></div><div id="viewer-metrics-body" class="mb-3">'+metricsPanel(m.metrics)+'</div>'
       +'<div class="flex items-center justify-between mb-1"><span class="text-xs font-medium text-emerald-300/70">Acta</span><button onclick="copyEl(&apos;viewer-acta-body&apos;, this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5">Copiar</button></div><div id="viewer-acta-body" class="space-y-2 mb-3">'+actaHtml(m.minutes)+'</div>'
+      +'<div id="viewer-highlights-body" class="mb-3">'+highlightsHtml(m.highlights)+'</div>'
       +'<div class="flex items-center justify-between mb-1"><span class="text-xs font-medium text-white/40">Transcripci\u00f3n</span><button onclick="copyEl(&apos;viewer-transcript-body&apos;, this)" class="text-[10px] text-white/30 hover:text-white/60 px-1.5 py-0.5 rounded hover:bg-white/5">Copiar</button></div><div id="viewer-transcript-body">'+transcriptHtml+'</div>';
     const _cb=document.getElementById('mt-close-btn');
     if(_cb) _cb.addEventListener('click',function(){

@@ -81,6 +81,25 @@ def _fmt_mmss(seconds: float) -> str:
     return f"{s // 60:02d}:{s % 60:02d}"
 
 
+def _parse_mmss(s: str) -> float:
+    """Convierte 'mm:ss' a segundos. Defensivo: 0.0 ante cualquier entrada inválida.
+
+    Duplicado deliberado de ``core.insights._mmss_to_seconds`` (misma lógica de 5
+    líneas): evita depender de un símbolo privado de otro módulo por un helper
+    tan chico. Si ambos divergieran alguna vez, sería una señal de que merece
+    promoverse a un util compartido — no antes.
+    """
+    try:
+        parts = str(s).strip().split(":")
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + float(parts[1])
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+    except Exception:  # noqa: BLE001
+        pass
+    return 0.0
+
+
 # ---------------------------------------------------------------------------
 # Memoria cruzada en vivo (unidad 5.2) — retrieval puro (cero LLM) sobre actas
 # pasadas en cada consolidación. Umbrales del gating anti falsos positivos:
@@ -141,7 +160,12 @@ class MeetingSession:
         # del segmento en muestras) / 16000, en el eje del canal.
         self._speech_samples: dict = {self.LABEL_MIC: 0, self.LABEL_SYS: 0}
         self._last_metrics: dict | None = None  # métricas de la última reunión terminada (panel 3.2)
-        self._highlights: list = []        # [{"t": float, "time": "mm:ss"}] — momentos marcados con AltGr+H
+        self._highlights: list = []        # [{"t": float, "time": "mm:ss", "source": "manual"}] — momentos marcados con AltGr+H
+        # Candidatos automáticos a momento destacado (unidad 5.1 v2), detectados por
+        # el Insight Stream sin costo LLM extra: [{"t", "time", "razon", "source":"auto"}].
+        # JAMÁS se pasan a generate_minutes(highlights=...) ni entran al gate F12 del
+        # acta — solo se combinan con self._highlights al PERSISTIR (highlights_json).
+        self._auto_highlights: list = []
         self._notes: list = []             # [{"t": float, "time": "mm:ss", "text": str}] — notas rápidas del usuario
         self._feedback: list = []          # [{"key","tipo","texto","value","t","time"}] — feedback ✓/✗ del único push (unidad 2.2)
         # Detecciones proactivas encoladas en la reunión actual (unidad 5.1):
@@ -399,12 +423,17 @@ class MeetingSession:
     def add_highlight(self) -> "dict | None":
         """Marca el instante actual como momento destacado (AltGr+H). Idempotente-safe:
         cada llamada añade un highlight nuevo (no es un toggle). Devuelve el dict
-        {"t", "time"} añadido, o None si no hay reunión activa."""
+        {"t", "time", "source": "manual"} añadido, o None si no hay reunión activa.
+
+        "source": "manual" (unidad 5.1 v2, retrocompat): distingue este highlight
+        de los candidatos automáticos (source="auto") cuando ambos se combinan al
+        persistir highlights_json. Entradas viejas en la DB sin "source" se leen
+        como manuales por defecto (ver web/blueprints/meetings.py)."""
         with self._lock:
             if not self._active:
                 return None
             t = self._elapsed()
-            item = {"t": round(t, 1), "time": _fmt_mmss(t)}
+            item = {"t": round(t, 1), "time": _fmt_mmss(t), "source": "manual"}
             self._highlights.append(item)
             return item
 
@@ -519,6 +548,7 @@ class MeetingSession:
             self._speech_samples = {self.LABEL_MIC: 0, self.LABEL_SYS: 0}
             self._last_metrics = None
             self._highlights = []
+            self._auto_highlights = []
             self._notes = []
             self._feedback = []
             self._detections = []
@@ -645,11 +675,16 @@ class MeetingSession:
             # con el análisis en vivo para que sea consistente con lo que vio el usuario.
             # Fail-safe: si el LLM no está disponible devuelve un acta vacía.
             with self._lock:
-                highlights = list(self._highlights)
+                highlights = list(self._highlights)          # SOLO manuales (gate F12)
+                auto_highlights = list(self._auto_highlights)  # nunca al acta — solo a persistencia
                 notes = list(self._notes)
                 feedback = list(self._feedback)
                 detections = list(self._detections)
                 template = self._template
+            # highlights= es SOLO manuales a propósito: los candidatos automáticos
+            # (source="auto") jamás alimentan el acta ni su gate anti-alucinación
+            # F12 (core.insights._normalize_momentos) — se combinan con los
+            # manuales más abajo, únicamente al persistir highlights_json.
             minutes = _insights.generate_minutes(transcript, self._store_to_plain(),
                                                  highlights=highlights, notes=notes,
                                                  segments=segments, template=template)
@@ -684,8 +719,12 @@ class MeetingSession:
                         chapters_json=json.dumps(chapters, ensure_ascii=False),
                         template=template,
                     )
-                    if highlights:
-                        insert_kwargs["highlights_json"] = json.dumps(highlights, ensure_ascii=False)
+                    # highlights_json persiste manuales + autos JUNTOS (cada uno con su
+                    # "source"); la acta (arriba) ya usó SOLO los manuales — esto es
+                    # exclusivamente para el historial/visor (unidad 5.1 v2).
+                    persisted_highlights = highlights + auto_highlights
+                    if persisted_highlights:
+                        insert_kwargs["highlights_json"] = json.dumps(persisted_highlights, ensure_ascii=False)
                     if notes:
                         insert_kwargs["notes_json"] = json.dumps(notes, ensure_ascii=False)
                     if feedback:
@@ -1054,19 +1093,27 @@ class MeetingSession:
         detecciones vía out-param (no gasta cuota extra). Se procesan al final,
         fuera del lock del merge; su fallo nunca afecta el estado.
 
+        Momentos candidatos (unidad 5.1 v2): mismo patrón, gateado por
+        ``AUTO_HIGHLIGHTS_ENABLED`` — con el flag apagado ``momentos_out`` viaja
+        como ``None`` y update_state ni siquiera añade la tarea al prompt.
+
         ``gen`` (F1, fix de concurrencia): token de generación capturado al lanzar
         este hilo. Si para cuando el LLM responde ya arrancó una reunión B
-        (``self._session_gen`` cambió), el merge y las detecciones se descartan —
-        de lo contrario esta respuesta tardía de A contaminaría el estado de B.
+        (``self._session_gen`` cambió), el merge y las detecciones/momentos se
+        descartan — de lo contrario esta respuesta tardía de A contaminaría el
+        estado de B.
         """
         detections: dict = {}
+        auto_enabled = self._auto_highlights_enabled()
+        momentos: "list | None" = [] if auto_enabled else None
         with self._lock:
             # Contexto de dedup para el LLM: textos ya avisados (los últimos 20 bastan).
             ya_reportadas = [d.get("base", "") for d in self._detections][-20:]
         try:
             llm_state = _insights.update_state(plain_prev, delta,
                                                detections_out=detections,
-                                               ya_reportadas=ya_reportadas)
+                                               ya_reportadas=ya_reportadas,
+                                               momentos_out=momentos)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Reunión: error en Insight Stream: %s", exc)
             llm_state = plain_prev
@@ -1106,6 +1153,13 @@ class MeetingSession:
             self._handle_detections(detections)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Reunión: error procesando detecciones (se ignoran): %s", exc)
+
+        # Momentos candidatos (unidad 5.1 v2): idem, fuera del lock, fail-safe total.
+        if momentos is not None:
+            try:
+                self._handle_momentos_candidatos(momentos)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Reunión: error procesando momentos candidatos (se ignoran): %s", exc)
 
     # ------------------------------------------------------------------
     # Detecciones proactivas (unidad 5.1)
@@ -1205,6 +1259,60 @@ class MeetingSession:
                         "t": round(t, 1),
                         "time": _fmt_mmss(t),
                     })
+
+    # ------------------------------------------------------------------
+    # Marcado automático de momentos clave (unidad 5.1 v2)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _auto_highlights_enabled() -> bool:
+        """Kill-switch AUTO_HIGHLIGHTS_ENABLED (env, lectura perezosa — mismo
+        patrón que ``_cross_memory_enabled``). Con el flag apagado, meeting.py
+        ni siquiera pide la tarea adicional a update_state (cero tokens extra)."""
+        return (os.getenv("AUTO_HIGHLIGHTS_ENABLED", "true") or "true").strip().lower() == "true"
+
+    def _handle_momentos_candidatos(self, momentos: list):
+        """Convierte los candidatos automáticos del Insight Stream (ya limpiados
+        por ``insights._clean_momentos``) en highlights ``source="auto"``.
+
+        Gating y dedup (diseño cerrado, no re-litigar):
+          1. Sesión activa (si terminó entre el disparo y la respuesta, se ignora).
+          2. Item con "razon" y "time" (mm:ss) válidos; "time" no parseable → descarte.
+          3. Dedup contra highlights MANUALES: si cae a <2s de uno ya marcado con
+             AltGr+H, se descarta el auto (el manual manda — es la señal más fuerte).
+          4. Dedup entre autos: si cae a <5s de un auto ya registrado en esta
+             reunión (de una ventana anterior), se descarta (evita duplicar el
+             mismo instante si el LLM lo vuelve a reportar).
+        JAMÁS toca self._highlights ni se pasa a generate_minutes(highlights=...):
+        los autos nunca entran al gate F12 del acta (ver core/insights.py
+        _normalize_momentos). Solo se combinan con los manuales al PERSISTIR
+        (ver stop()). Fail-safe silencioso: nunca lanza.
+        """
+        if not momentos:
+            return
+        if not self._active:
+            return
+        for item in momentos:
+            if not isinstance(item, dict):
+                continue
+            razon = str(item.get("razon") or "").strip()
+            time_s = str(item.get("time") or "").strip()
+            if not razon or not time_s:
+                continue
+            t = _parse_mmss(time_s)
+            if t <= 0 and time_s not in ("0:00", "00:00"):
+                continue
+            with self._lock:
+                if not self._active:
+                    return
+                if any(abs(h.get("t", 0.0) - t) < 2.0 for h in self._highlights):
+                    continue  # cerca de un highlight MANUAL: el manual manda
+                if any(abs(a.get("t", 0.0) - t) < 5.0 for a in self._auto_highlights):
+                    continue  # ya reportado en una ventana anterior
+                self._auto_highlights.append({
+                    "t": round(t, 1), "time": _fmt_mmss(t),
+                    "razon": razon, "source": "auto",
+                })
 
     # ------------------------------------------------------------------
     # Memoria cruzada en vivo (unidad 5.2)

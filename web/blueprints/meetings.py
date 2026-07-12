@@ -13,6 +13,25 @@ from web.state import MEETING, _db
 bp = Blueprint("meetings", __name__)
 
 
+def _normalize_highlights(raw: object) -> list:
+    """Normaliza la lista de highlights de una reunión para el visor (unidad 5.1 v2).
+
+    Retrocompat: entradas guardadas ANTES de esta feature no tienen "source"
+    (siempre eran manuales) — se completan con "source": "manual" al leer, sin
+    migrar la DB. Tolerante ante basura: ítems que no sean dict se descartan.
+    """
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for h in raw:
+        if not isinstance(h, dict):
+            continue
+        item = dict(h)
+        item.setdefault("source", "manual")
+        out.append(item)
+    return out
+
+
 @bp.route("/api/meetings", methods=["GET"])
 def meetings_list():
     """Lista de reuniones pasadas (sin transcript completo) para el historial.
@@ -35,11 +54,13 @@ def meeting_detail(meeting_id):
     m = _db.meeting_get(meeting_id)
     if not m:
         return jsonify({"error": "not found"}), 404
-    for k in ("minutes_json", "insights_json", "segments_json", "chapters_json", "metrics_json"):
+    for k in ("minutes_json", "insights_json", "segments_json", "chapters_json", "metrics_json",
+              "highlights_json"):
         try:
             m[k.replace("_json", "")] = _json.loads(m.get(k) or "null")
         except Exception:  # noqa: BLE001
             m[k.replace("_json", "")] = None
+    m["highlights"] = _normalize_highlights(m.get("highlights"))
     return jsonify(m)
 
 

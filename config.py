@@ -180,6 +180,8 @@ MEETINGS_DIR = os.getenv("MEETINGS_DIR", os.path.join(_DATA_DIR, "meetings"))
 #   PROACTIVE_DETECT_ACUERDOS (default "true")    — 5.1: acuerdos vagos (sin fecha/dueño).
 #   PROACTIVE_DETECT_CRUZADA (default "true")     — 5.2: memoria cruzada en vivo
 #       (tarjeta "El dd/mm se acordó: …" desde actas pasadas; retrieval puro, cero LLM).
+#   AUTO_HIGHLIGHTS_ENABLED (default "true")      — 5.1 v2: candidatos automáticos
+#       a momento destacado (highlights source="auto"; cero LLM extra, nunca al acta).
 
 # Copiloto con contexto OPS — briefing v1 (unidad 7.1) — flag de entorno de
 # lectura PEREZOSA (se lee en cada llamada, en core/ops_briefing.py, NO aquí:
@@ -587,6 +589,13 @@ ENV_CATALOG = {
     "PROACTIVE_DETECT_CRUZADA": {
         "default": "true", "kind": "lazy", "killswitch": True,
         "doc": "5.2: memoria cruzada en vivo (retrieval puro contra actas pasadas, cero LLM).",
+    },
+    "AUTO_HIGHLIGHTS_ENABLED": {
+        "default": "true", "kind": "lazy", "killswitch": True,
+        "doc": "5.1 v2: candidatos automáticos a momento destacado detectados por el "
+               "Insight Stream (cero LLM extra, misma llamada de update_state); "
+               "persisten como highlights source='auto', nunca entran al acta ni al "
+               "gate F12 (_normalize_momentos).",
     },
 
     # --- Copiloto con contexto OPS (unidad 7.1, lazy) -------------------------
