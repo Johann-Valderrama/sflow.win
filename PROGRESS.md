@@ -16,21 +16,27 @@
 > locales, sin push. 1 unidad = 1 commit.
 
 ## PARA JOHANN (PLAN-MEJORAS)
-- **G2 Ola 0 — Prueba física de las correcciones críticas** (5-10 min, app reiniciada): (1) con el
-  backend claude-cli (acta lenta), termina una reunión con AltGr+R y VUELVE a pulsar AltGr+R enseguida
-  → debes ver la notificación "Guardando la reunión anterior… espera unos segundos" y NINGUNA reunión
-  nueva rota; cuando termine el guardado, AltGr+R arranca normal y el acta de la primera está completa;
-  (2) MANTÉN AltGr+R presionado ~2s → UN solo toggle (no ráfaga de beeps); igual con AltGr+T; (3) desde
-  el dashboard, botón "Iniciar" mientras se guarda un acta → mensaje claro (409), no cuelgue; (4) cola
-  URL: encola 2-3 URLs y CIERRA la app a mitad del proceso → al reabrir, el lote termina sin filas
-  duplicadas en el historial.
-- **G2 Ola 1 — Prueba física de los quick wins** (5 min, app reiniciada): (1) cambia tu GROQ_API_KEY
-  desde el dashboard (Configuración) y dicta SIN reiniciar → debe funcionar con la key nueva; (2)
-  fuerza un dictado fallido (p. ej. sin internet con backend groq) → debe existir
-  `%APPDATA%\Vflow\last_failed_recording.wav`; dicta algo exitoso → el WAV debe desaparecer; (3) en
-  una reunión real con modo copiloto, verifica que las tarjetas proactivas siguen apareciendo (máx
-  ~1 cada 5 min) y que ✓/✗ funcionan (la concurrencia del gate cambió por dentro); (4) en Ajustes
-  intenta guardar una carpeta de export bajo C:\Windows → debe rechazarse con mensaje claro.
+- **G2 Ola 0 — VERIFICADO 2026-07-12** (Johann + orquestador con la app viva): (1) re-pulsar AltGr+R
+  durante el guardado → notificación "Guardando la reunión anterior…" + ninguna reunión rota ✓;
+  (2) AltGr+R/T sostenido → sin ráfaga de beeps (confirmado por log: ciclos deliberados, no
+  auto-repeat) ✓; (3) POST /api/meeting/start durante el stop → HTTP 409 con mensaje claro
+  (log 08:53:34, probe automático) ✓. FALTA solo (4) cola URL con crash → la corre el orquestador
+  (cierra/reabre la app).
+- **G2 Ola 1 — VERIFICADO 2026-07-12**: (1) validación de rutas en /api/settings → C:\Windows,
+  ruta relativa y briefing sin .md rechazados con 400 y mensaje claro (probe contra app viva) ✓;
+  (2) TTL/borrado del WAV fallido → fallo real sin red escribió last_failed_recording.wav
+  (log 09:04:10), dictado exitoso posterior lo borró (log 09:10:53 "eliminado tras dictado
+  exitoso") ✓; hotkeys y dictado corto sin anomalías ✓. Pendiente async opcional: (3) ver
+  tarjetas proactivas ✓/✗ en una reunión real de trabajo (no bloquea).
+- **NUEVA UNIDAD pedida por Johann (2026-07-12): fallback simétrico de transcripción online↔local.**
+  Hoy `GROQ_FALLBACK` cubre SOLO local-primario→Groq (transcriber.py:177,308-313). Falta el espejo:
+  con backend primario = Groq (online), si no hay internet la transcripción cae AUTOMÁTICAMENTE al
+  modelo local, y en el siguiente dictado vuelve a intentar Groq primero (re-probe por evento, patrón
+  del circuit breaker de insights.py `_breaker`). Cero costo en tokens (Whisper local CTranslate2).
+  Condición de diseño a resolver en el debate: el modelo local DEBE estar descargado para el fallback
+  Groq→local; si no lo está, avisar en vez de fallar mudo (no auto-descargar en el hot-path). Decisión
+  de Johann: **AGREGADA a la Ola 5 (producto) como unidad 5.5** (ver abajo). Esfuerzo bajo-medio,
+  simétrico a la lógica ya existente.
 - **Decisiones pendientes que bloquean olas** (responde con número+letra, ej. `D1: A`): **D1**
   (¿para quién es Vflow? A=solo para mí/limpieza mínima *(recomendada)*, B=venderlo en 6-12m/reorden
   completo, C=no sé) → bloquea Ola 4 · **D4** (capacidades nuevas: 1=auto-highlights, 2=nombre/rol

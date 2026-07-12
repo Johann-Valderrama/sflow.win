@@ -346,7 +346,10 @@ gate explícito de Johann.
 🙋 **Depende de la decisión D4 (bloque DECISIONES, arriba).** Mapa D4 → unidad: opción 1 =
 5.1 (auto-highlights) · opción 2 = 5.2 (contexto personal) · opción 3 = 5.3 (chat cross-reunión
 + entregables) · opción 4 = 5.4 (pendientes → OPS). Recomendación de orden por ROI/esfuerzo:
-5.2 primero (mínima), luego 5.4 y 5.1, y 5.3 al final. Sin D4 respondida, la Ola 5 NO corre.
+5.2 primero (mínima), luego 5.4 y 5.1, y 5.3 al final. Sin D4 respondida, las unidades 5.1-5.4 NO corren.
+**Excepción — 5.5 (fallback simétrico online↔local) YA está elegida por Johann (2026-07-12) y NO
+depende de D4:** puede correr sola, tras su debate previo; toca core/transcriber.py (no reunión ni URL
+en v1), así que se serializa con cualquier otra unidad que toque ese archivo.
 
 | Unidad | Qué (detalle en el informe, sección "Oportunidades de producto") | Dificultad | Ejecutar con | Por qué |
 |---|---|---|---|---|
@@ -354,6 +357,7 @@ gate explícito de Johann.
 | 5.2 | Contexto personal en prompts: setting (nombre, rol, dominio) inyectado en los system prompts de insights/acta/chat; "Yo" pasa a ser el nombre real en pendientes con responsable | Mecánica | Haiku 4.5 · med | Cambio de prompt acotado; el orquestador valida con una reunión sintética que los pendientes atribuyen bien |
 | 5.3 | Chat de memoria CROSS-reunión + entregables: seleccionar N reuniones (o "todas las de un tema" vía FTS) y chatear sobre el conjunto; 2-3 plantillas de entregable (email de seguimiento, informe). Presupuesto de contexto por backend reusa insights.budget_chars | Delicada | Opus 4.8 · high diseña prompts y presupuesto multi-acta + Sonnet 5 · high ejecuta; debate previo obligatorio | Presupuesto multi-reunión es fácil de reventar (N actas > ventana del backend endpoint 18KB); el debate define el recorte ANTES de codear |
 | 5.4 | Pendientes → OPS: los compromisos de una reunión se exportan como tareas consumibles por el OPS (formato markdown de tarea acordado + carpeta observada o tool MCP nueva de escritura acotada). GATE G1: el CONTRATO (formato + ubicación + qué escribe quién) se diseña, se debate y espera tu ojo ANTES de codear | Delicada (contrato) + estándar (código) | Opus 4.8 · high (contrato) → Sonnet 5 · med (código tras tu aprobación) | Contrato consumible por terceros (Levy/OPS): un formato mal elegido se fosiliza; por eso G1 |
+| 5.5 | **Fallback simétrico de transcripción online↔local** (pedido de Johann 2026-07-12, YA elegido — corre sin depender de D4). Hoy `GROQ_FALLBACK` cubre SOLO local-primario→Groq (core/transcriber.py:177,308-313). Falta el ESPEJO: con backend primario = Groq (online), si la transcripción falla por red (Connection error/timeout) cae AUTOMÁTICAMENTE al modelo local; en el siguiente dictado re-intenta Groq primero (re-probe por evento, patrón del circuit breaker de core/insights.py `_breaker` con cooldown). Unificar bajo un solo concepto de "fallback automático" que opera en la dirección que corresponda según el backend primario. Cero costo en tokens (Whisper local CTranslate2). **Condición de diseño (la resuelve el debate):** el modelo local DEBE estar descargado para Groq→local; si no lo está, avisar (tray/pill) en vez de fallar mudo — NO auto-descargar en el hot-path del dictado. Alcance v1: ruta de DICTADO (transcribe/translate); reunión y URL quedan fuera salvo que el debate diga lo contrario. | Estándar (simétrico a lógica existente) | Sonnet 5 · high, debate previo Opus 4.8 (dirección del fallback + guard de modelo no descargado + qué cuenta como "fallo de red" vs error real) | Resiliencia = la herramienta siempre funciona sin internet; refuerza el núcleo local/privado. Bajo riesgo: espeja `GROQ_FALLBACK` que ya existe y está probado |
 
 ### Kickoff Ola 5 (copy-paste; añade tu lista de unidades al final de la frase)
 
