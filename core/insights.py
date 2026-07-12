@@ -978,7 +978,21 @@ def _truncate_transcript_to_budget(transcript: str, other_len: int, budget: int)
     """
     safe_budget = int(budget * 0.9)
     allowance = safe_budget - other_len
-    if allowance <= 0 or len(transcript) <= allowance:
+    if allowance <= 0:
+        # Los bloques FIJOS (insights/highlights/notas/plantilla) ya consumen todo
+        # el presupuesto seguro: no cabe ni un carácter del transcript. Devolver el
+        # transcript COMPLETO (bug original) desbordaría el contexto justo en el
+        # caso que más necesita truncar; devolver "" es el fail-safe correcto
+        # (callar > inventar) y deja que generate_minutes/generate_chapters sigan
+        # con un prompt sin transcripción en vez de reventar el backend.
+        logger.warning(
+            "Truncado de transcript: presupuesto agotado por bloques fijos "
+            "(other_len=%d >= presupuesto seguro=%d); se descarta el transcript "
+            "por completo en vez de desbordar el contexto",
+            other_len, safe_budget,
+        )
+        return ""
+    if len(transcript) <= allowance:
         return transcript
 
     cut = transcript[-allowance:]
@@ -1133,6 +1147,46 @@ def _reconcile_user_notes(note_items: list, raw: object) -> list:
     return result
 
 
+def _normalize_momentos(raw: object, highlights: list | None) -> list:
+    """Normaliza 'momentos_destacados' devuelto por el LLM. Fail-safe (F12).
+
+    Gatea por los ``highlights`` REALES que el usuario marcó en vivo (mismo patrón
+    que ``notes``/``note_items`` para 'notas_usuario'): si no hubo highlights reales,
+    la clave se descarta por completo aunque el LLM la alucine — nunca se persisten
+    "momentos destacados" inventados en una reunión sin marcas del usuario.
+
+    Tolera además que el LLM devuelva un tipo equivocado en vez de la lista de
+    dicts {"time", "texto"} esperada: un string plano se descarta con log (no hay
+    forma de recuperar un time/texto de un string suelto sin inventar), y los
+    elementos de la lista que no sean dict ni string no vacío se descartan en
+    silencio (evita que los renders —``_format_acta``, ``meeting_export``, el
+    dashboard— iteren caracteres o exploten con un tipo inesperado).
+    """
+    if not highlights:
+        return []
+    if isinstance(raw, str):
+        logger.warning(
+            "Acta: 'momentos_destacados' llegó como string plano del LLM (se "
+            "descarta, no se puede recuperar time/texto de él): %r", raw[:80],
+        )
+        return []
+    if not isinstance(raw, list):
+        return []
+    result = []
+    for item in raw:
+        if isinstance(item, dict):
+            texto = str(item.get("texto") or "").strip()
+            time_s = str(item.get("time") or "").strip()
+            if texto or time_s:
+                result.append({"time": time_s, "texto": texto})
+        elif isinstance(item, str):
+            texto = item.strip()
+            if texto:
+                result.append({"time": "", "texto": texto})
+        # otros tipos (int/float/None/list/...) se descartan en silencio
+    return result
+
+
 def _normalize_decisiones(raw: object, segments: list | None) -> list:
     """Normaliza 'decisiones' a lista de dicts {texto, t?}.
 
@@ -1277,7 +1331,7 @@ def generate_minutes(transcript: str, insights: dict | None = None,
             "propuestas": data.get("propuestas", []) or [],
             "citas": data.get("citas", []) or [],
         }
-        momentos = data.get("momentos_destacados")
+        momentos = _normalize_momentos(data.get("momentos_destacados"), highlights)
         if momentos:
             result["momentos_destacados"] = momentos
         if note_items:

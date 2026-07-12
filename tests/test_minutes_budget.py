@@ -140,6 +140,51 @@ class TestGenerateMinutesBudget:
         assert "intervención número 0 " in captured["user"]
         assert "intervención número 149 " in captured["user"]
 
+    def test_allowance_non_positive_returns_empty_not_full_transcript(self):
+        """F13: cuando los bloques fijos ya agotan el presupuesto seguro
+        (allowance <= 0), la función debe descartar el transcript por completo
+        ("") en vez de devolverlo COMPLETO (bug original: justo el caso que más
+        necesita truncar terminaba desbordando el contexto sin recortar nada)."""
+        transcript = "[00:00 Yo] " + ("bla " * 500)  # ~2500 chars, no vacío
+        # other_len >= safe_budget (budget*0.9): allowance queda <= 0.
+        result = insights._truncate_transcript_to_budget(
+            transcript, other_len=100_000, budget=18000,
+        )
+        assert result == ""
+        assert result != transcript
+
+    def test_allowance_exactly_zero_returns_empty(self):
+        budget = 1000
+        safe_budget = int(budget * 0.9)  # 900
+        result = insights._truncate_transcript_to_budget(
+            "algo de transcript", other_len=safe_budget, budget=budget,
+        )
+        assert result == ""
+
+    def test_generate_minutes_survives_allowance_non_positive(self, monkeypatch):
+        """El flujo completo de generate_minutes no revienta cuando el presupuesto
+        queda agotado por bloques fijos: el transcript llega vacío al prompt, pero
+        la llamada se completa y el acta se genera igual."""
+        self._fake_available(monkeypatch, "endpoint")  # 18KB
+        # Un bloque "extra" (highlights) enorme agota el presupuesto seguro por sí
+        # solo, forzando allowance <= 0 dentro de generate_minutes.
+        transcript = _make_transcript_lines(50)
+        captured = {}
+
+        def _fake_chat(messages, **kwargs):
+            captured["user"] = messages[1]["content"]
+            return '{"resumen": "ok", "decisiones": [], "temas": [], ' \
+                   '"pendientes": [], "propuestas": [], "citas": []}'
+
+        monkeypatch.setattr(insights, "_chat", _fake_chat)
+        huge_highlights = [{"time": f"{i:02d}:00"} for i in range(20000)]
+        result = insights.generate_minutes(transcript, highlights=huge_highlights)
+        assert result["resumen"] == "ok"
+        # El transcript quedó vacío (descartado), pero el prompt no truena y el
+        # bloque de highlights (parte fija) sigue presente completo.
+        assert "MOMENTOS DESTACADOS" in captured["user"]
+        assert "intervención número 0 " not in captured["user"]
+
     def test_insights_and_highlights_never_truncated(self, monkeypatch):
         """Los bloques insights/highlights son pequeños y no deben truncarse aunque
         el transcript sí lo sea."""
