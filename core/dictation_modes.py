@@ -118,9 +118,17 @@ def reformat_text(text: str, preset: str, *, timeout: float = 8.0) -> "str | Non
     error, o timeout) — el caller pega el texto original en ese caso (fallback
     silencioso).
 
-    ``timeout`` se aplica como límite dentro de este hilo mediante un
-    ThreadPoolExecutor de un solo worker (el propio ``_chat`` no acepta un
-    parámetro de timeout genérico entre backends).
+    ``timeout`` es un límite REAL: se implementa con un ``threading.Thread``
+    propio marcado ``daemon=True`` (no un ``ThreadPoolExecutor``). Un
+    ThreadPoolExecutor usado como context manager bloquea en su
+    ``__exit__`` (``shutdown(wait=True)``) hasta que el worker termine,
+    incluso si ``future.result(timeout=...)`` ya lanzó ``TimeoutError`` —
+    eso convertía el "timeout duro de 8s" en una espera de decenas de
+    segundos con el backend colgado (F11). Con un hilo daemon propio, si el
+    backend no responde a tiempo, esta función retorna igual (fallback al
+    texto original) y el hilo huérfano muere solo cuando el backend
+    responda o el proceso termine — nunca bloquea el pegado ni el exit del
+    intérprete.
     """
     if preset not in PRESETS:
         return None
@@ -141,23 +149,33 @@ def reformat_text(text: str, preset: str, *, timeout: float = 8.0) -> "str | Non
         {"role": "user", "content": text},
     ]
 
-    import concurrent.futures
+    import threading
+
+    done = threading.Event()
+    outcome: dict = {}
 
     def _call():
-        return _insights._chat(messages, task="batch", json_mode=False, temperature=0.2, max_tokens=2000)
+        try:
+            outcome["result"] = _insights._chat(
+                messages, task="batch", json_mode=False, temperature=0.2, max_tokens=2000
+            )
+        except Exception as e:  # noqa: BLE001 — se propaga al hilo llamador vía outcome
+            outcome["error"] = e
+        finally:
+            done.set()
 
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_call)
-            result = future.result(timeout=timeout)
-    except concurrent.futures.TimeoutError:
+    worker = threading.Thread(target=_call, daemon=True)
+    worker.start()
+
+    if not done.wait(timeout=timeout):
         logger.warning("dictation_modes: timeout (%.1fs) reformateando con preset '%s'", timeout, preset)
         return None
-    except Exception as e:  # noqa: BLE001 — cualquier fallo del LLM cae a fallback silencioso
-        logger.warning("dictation_modes: fallo reformateando con preset '%s': %s", preset, e)
+
+    if "error" in outcome:
+        logger.warning("dictation_modes: fallo reformateando con preset '%s': %s", preset, outcome["error"])
         return None
 
-    result = (result or "").strip()
+    result = (outcome.get("result") or "").strip()
     if not result:
         return None
     return result

@@ -133,6 +133,61 @@ class TestReformatTextFailureModes:
         result = dictation_modes.reformat_text("hola mundo", "chat", timeout=0.05)
         assert result is None
 
+    def test_llm_timeout_returns_at_timeout_not_at_backend_sleep(self, monkeypatch):
+        """F11: reformat_text debe retornar cerca del `timeout` inyectado, NO
+        esperar a que el backend colgado termine su sleep (bug del
+        ThreadPoolExecutor cuyo __exit__ bloqueaba en shutdown(wait=True))."""
+        from core import dictation_modes, insights as _insights
+
+        backend_sleep_s = 2.0
+        injected_timeout_s = 0.1
+
+        def _slow_chat(*args, **kwargs):
+            time.sleep(backend_sleep_s)
+            return "reformateado"
+
+        monkeypatch.setattr(_insights, "_resolve_backend", lambda task: "groq")
+        monkeypatch.setattr(_insights, "_chat", _slow_chat)
+
+        start = time.monotonic()
+        result = dictation_modes.reformat_text("hola mundo", "chat", timeout=injected_timeout_s)
+        elapsed = time.monotonic() - start
+
+        assert result is None
+        # Margen generoso (el hilo daemon del backend colgado sigue vivo en
+        # background, pero NO debe bloquear el retorno de esta función).
+        assert elapsed < backend_sleep_s / 2, (
+            f"reformat_text tardó {elapsed:.2f}s — parece estar esperando al "
+            f"backend colgado ({backend_sleep_s}s) en vez de respetar el timeout "
+            f"inyectado ({injected_timeout_s}s)."
+        )
+
+    def test_timeout_worker_thread_is_daemon(self, monkeypatch):
+        """El hilo que ejecuta la llamada al LLM debe ser daemon=True: así un
+        backend colgado no impide que el proceso termine (atexit no lo espera)."""
+        from core import dictation_modes, insights as _insights
+        import threading
+
+        captured_threads = []
+        _orig_thread_init = threading.Thread.__init__
+
+        def _capturing_init(self, *args, **kwargs):
+            _orig_thread_init(self, *args, **kwargs)
+            captured_threads.append(self)
+
+        def _slow_chat(*args, **kwargs):
+            time.sleep(0.3)
+            return "reformateado"
+
+        monkeypatch.setattr(_insights, "_resolve_backend", lambda task: "groq")
+        monkeypatch.setattr(_insights, "_chat", _slow_chat)
+        monkeypatch.setattr(threading.Thread, "__init__", _capturing_init)
+
+        result = dictation_modes.reformat_text("hola mundo", "chat", timeout=0.05)
+        assert result is None
+        assert len(captured_threads) == 1
+        assert captured_threads[0].daemon is True
+
     def test_llm_empty_response_returns_none(self, monkeypatch):
         from core import dictation_modes, insights as _insights
         monkeypatch.setattr(_insights, "_resolve_backend", lambda task: "groq")
