@@ -28,6 +28,7 @@ import sys
 import signal
 import subprocess
 import threading
+import time
 import webbrowser
 import winreg
 import winsound
@@ -156,6 +157,55 @@ _REGISTRY_APP_NAME = "Vflow"
 # Número de comprobaciones consecutivas (cada 1 s) sin avance de muestras antes de
 # declarar que el micrófono se desconectó a mitad de grabación.
 _MIC_STALL_LIMIT = 2
+
+# Presupuesto TOTAL de gracia (segundos) para esperar a que terminen los workers
+# de chunk en vuelo antes de ensamblar el texto final del dictado largo (unidad
+# 0.2). El timeout de la API Groq por chunk es 10s: un worker vivo termina o
+# falla dentro de esta ventana; si sigue vivo tras la gracia, se asume perdido.
+_CHUNK_JOIN_GRACE_SECONDS = 12.0
+# Intervalo de sondeo dentro del join: mantiene la respuesta rápida al abort
+# por cambio de generación sin bloquear en un único join() largo por thread.
+_CHUNK_JOIN_POLL_SECONDS = 0.2
+
+
+def _join_pending_chunks(threads, gen, get_generation, grace_seconds=_CHUNK_JOIN_GRACE_SECONDS):
+    """Espera, con presupuesto acotado, a que terminen los workers de chunk en vuelo.
+
+    Diseño (unidad 0.2, debate cerrado — implementar tal cual): el dictado largo
+    por chunks (`_flush_chunk`) lanza un thread por tramo. Si el tramo final
+    (`_transcribe_final`) le gana la carrera a un worker anterior que sigue
+    esperando a la API (Groq lenta), su texto quedaba huérfano en
+    `self._chunk_results` y se perdía en silencio al ensamblar. Esta función se
+    llama ANTES de leer `_chunk_results`, con una gracia corta, y aborta de
+    inmediato sin alarma si la generación cambió durante la espera (el usuario
+    ya inició un dictado nuevo y los workers viejos se descartan solos por su
+    propio check de gen).
+
+    threads: threads ya lanzados para la generación `gen` (snapshot tomado por
+        el caller bajo `_chunk_state_lock`).
+    gen: generación a la que pertenecen esos threads.
+    get_generation: callable sin argumentos que devuelve la generación vigente.
+    grace_seconds: presupuesto TOTAL de espera (no por-thread).
+
+    Devuelve True si, agotada la gracia, algún thread de `gen` seguía vivo (un
+    chunk potencialmente perdido) — NUNCA por un hueco de índice en
+    `_chunk_results` (un chunk sin texto detectado, `if text:` en
+    `_chunk_worker`, es silencio legítimo, no una pérdida).
+    Devuelve False si todos terminaron a tiempo, o si el join se abortó porque
+    la generación cambió durante la espera.
+    """
+    deadline = time.monotonic() + grace_seconds
+    for t in threads:
+        while t.is_alive():
+            if get_generation() != gen:
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            t.join(min(_CHUNK_JOIN_POLL_SECONDS, remaining))
+        if get_generation() != gen:
+            return False
+    return any(t.is_alive() for t in threads)
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +444,7 @@ class VflowApp(QObject):
     paste_finished = pyqtSignal(str)                    # "pasted" | "clipboard_only" | "failed"
     meeting_stopped = pyqtSignal(object)                # dict resultado de MEETING.stop()
     lost_answer_ready = pyqtSignal(dict)                # resultado de answer_live() (unidad 5.3)
+    chunk_loss_warning = pyqtSignal(int)                 # generación; un chunk se perdió tras la gracia (unidad 0.2)
 
     def __init__(self):
         """Inicializa componentes (recorder, transcriber, DB, hotkey, pill) y conecta señales."""
@@ -440,6 +491,12 @@ class VflowApp(QObject):
         # transcribe()/translate() detectan diferencia (raw_text no None).
         self._chunk_raw: dict[int, str] = {}
         self._chunk_seq = 0
+        # Registro de workers de chunk en vuelo (unidad 0.2): permite a
+        # _transcribe_final joinarlos con gracia antes de ensamblar el texto
+        # final, en vez de perder en silencio el tramo de un worker que sigue
+        # esperando la API. Protegido por _chunk_state_lock; se resetea junto
+        # con _chunk_results/_chunk_raw al arrancar cada grabación nueva.
+        self._chunk_threads: list[threading.Thread] = []
         self._chunk_state_lock = threading.Lock()
         # Texto crudo pendiente de la última transcripción emitida, indexado por
         # generación (gen). Puente entre _transcribe_final (hilo background) y
@@ -487,6 +544,7 @@ class VflowApp(QObject):
         self.transcription_error.connect(self._on_transcription_error, Qt.ConnectionType.QueuedConnection)
         self.paste_finished.connect(self._on_paste_finished, Qt.ConnectionType.QueuedConnection)
         self.lost_answer_ready.connect(self._on_lost_answer_ready, Qt.ConnectionType.QueuedConnection)
+        self.chunk_loss_warning.connect(self._on_chunk_loss_warning, Qt.ConnectionType.QueuedConnection)
 
         # Señales del HUD hacia el resto de la app (feedback/"me perdí"/pregunta libre)
         self.hud.feedback_requested.connect(self._on_hud_feedback)
@@ -525,6 +583,7 @@ class VflowApp(QObject):
                 self._chunk_results.clear()
                 self._chunk_raw.clear()
                 self._chunk_seq = 0
+                self._chunk_threads.clear()
             self._chunk_timer.start(CHUNK_SECONDS * 1000)
             self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
             # Arrancar watchdog de micrófono (desactivado en modo system: loopback puede silenciar)
@@ -566,6 +625,7 @@ class VflowApp(QObject):
                 self._chunk_results.clear()
                 self._chunk_raw.clear()
                 self._chunk_seq = 0
+                self._chunk_threads.clear()
             # Sin chunk_timer en modo traducción — se envía audio completo al endpoint de traducción
             self._safety_timer.start(MAX_RECORDING_SECONDS * 1000)
             # Arrancar watchdog de micrófono (desactivado en modo system)
@@ -596,11 +656,17 @@ class VflowApp(QObject):
                 else:
                     prompt = None
             gen = self._generation
-            threading.Thread(
+            t = threading.Thread(
                 target=self._chunk_worker,
                 args=(chunk_buf, prompt, idx, gen),
                 daemon=True,
-            ).start()
+            )
+            # Registrar ANTES de start() para que un snapshot concurrente (bajo
+            # el mismo lock) tomado por _transcribe_final nunca pueda perderse
+            # este worker (unidad 0.2).
+            with self._chunk_state_lock:
+                self._chunk_threads.append(t)
+            t.start()
 
     def _chunk_worker(self, wav_buffer, prompt, idx: int, gen: int):
         """Transcribe un chunk en background; descarta resultado si la generación cambió."""
@@ -681,6 +747,23 @@ class VflowApp(QObject):
                     else:
                         prompt = None
                 text, raw = self.transcriber.transcribe(wav_buffer, prompt=prompt, return_raw=True)
+
+                # Unidad 0.2: joinar (con gracia acotada) los workers de chunk en
+                # vuelo de ESTA generación ANTES de leer/ensamblar _chunk_results.
+                # Sin esto, un worker que sigue esperando a la API (Groq lenta)
+                # puede perder la carrera contra este tramo final y su texto se
+                # descarta en silencio.
+                with self._chunk_state_lock:
+                    pending_threads = list(self._chunk_threads)
+                if _join_pending_chunks(pending_threads, gen, lambda: self._generation):
+                    logger.warning(
+                        "Dictado largo: un chunk seguía transcribiéndose tras %.0fs de gracia "
+                        "— se descarta del ensamblado final (gen=%d).",
+                        _CHUNK_JOIN_GRACE_SECONDS,
+                        gen,
+                    )
+                    self.chunk_loss_warning.emit(gen)
+
                 # Asignar el tramo final al índice siguiente en el dict de chunks
                 with self._chunk_state_lock:
                     final_idx = self._chunk_seq
@@ -1182,6 +1265,25 @@ class VflowApp(QObject):
                     QSystemTrayIcon.MessageIcon.Warning,
                     4000,
                 )
+
+    @pyqtSlot(int)
+    def _on_chunk_loss_warning(self, gen: int):
+        """Notifica en bandeja que un fragmento del dictado no se pudo transcribir a tiempo.
+
+        Unidad 0.2: emitida por _transcribe_final (hilo background) cuando, tras
+        la gracia de _join_pending_chunks, un worker de chunk de esta generación
+        seguía vivo. No inserta marcadores en el texto pegado — el texto
+        disponible se pega normal; esto es solo la notificación de tray.
+        """
+        if gen != self._generation:
+            return  # el usuario ya inició otro dictado: notificación obsoleta
+        if self.tray:
+            self.tray.showMessage(
+                "Vflow",
+                "Parte del dictado no se pudo transcribir (un fragmento sigue pendiente).",
+                QSystemTrayIcon.MessageIcon.Warning,
+                4000,
+            )
 
     @pyqtSlot(str, int)
     def _on_transcription_error(self, error: str, gen: int):
