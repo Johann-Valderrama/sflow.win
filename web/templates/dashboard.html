@@ -559,6 +559,19 @@
                             </div>
                         </div>
                     </div>
+                    <!-- Sección respaldo local sin internet (unidad 5.5, visible solo con backend=groq) -->
+                    <div id="transcription-fallback-section" class="mt-4 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hidden">
+                        <div class="flex items-start gap-2">
+                            <label class="toggle-switch mt-0.5">
+                                <input type="checkbox" id="cfg-transcription-fallback">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <div>
+                                <span class="text-xs text-white/50">Respaldo local sin internet</span>
+                                <p class="text-xs text-white/55 mt-0.5">Si se activa y Groq falla por falta de red, el dictado sigue funcionando con el modelo local descargado (requiere haberlo descargado antes desde "Local sin internet" arriba).</p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -1701,6 +1714,7 @@
             document.getElementById('cfg-backend').value = settings.transcription_backend || 'groq';
             document.getElementById('cfg-local-model').value = settings.local_whisper_model || 'small';
             document.getElementById('cfg-groq-fallback').checked = settings.groq_fallback === true;
+            document.getElementById('cfg-transcription-fallback').checked = settings.transcription_fallback === true;
             // Modo proactivo (HUD en vivo, unidad 5.3)
             document.getElementById('cfg-proactive-mode').value = settings.proactive_mode || 'copilot';
             // Backend de insights (análisis de reuniones) — por tarea
@@ -1748,6 +1762,7 @@
                 transcription_backend: document.getElementById('cfg-backend').value,
                 local_whisper_model: document.getElementById('cfg-local-model').value,
                 groq_fallback: document.getElementById('cfg-groq-fallback').checked ? 'true' : 'false',
+                transcription_fallback: document.getElementById('cfg-transcription-fallback').checked ? 'true' : 'false',
                 proactive_mode: document.getElementById('cfg-proactive-mode').value,
                 insights_backend_live: document.getElementById('cfg-insights-backend-live').value,
                 insights_backend_batch: document.getElementById('cfg-insights-backend-batch').value,
@@ -1919,6 +1934,8 @@
             } else {
                 section.classList.add('hidden');
             }
+            const fallbackSection = document.getElementById('transcription-fallback-section');
+            if (fallbackSection) fallbackSection.classList.toggle('hidden', backend !== 'groq');
             updateLocalTranslationNote();
         }
 

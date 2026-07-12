@@ -489,12 +489,18 @@ class VflowApp(QObject):
     meeting_stopped = pyqtSignal(object)                # dict resultado de MEETING.stop()
     lost_answer_ready = pyqtSignal(dict)                # resultado de answer_live() (unidad 5.3)
     chunk_loss_warning = pyqtSignal(int)                 # generación; un chunk se perdió tras la gracia (unidad 0.2)
+    transcription_fallback_notice = pyqtSignal(str)      # unidad 5.5: aviso de fallback de red Groq -> local
 
     def __init__(self):
         """Inicializa componentes (recorder, transcriber, DB, hotkey, pill) y conecta señales."""
         super().__init__()
         self.recorder = AudioRecorder(source=os.getenv("AUDIO_SOURCE", "mic"))
         self.transcriber = Transcriber()
+        # Unidad 5.5: el Transcriber (core/, sin Qt) notifica eventos de
+        # fallback de red vía un callback plano; aquí lo traducimos a una
+        # señal Qt para cruzar del hilo background del dictado al hilo
+        # principal (mismo patrón que el resto de notificaciones de tray).
+        self.transcriber.on_net_fallback_event = self._on_net_fallback_event
         self.db = TranscriptionDB()
 
         # Poda de historial por retención al arranque (HISTORY_RETENTION_DAYS=0 → conservar siempre)
@@ -602,6 +608,9 @@ class VflowApp(QObject):
         self.paste_finished.connect(self._on_paste_finished, Qt.ConnectionType.QueuedConnection)
         self.lost_answer_ready.connect(self._on_lost_answer_ready, Qt.ConnectionType.QueuedConnection)
         self.chunk_loss_warning.connect(self._on_chunk_loss_warning, Qt.ConnectionType.QueuedConnection)
+        self.transcription_fallback_notice.connect(
+            self._on_transcription_fallback_notice, Qt.ConnectionType.QueuedConnection
+        )
 
         # Señales del HUD hacia el resto de la app (feedback/"me perdí"/pregunta libre)
         self.hud.feedback_requested.connect(self._on_hud_feedback)
@@ -740,7 +749,9 @@ class VflowApp(QObject):
         _chunk_results DESPUÉS del clear() de la sesión nueva.
         """
         try:
-            text, raw = self.transcriber.transcribe(wav_buffer, prompt=prompt, return_raw=True)
+            text, raw = self.transcriber.transcribe(
+                wav_buffer, prompt=prompt, return_raw=True, net_fallback=True,
+            )
             with self._chunk_state_lock:
                 if gen != self._generation:
                     # Sesión vieja: descartar resultado
@@ -807,7 +818,7 @@ class VflowApp(QObject):
                 # Modo traducción: no se captura crudo (el diccionario del usuario
                 # aplica al idioma dictado, no al idioma traducido de salida).
                 target = os.getenv("TRANSLATE_TARGET_LANG", "en")
-                text = self.transcriber.translate(wav_buffer, target_lang=target)
+                text = self.transcriber.translate(wav_buffer, target_lang=target, net_fallback=True)
             else:
                 with self._chunk_state_lock:
                     if self._chunk_results:
@@ -815,7 +826,9 @@ class VflowApp(QObject):
                         prompt = self._chunk_results[last_key][-200:]
                     else:
                         prompt = None
-                text, raw = self.transcriber.transcribe(wav_buffer, prompt=prompt, return_raw=True)
+                text, raw = self.transcriber.transcribe(
+                    wav_buffer, prompt=prompt, return_raw=True, net_fallback=True,
+                )
 
                 # Unidad 0.2: joinar (con gracia acotada) los workers de chunk en
                 # vuelo de ESTA generación ANTES de leer/ensamblar _chunk_results.
@@ -1341,6 +1354,34 @@ class VflowApp(QObject):
                     QSystemTrayIcon.MessageIcon.Warning,
                     4000,
                 )
+
+    def _on_net_fallback_event(self, message: str):
+        """Callback plano (hilo background) del Transcriber (unidad 5.5).
+
+        core/transcriber.py no conoce Qt: solo llama a un callable con un
+        string. Aquí lo convertimos a una señal Qt (QueuedConnection) para
+        cruzar de forma segura al hilo principal, igual que el resto de
+        notificaciones de tray de esta clase.
+        """
+        self.transcription_fallback_notice.emit(message)
+
+    @pyqtSlot(str)
+    def _on_transcription_fallback_notice(self, message: str):
+        """Muestra en bandeja un evento de fallback de red Groq -> local (unidad 5.5).
+
+        No depende de ``self._generation``: a diferencia de transcription_error/
+        transcription_done, este aviso describe el ESTADO del breaker de red
+        (p. ej. "sin internet, usando el modelo local"), no el resultado de un
+        dictado puntual — sigue siendo relevante aunque el usuario ya haya
+        iniciado otro dictado.
+        """
+        if self.tray:
+            self.tray.showMessage(
+                "Vflow",
+                message,
+                QSystemTrayIcon.MessageIcon.Information,
+                5000,
+            )
 
     @pyqtSlot(int)
     def _on_chunk_loss_warning(self, gen: int):

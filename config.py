@@ -352,7 +352,21 @@ ENV_CATALOG = {
     },
     "GROQ_FALLBACK": {
         "default": "false", "kind": "lazy", "killswitch": True,
-        "doc": "Si 'true', reintenta con Groq cuando el backend local falla (requiere GROQ_API_KEY).",
+        "doc": "Si 'true', reintenta con Groq cuando el backend local falla (requiere GROQ_API_KEY). "
+               "Fallback local -> Groq; el sentido inverso (Groq -> local, unidad 5.5) es TRANSCRIPTION_FALLBACK.",
+    },
+    "TRANSCRIPTION_FALLBACK": {
+        "default": "false", "kind": "lazy", "killswitch": True,
+        "doc": "Unidad 5.5: si 'true', el dictado (SOLO main.py — reunión y URL quedan fuera de "
+               "alcance) reintenta con el modelo local cuando Groq falla por un error de RED (no "
+               "por auth/rate-limit) y el modelo local ya está descargado. Fallback Groq -> local; "
+               "el sentido inverso (local -> Groq) es GROQ_FALLBACK.",
+    },
+    "TRANSCRIPTION_FALLBACK_COOLDOWN": {
+        "default": "120", "kind": "lazy", "killswitch": False,
+        "doc": "Unidad 5.5: segundos que el circuit breaker de TRANSCRIPTION_FALLBACK evita "
+               "reintentar Groq tras un fallo de red (va directo a local); mismo patrón que "
+               "INSIGHTS_FALLBACK_COOLDOWN.",
     },
     "AUDIO_SOURCE": {
         "default": "mic", "kind": "lazy", "killswitch": False,
