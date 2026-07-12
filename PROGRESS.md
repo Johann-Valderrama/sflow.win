@@ -1,8 +1,123 @@
-# PROGRESS — Plan por olas Vflow   (branch: windows-variant | últ. checkpoint: 2026-07-03)
+# PROGRESS — Plan por olas Vflow   (branch: windows-variant | últ. checkpoint: 2026-07-12)
 
 ## Objetivo / contexto
 - Ejecutar las olas de docs/PLAN-OLAS.md. Este archivo es el handoff reanudable (plantilla orquestar-agentes §8).
 - Kickoff activo: **ORQUESTADOR AUTÓNOMO** (PLAN-OLAS "Modo autónomo"), director **Opus 4.8** (régimen A: auto-check pasa, Opus es el piso; nota de costo dada a Johann). **Olas 1-7 COMPLETAS (todo el plan ejecutable agotado).** Solo quedan gates humanos G2/G3 en "PARA JOHANN" (pruebas físicas y gusto visual, async).
+
+---
+
+# PLAN-MEJORAS-2026-07-06 (activo)
+
+> Plan nuevo: `PLAN-MEJORAS-2026-07-06.md` (derivado de `AUDITORIA-FABLE-2026-07-06.md`). Kickoff:
+> Orquestador Autónomo. Director de este run: **Fable 5** (régimen A vigente al arranque 2026-07-12
+> mañana; auto-check pasa). Skill aplicada: `orquestar-agentes-fable` (§10: Fable dirige, Opus 4.8
+> ataca cada ola antes de ejecutarla). Misión: Olas 0→1→2→3 sin intervención; Olas 4/5/6 gateadas
+> por decisiones D1/D4/D5 (SIN responder al arranque — ver PARA JOHANN abajo). Política A: commits
+> locales, sin push. 1 unidad = 1 commit.
+
+## PARA JOHANN (PLAN-MEJORAS)
+- **G2 Ola 0 — Prueba física de las correcciones críticas** (5-10 min, app reiniciada): (1) con el
+  backend claude-cli (acta lenta), termina una reunión con AltGr+R y VUELVE a pulsar AltGr+R enseguida
+  → debes ver la notificación "Guardando la reunión anterior… espera unos segundos" y NINGUNA reunión
+  nueva rota; cuando termine el guardado, AltGr+R arranca normal y el acta de la primera está completa;
+  (2) MANTÉN AltGr+R presionado ~2s → UN solo toggle (no ráfaga de beeps); igual con AltGr+T; (3) desde
+  el dashboard, botón "Iniciar" mientras se guarda un acta → mensaje claro (409), no cuelgue; (4) cola
+  URL: encola 2-3 URLs y CIERRA la app a mitad del proceso → al reabrir, el lote termina sin filas
+  duplicadas en el historial.
+- **G2 Ola 1 — Prueba física de los quick wins** (5 min, app reiniciada): (1) cambia tu GROQ_API_KEY
+  desde el dashboard (Configuración) y dicta SIN reiniciar → debe funcionar con la key nueva; (2)
+  fuerza un dictado fallido (p. ej. sin internet con backend groq) → debe existir
+  `%APPDATA%\Vflow\last_failed_recording.wav`; dicta algo exitoso → el WAV debe desaparecer; (3) en
+  una reunión real con modo copiloto, verifica que las tarjetas proactivas siguen apareciendo (máx
+  ~1 cada 5 min) y que ✓/✗ funcionan (la concurrencia del gate cambió por dentro); (4) en Ajustes
+  intenta guardar una carpeta de export bajo C:\Windows → debe rechazarse con mensaje claro.
+- **Decisiones pendientes que bloquean olas** (responde con número+letra, ej. `D1: A`): **D1**
+  (¿para quién es Vflow? A=solo para mí/limpieza mínima *(recomendada)*, B=venderlo en 6-12m/reorden
+  completo, C=no sé) → bloquea Ola 4 · **D4** (capacidades nuevas: 1=auto-highlights, 2=nombre/rol
+  en prompts, 3=chat cross-reunión, 4=pendientes→OPS; elige varias o ninguna) → bloquea Ola 5 ·
+  **D5** (FASE3 heredada: 1=silenciar audio al dictar, 2=hotkeys configurables, ninguna
+  *(recomendada: archivar)*) → bloquea Ola 6. Detalle completo de opciones: bloque "🚦 DECISIONES"
+  del plan. D2/D3/D6/D7/D8 no bloquean este run pero ajustan prioridades futuras.
+
+## En curso (PLAN-MEJORAS)
+- [ ] Ola 2 — Suite de verificación en verde  (SIN ARRANCAR; siguiente para una ventana nueva)
+  - Last checkpoint: Olas 0 y 1 COMPLETAS y commiteadas (ver Completado). Suite actual:
+    441 pass / 10 fallos preexistentes (mocks Groq incompatibles con Python 3.14, todos en
+    tests/test_sflow.py — son EXACTAMENTE el objetivo de la unidad 2.1).
+  - Next action: abrir ventana nueva con el Kickoff Orquestador Autónomo del plan (o el Kickoff
+    Ola 2). El director hace el debate breve de la ola (Opus 4.8 high: ¿qué tests huérfanos de la
+    raíz protegen invariantes que tests/ no cubre?) y ejecuta 2.1 (suite verde) → 2.2 (triage de
+    los 8 tests huérfanos de la raíz) → 2.3 (cobertura core/secrets.py + funciones puras de
+    url_transcribe: detect_platform, parser VTT, mapeo error_kind→HTTP — OJO: 1.8 ya cubrió
+    dedup/resiliencia/crypt32, no duplicar). Después: Ola 3 (polling incremental + retención).
+    Olas 4/5/6 siguen gateadas por D1/D4/D5 (ver PARA JOHANN).
+
+## Completado (PLAN-MEJORAS)
+- [x] **OLA 1 COMPLETA** (2026-07-12, 8 commits, 0 regresiones; suite final 441 pass / 10
+  preexistentes). Debate adversarial previo (Opus 4.8, APROBAR CON CAMBIOS: 1.6 eliminada por
+  premisa falsa, 1.4 recortada a _SILENCE_RMS y fusionada con 1.1 — ver Decisiones). Unidades:
+  1.7 cierre atómico de generación (c843800) · 1.10 timeout real del reformateo (f7ff4eb) ·
+  1.9 gateo momentos_destacados + fail-safe presupuesto (ff0aecb) · 1.8 robustez ruta URL: dedup
+  solape ≥4 tokens, retry+marcador por chunk, refcount crypt32 (b52596c) · 1.2 TTL WAV fallido +
+  aviso DB recuperada (1198206) · 1.3 validación de rutas en settings (35c2897) · 1.1+1.4 lock +
+  try_push atómico en ProactiveGate, _last_error por tarea, _SILENCE_RMS de config (a17fae1) ·
+  1.5 repair huérfanos vía DAO + Groq recrea cliente al cambiar key (e3735a2). Gate físico G2
+  Ola 1 en PARA JOHANN. G3 de 1.4 quedó MOOT (sin cambio visual).
+- [x] **OLA 0 COMPLETA** (2026-07-12, 4 commits, 0 regresiones; suite final 368 pass / 10 fallos
+  preexistentes de mocks Groq/Python 3.14). Debate adversarial previo (Opus 4.8, APROBAR CON
+  CAMBIOS — ver Decisiones). Gate físico G2 Ola 0 en PARA JOHANN.
+- [x] 0.4 Cola URL idempotente + webhook sin redirects (F3/F8/F9)  (@sonnet-5 ejecutó, @fable-5
+  verificó diff+suite, 2026-07-12, commit 2cd2066). item_id=None por iteración; source_queue_id +
+  índice único parcial + IntegrityError→done; allow_redirects=False con 3xx terminal. 10 tests nuevos.
+- [x] 0.3 Guards de auto-repeat AltGr+R/T (F10)  (@sonnet-5 ejecutó, @fable-5 verificó, 2026-07-12,
+  commit 2595991). Patrón _h_held replicado; toggle legítimo intacto; 6 tests nuevos.
+- [x] 0.2 No perder chunks en vuelo del dictado largo (F2)  (@sonnet-5 ejecutó, @fable-5 verificó,
+  2026-07-12, commit 11743a1). Registro _chunk_threads + join con gracia 12s + abort por gen +
+  detección por worker vivo + tray. 6 tests nuevos.
+- [x] 0.1 Serialización ciclo de vida reunión + token de generación (F1)  (@sonnet-5 ejecutó,
+  @fable-5 dirigió/verificó diff+suite, @opus-4.8 debatió, 2026-07-12, commit 2e568a6). start()
+  rechaza durante stop en curso (_stopping, finally-safe), _session_gen descarta merges/detecciones/
+  memoria-cruzada de daemons obsoletos, toggle con feedback tray, /api/meeting/start → 409.
+  6 tests nuevos de carrera. Suite 346 pass / 10 preexistentes, 0 regresiones.
+
+## Decisiones (PLAN-MEJORAS, append-only)
+- 2026-07-12 Arranque del run: D1/D4/D5 sin responder → Olas 4/5/6 quedan como gates; ejecutable de
+  este run = Olas 0→1→2→3 en ese orden. : regla del kickoff (no interpretar decisiones de Johann) : @fable-5
+- 2026-07-12 Debate adversarial Ola 0 (Fable propone, Opus 4.8 high ataca con código real; veredicto:
+  APROBAR CON CAMBIOS). O1 (ALTA) snapshot+null-out en Fase 1 de stop() rompe el drenaje (_chunk_loop/
+  _transcribe_worker leen self.*, no locals; null-out = AttributeError o flush final perdido → pérdida de
+  los últimos ~4 min del acta) → ACEPTADA: Alt A — Fase 1 solo `_active=False; _stopping=True`, drenaje
+  sobre self.* como hoy, Fase 3 finally `_stopping=False`, reset en start() donde ya vive · O2 el check
+  `gen==_session_gen AND _active` mata el update de insights legítimo del propio cierre → ACEPTADA: check
+  solo por gen · O3 callbacks ligados-a-gen validan caso imposible bajo el guard → ACEPTADA: eliminados ·
+  O4 detección de chunk perdido por hueco de índice = falsos positivos con chunks silenciosos (`if text:`
+  main.py:612) → ACEPTADA: detección por worker VIVO tras join · O5 gracia 45s = techo de latencia del
+  pegado → ACEPTADA: gracia ~12s (timeout API Groq 10s) · O6 dictado nuevo durante join → abortar join sin
+  alarmar si gen!=_generation → ACEPTADA · O7 3xx webhook con allow_redirects=False debe ser fallo TERMINAL
+  sin reintentos → ACEPTADA · O8 IntegrityError específico → set_done (no set_error genérico) → ACEPTADA ·
+  O9 rechazo de start durante stop largo puede parecer cuelgue → MITIGADA: beep + tray inequívoco + 409 con
+  mensaje claro. : gatillo §10.2 obligatorio por ola : @fable-5 + @opus-4.8
+- 2026-07-12 Debate adversarial Ola 1 (Fable propone las 10 unidades del plan, Opus 4.8 high ataca con
+  código real; veredicto: APROBAR CON CAMBIOS). O1 (ALTA) **1.6 ELIMINADA — premisa falsa**: la ruta de
+  audio de transcribe_url YA aplica el diccionario vía Transcriber.transcribe (transcriber.py:221); la
+  asimetría que vio la auditoría es que los subtítulos NO pasan por Transcriber (por eso aplican explícito);
+  aplicar de nuevo sería no-op o doble aplicación dañina con reglas encadenadas → se degrada a test
+  documental dentro de 1.8 · O2 **1.4 recortada**: CARD_STYLES son dos representaciones de vista distintas
+  (Qt hex/emoji vs clases Tailwind; solo comparten label) — single-source forzaría una capa de mapeo peor
+  que la "duplicación"; queda solo _SILENCE_RMS→config y se FUSIONA con 1.1 (mismo archivo; G3 de 1.4 MOOT)
+  · O3 try_push con Lock no reentrante deadlockea si llama should_push/mark_pushed → ACEPTADA: helpers
+  internos sin lock, un solo acquire, presupuesto no se consume si el dedup impide encolar · O4 dedup de
+  solape exacto no muerde y fuzzy se come repeticiones legítimas → ACEPTADA: match conservador ≥4 tokens
+  normalizados sufijo/prefijo, sin match no se toca · O5 shutdown(wait=False) fuga hilos non-daemon que
+  bloquean el exit → ACEPTADA: 1.10 usa threading.Thread(daemon=True) + espera 8s · O6 isdir() duro rompe
+  shares UNC intermitentes → ACEPTADA: existencia solo para rutas locales, UNC pasa por formato, blacklist
+  normalizada sin atrapar %APPDATA%\Vflow · O7 drift de líneas post-Ola-0 (consumidor de last_error en
+  meeting.py:1084) → ACEPTADA: last_error(task), consumidor a "live" · O8 borrar el WAV en cualquier éxito
+  mata el WAV que el usuario iba a recuperar → ACEPTADA: solo el éxito de DICTADO borra, más TTL 24h al
+  arrancar · O9 1.7 compatible con el join de Ola 0 (verificado) → sin cambio · O10 1.9 válida tal cual.
+  Orden de ejecución por clusters: batch1 paralelo {1.9 insights · 1.8 url_transcribe · 1.10
+  dictation_modes · 1.7 inline main.py} → batch2 paralelo {1.1+1.4 proactive/insights/meeting · 1.2
+  main+db · 1.3 web/server} → batch3 {1.5 db+web/server+groq_backend}. : gatillo §10.2 : @fable-5 + @opus-4.8
 
 ## PARA JOHANN (gates pendientes de su ojo; el orquestador sigue con lo no bloqueado)
 - **G2 — Prueba física de 1.3 Highlight AltGr+H** (5 min): (1) inicia una reunión real con AltGr+R y audio sonando; (2) pulsa AltGr+H dos o tres veces en momentos distintos → debes oír un beep agudo y ver la notificación "✓ Momento destacado (mm:ss)"; (3) MANTÉN AltGr+H apretado 2s → debe registrar UN solo highlight (anti auto-repeat); (4) pulsa AltGr+H SIN reunión activa → no debe pasar nada; (5) termina la reunión y revisa que el acta (dashboard → Reunión → historial) tenga la sección "⭐ Momentos destacados" con contexto correcto; (6) con el IDE abierto, verifica que Ctrl+Alt+H de tu IDE no dispare nada raro (AltGr ≡ Ctrl+Alt físico en Windows; la app distingue AltGr real). Nota: en layouts ES/LatAm H no es dead-key (verificado en debate).
