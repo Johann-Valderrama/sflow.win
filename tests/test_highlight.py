@@ -89,25 +89,37 @@ class TestHighlightHotkey:
         assert listener.highlight_pressed.emit.call_count == 2
 
     def test_altgr_t_no_regression(self, listener):
-        """AltGr+T sigue funcionando como toggle (inicia y detiene)."""
+        """AltGr+T sigue funcionando como toggle (inicia y detiene).
+
+        Nota (unidad 0.3): tras el guard de auto-repeat `_t_held`, una segunda
+        pulsacion SIN release intermedio ahora se suprime (es indistinguible de
+        auto-repeat de Windows). Este test incluye el release real entre
+        pulsaciones para representar la fisica real del teclado (imposible
+        presionar T dos veces sin soltarla en medio)."""
         _press_alt_gr(listener)
         t_key = _vk_key(0x54)
         listener._on_press(t_key)
         assert listener.translate_pressed.emit.call_count == 1
         assert listener._recording is True
 
-        listener._on_press(t_key)  # segunda pulsación: detiene
+        listener._on_release(t_key)
+        listener._on_press(t_key)  # segunda pulsación (tras release): detiene
         assert listener.released.emit.call_count == 1
         assert listener._recording is False
 
     def test_altgr_r_no_regression(self, listener):
-        """AltGr+R sigue disparando meeting_toggle sin auto-repeat suppression propia
-        (es un toggle idempotente manejado por el slot, no por el listener)."""
+        """AltGr+R sigue disparando meeting_toggle (guard de auto-repeat, unidad 0.3:
+        antes de esta unidad, R no tenia supresion y este test esperaba 2 emits por
+        2 press sin release; el bug F10 era justo ese thrash de toggles)."""
         _press_alt_gr(listener)
         r_key = _vk_key(0x52)
         listener._on_press(r_key)
         listener._on_press(r_key)
-        assert listener.meeting_toggle.emit.call_count == 2  # sin supresión, como antes
+        assert listener.meeting_toggle.emit.call_count == 1  # auto-repeat suprimido (unidad 0.3)
+
+        listener._on_release(r_key)
+        listener._on_press(r_key)
+        assert listener.meeting_toggle.emit.call_count == 2  # toggle legitimo (release+press) intacto
 
     def test_ctrl_alt_arming_plus_h_no_spurious_trigger(self, listener):
         """Ctrl+Alt armado (modo 1) + H no debe disparar ni dictado ni highlight
@@ -235,17 +247,21 @@ class TestHudHotkeys:
             assert listener.highlight_pressed.emit.call_count == 1
             _release_alt_gr(listener)
 
-            # R sigue funcionando (sin supresión de auto-repeat, como antes)
+            # R sigue funcionando (un solo press → un solo emit; el guard de
+            # auto-repeat de la unidad 0.3 no afecta una pulsación única)
             _press_alt_gr(listener)
             listener._on_press(_vk_key(0x52))
             assert listener.meeting_toggle.emit.call_count == 1
             _release_alt_gr(listener)
 
-            # T sigue funcionando (toggle)
+            # T sigue funcionando (toggle; release real entre pulsaciones —
+            # unidad 0.3 agregó guard de auto-repeat, ver test_altgr_t_no_regression)
             _press_alt_gr(listener)
-            listener._on_press(_vk_key(0x54))
+            t_key = _vk_key(0x54)
+            listener._on_press(t_key)
             assert listener.translate_pressed.emit.call_count == 1
-            listener._on_press(_vk_key(0x54))
+            listener._on_release(t_key)
+            listener._on_press(t_key)
             assert listener.released.emit.call_count == 1
             _release_alt_gr(listener)
 

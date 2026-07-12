@@ -55,6 +55,8 @@ class HotkeyListener(QObject):
         self._h_held = False  # supresión de auto-repeat para AltGr+H (no es un toggle idempotente)
         self._a_held = False  # supresión de auto-repeat para AltGr+A (mismo patrón que H)
         self._m_held = False  # supresión de auto-repeat para AltGr+M (mismo patrón que H)
+        self._r_held = False  # supresión de auto-repeat para AltGr+R (unidad 0.3, mismo patrón que H)
+        self._t_held = False  # supresión de auto-repeat para AltGr+T (unidad 0.3, mismo patrón que H)
 
         self._listener: keyboard.Listener | None = None
 
@@ -94,6 +96,8 @@ class HotkeyListener(QObject):
         self._h_held = False
         self._a_held = False
         self._m_held = False
+        self._r_held = False
+        self._t_held = False
         self._shift_tap_count = 0
         self._last_shift_press = 0.0
         self._shift_chord = False
@@ -189,15 +193,20 @@ class HotkeyListener(QObject):
         # --- Modo Reunión: toggle AltGr + R (independiente del dictado) ---
         # La reunión es una sesión propia (core.meeting.MEETING), no usa la máquina
         # de estados de dictado: solo emite la señal y el slot decide iniciar/terminar.
+        # NO es un toggle idempotente frente al auto-repeat de Windows: sin _r_held,
+        # mantener R presionado encadena start/stop de reunión a ~30 Hz (bug F10).
+        # self._r_held suprime los repeats hasta el release real de R; el toggle
+        # legítimo (press-release-press) queda intacto.
         if is_r and self._alt_gr_held:
-            self.meeting_toggle.emit()
+            if not self._r_held:
+                self._r_held = True
+                self.meeting_toggle.emit()
             return
 
         # --- Highlight de reunión: AltGr + H (marcar momento destacado) ---
-        # NO es un toggle idempotente como R/T: sin supresión de auto-repeat, mantener
-        # H presionado emitiría la señal decenas de veces por segundo (Windows repite
-        # on_press mientras la tecla sigue abajo). self._h_held bloquea los repeats
-        # hasta el release real de H.
+        # Sin supresión de auto-repeat, mantener H presionado emitiría la señal
+        # decenas de veces por segundo (Windows repite on_press mientras la tecla
+        # sigue abajo). self._h_held bloquea los repeats hasta el release real de H.
         if is_h and self._alt_gr_held:
             if not self._h_held:
                 self._h_held = True
@@ -220,17 +229,25 @@ class HotkeyListener(QObject):
                 self.lost_pressed.emit()
             return
 
+        # NO es un toggle idempotente frente al auto-repeat de Windows: sin _t_held,
+        # mantener T presionado un instante de más alterna el toggle interno
+        # (_alt_gr_t_mode/_recording) a ~30 Hz — el primer repeat entra por la rama
+        # "detener" y el siguiente por "iniciar" (bug F10). self._t_held suprime los
+        # repeats hasta el release real de T; el toggle legítimo (press-release-press)
+        # queda intacto.
         if is_t and self._alt_gr_held:
-            if self._alt_gr_t_mode and self._recording:
-                # Segunda pulsación → detener grabación
-                self._alt_gr_t_mode = False
-                self._recording = False
-                self.released.emit()
-            elif not self._recording:
-                # Primera pulsación → iniciar traducción (sin hold)
-                self._alt_gr_t_mode = True
-                self._recording = True
-                self.translate_pressed.emit()
+            if not self._t_held:
+                self._t_held = True
+                if self._alt_gr_t_mode and self._recording:
+                    # Segunda pulsación → detener grabación
+                    self._alt_gr_t_mode = False
+                    self._recording = False
+                    self.released.emit()
+                elif not self._recording:
+                    # Primera pulsación → iniciar traducción (sin hold)
+                    self._alt_gr_t_mode = True
+                    self._recording = True
+                    self.translate_pressed.emit()
             return
 
         # --- Cancelación del armado por tecla no-modificadora ---
@@ -286,6 +303,12 @@ class HotkeyListener(QObject):
         _M_VK = 0x4D
         if hasattr(key, 'vk') and key.vk == _M_VK:
             self._m_held = False
+        _R_VK = 0x52
+        if hasattr(key, 'vk') and key.vk == _R_VK:
+            self._r_held = False
+        _T_VK = 0x54
+        if hasattr(key, 'vk') and key.vk == _T_VK:
+            self._t_held = False
 
         # Actualizar estado de modificadores
         if is_ctrl:
