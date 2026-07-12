@@ -12,11 +12,32 @@ Piezas:
                              loopback / link-local salvo opt-in ``WEBHOOK_ALLOW_LOCAL``.
   - ``send_webhook``       → POST con timeout corto + reintentos con backoff; jamás propaga.
   - ``dispatch_async``     → dispara el POST en un hilo daemon fire-and-forget.
-  - ``export_pendientes``  → dead-drop local de los pendientes del acta a un .md.
+  - ``export_pendientes``  → dead-drop local de los pendientes del acta: contrato de
+                             tarea v1 (YAML, ver docs/CONTRATO-MACROSISTEMA.md Parte A).
 
 El transcript crudo NUNCA se incluye en el payload (v1, no negociable). El anti-SSRF valida
 la IP resuelta ANTES del POST; ``requests`` re-resuelve en el request (rebinding básico
 mitigado — limitación documentada: no se pinnea la IP validada al socket).
+
+## Contrato de tarea v1 (dead-drop → OPS, unidad 5.4)
+
+``export_pendientes`` escribe un archivo por reunión SOLO si hay ≥1 pendiente (O7: una
+reunión sin pendientes no genera archivo). El contenido es YAML completo
+(``schema_version: 1``, ver ``docs/CONTRATO-MACROSISTEMA.md``) seguido de una vista humana
+en markdown. Piezas del contrato:
+
+  - ``get_machine_id``     → id corto (8 hex) estable por instalación, persistido en el
+                             data dir de la app (O3: meeting_id es local, no global).
+  - ``build_tarea``        → normaliza los pendientes del acta al shape del contrato
+                             (id=hash del texto normalizado, due, transcript_offset mm:ss,
+                             contexto); ``None`` si no queda ningún pendiente con texto.
+  - ``render_tarea_yaml``  → serialización YAML determinista y manual (el schema es fijo
+                             y conocido, así que no hace falta una dependencia de YAML
+                             genérica; los strings usan comillas dobles vía ``json.dumps``,
+                             un subconjunto válido de escalares YAML 1.2).
+  - Naming e idempotencia (O3): ``vflow-pendientes-<instalacion>-<meeting_id>-<hash8>.md``,
+    escritura ``open(path, "x")`` (create-only). Acta cambiada → hash distinto → archivo
+    NUEVO; el viejo queda intacto. Vflow nunca edita ni borra archivos del drop.
 """
 
 import hashlib
@@ -25,10 +46,13 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import time
 from urllib.parse import urlparse
+
+from config import APP_DATA_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -263,57 +287,273 @@ def send_webhook(url: str, payload: dict, secret: str, *, allow_local: bool = Fa
 
 
 # ---------------------------------------------------------------------------
-# Dead-drop local: pendientes → OPS (markdown)
+# Dead-drop local: pendientes → OPS (contrato de tarea v1, unidad 5.4)
 # ---------------------------------------------------------------------------
 
-def _fmt_pendiente_md(p) -> str:
-    """Un pendiente como checkbox markdown. Acepta string o dict {texto, responsable, ...}."""
-    if isinstance(p, str):
-        return f"- [ ] {p}"
-    if not isinstance(p, dict):
-        return f"- [ ] {p}"
-    meta = []
-    if p.get("responsable"):
-        meta.append(f"@{p['responsable']}")
-    fh = " ".join(x for x in (p.get("fecha"), p.get("hora")) if x)
-    if fh:
-        meta.append(f"📅 {fh}")
-    suffix = f" ({' · '.join(meta)})" if meta else ""
-    return f"- [ ] {p.get('texto', '')}{suffix}"
+_MACHINE_ID_FILENAME = "machine_id.txt"
+_ID_HASH_LEN = 8       # id de cada pendiente (hash del texto normalizado)
+_CONTENT_HASH_LEN = 8  # hash del contenido completo, usado en el nombre de archivo
+
+
+def get_machine_id() -> str:
+    """Id corto (8 hex) estable por instalación (O3: ``meeting_id`` es local a la DB
+    de esta máquina, no un id global — el consumidor OPS necesita distinguir de qué
+    instalación viene cada tarea).
+
+    Se genera una sola vez (``os.urandom``) y se persiste en un archivo plano dentro
+    del data dir de la app (no es un secreto: no usa DPAPI). Lecturas posteriores lo
+    releen del archivo, así que es estable entre reinicios y entre llamadas.
+
+    Best-effort: si no se puede leer/escribir el archivo (permisos, disco, etc.), cae
+    a un id determinista derivado del propio data dir (mismo valor en la misma
+    máquina, aunque no persista) y loguea un warning — nunca lanza.
+    """
+    path = os.path.join(APP_DATA_DIR, _MACHINE_ID_FILENAME)
+    try:
+        if os.path.exists(path):
+            existing = open(path, "r", encoding="utf-8").read().strip()
+            if existing:
+                return existing
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("machine_id: no se pudo leer %s (%s).", path, exc)
+
+    new_id = os.urandom(4).hex()
+    try:
+        os.makedirs(APP_DATA_DIR, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new_id)
+        return new_id
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "machine_id: no se pudo persistir en %s (%s); usando fallback determinista "
+            "(cambiará solo si el data dir cambia).", path, exc,
+        )
+        return hashlib.sha256(APP_DATA_DIR.encode("utf-8")).hexdigest()[:_ID_HASH_LEN]
+
+
+def _normalize_texto_para_hash(texto: str) -> str:
+    """Minúsculas + espacios colapsados. Solo absorbe diferencias triviales de
+    espaciado/mayúsculas entre re-exports del MISMO pendiente (a diferencia del
+    dedup de detecciones de core/meeting.py, aquí no se quita puntuación: el id
+    debe ser estable, no fusionar textos distintos)."""
+    return re.sub(r"\s+", " ", str(texto or "").strip().lower())
+
+
+def _pendiente_id(texto: str) -> str:
+    norm = _normalize_texto_para_hash(texto)
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:_ID_HASH_LEN]
+
+
+def _mmss(seconds) -> "str | None":
+    """Convierte segundos (float/int, como los que guarda ``core/insights.py`` en la
+    clave ``t``) a ``mm:ss``. ``None`` si no es numérico o es negativo."""
+    try:
+        total = int(round(float(seconds)))
+    except (TypeError, ValueError):
+        return None
+    if total < 0:
+        return None
+    minutes, secs = divmod(total, 60)
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _normalize_pendiente(raw) -> "dict | None":
+    """Normaliza un pendiente crudo del acta (string plano o dict de
+    ``core/insights.py``: ``{texto, responsable, fecha, hora, t?}``) al shape del
+    contrato v1. Devuelve ``None`` si el texto queda vacío tras limpiar (se descarta:
+    nunca se cuenta como pendiente real)."""
+    if isinstance(raw, str):
+        texto = raw.strip()
+        responsable = fecha = hora = offset = contexto = None
+    elif isinstance(raw, dict):
+        texto = str(raw.get("texto") or raw.get("text") or "").strip()
+        responsable = raw.get("responsable") or None
+        fecha = raw.get("fecha") or None
+        hora = raw.get("hora") or None
+        offset = _mmss(raw.get("t"))
+        contexto = raw.get("contexto") or None
+    else:
+        return None
+    if not texto:
+        return None
+    return {
+        "id": _pendiente_id(texto),
+        "texto": texto,
+        "responsable": responsable,
+        "due": {"fecha": fecha, "hora": hora},
+        "transcript_offset": offset,
+        "contexto": contexto,
+    }
+
+
+def _collect_pendientes(meeting: dict) -> list:
+    minutes = _load_json(meeting.get("minutes_json"), {})
+    insights = _load_json(meeting.get("insights_json"), {})
+    raw = minutes.get("pendientes") or insights.get("pendientes") or []
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw:
+        norm = _normalize_pendiente(item)
+        if norm is not None:
+            out.append(norm)
+    return out
+
+
+def build_tarea(meeting: dict, machine_id: str) -> "dict | None":
+    """Construye el payload de la tarea v1 (contrato Parte A / O2).
+
+    Devuelve ``None`` si la reunión no tiene ningún pendiente con texto (gate de
+    emisión O7: sin pendientes, no se escribe archivo).
+    """
+    pendientes = _collect_pendientes(meeting)
+    if not pendientes:
+        return None
+
+    started = meeting.get("started_at") or meeting.get("created_at") or ""
+    fecha_reunion = (started or "")[:10] or None
+    title = meeting.get("title") or f"Reunión {fecha_reunion or 'sin fecha'}".strip()
+
+    return {
+        "tipo": "tarea-vflow",
+        "schema_version": 1,
+        "origen": "vflow-meeting",
+        "instalacion": machine_id,
+        "meeting_id": meeting.get("id"),
+        "fecha_reunion": fecha_reunion,
+        "titulo_reunion": title,
+        "generado_en": time.strftime("%Y-%m-%d %H:%M"),  # hora local
+        "pendientes": pendientes,
+    }
+
+
+def _yaml_scalar(value) -> str:
+    """Un escalar YAML para *value*. Los strings usan comillas dobles vía
+    ``json.dumps``: el subconjunto de escalares string de JSON es YAML 1.2 válido,
+    así que cualquier texto con comillas/dos puntos/saltos de línea/unicode queda
+    correctamente escapado sin necesitar un serializador YAML genérico."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def render_tarea_yaml(tarea: dict) -> str:
+    """Serialización YAML determinista y manual del contrato v1.
+
+    El schema es fijo y conocido (ver docstring del módulo y
+    ``docs/CONTRATO-MACROSISTEMA.md`` Parte A), así que no hace falta una
+    dependencia de YAML genérica (PyYAML es solo transitiva en este repo, no un
+    requirement directo — no se agrega como dependencia nueva).
+    """
+    due_scalar = lambda due: (  # noqa: E731
+        f"{{fecha: {_yaml_scalar((due or {}).get('fecha'))}, "
+        f"hora: {_yaml_scalar((due or {}).get('hora'))}}}"
+    )
+    lines = [
+        "tipo: tarea-vflow",
+        "schema_version: 1",
+        "origen: vflow-meeting",
+        f"instalacion: {_yaml_scalar(tarea['instalacion'])}",
+        f"meeting_id: {_yaml_scalar(tarea['meeting_id'])}",
+        f"fecha_reunion: {_yaml_scalar(tarea['fecha_reunion'])}",
+        f"titulo_reunion: {_yaml_scalar(tarea['titulo_reunion'])}",
+        f"generado_en: {_yaml_scalar(tarea['generado_en'])}",
+        "pendientes:",
+    ]
+    for p in tarea["pendientes"]:
+        lines.append(f"  - id: {_yaml_scalar(p['id'])}")
+        lines.append(f"    texto: {_yaml_scalar(p['texto'])}")
+        lines.append(f"    responsable: {_yaml_scalar(p['responsable'])}")
+        lines.append(f"    due: {due_scalar(p['due'])}")
+        lines.append(f"    transcript_offset: {_yaml_scalar(p['transcript_offset'])}")
+        lines.append(f"    contexto: {_yaml_scalar(p['contexto'])}")
+    return "\n".join(lines) + "\n"
+
+
+def render_tarea_markdown(tarea: dict) -> str:
+    """Vista humana render-friendly, DEBAJO del YAML en el mismo archivo (el contrato
+    es el YAML; esto es cortesía para quien abra el .md a simple vista)."""
+    lines = [
+        f"# Pendientes — {tarea['titulo_reunion']}",
+        "",
+        f"Reunión #{tarea['meeting_id']} · {tarea['fecha_reunion'] or 'sin fecha'}",
+        "",
+    ]
+    for p in tarea["pendientes"]:
+        meta = []
+        if p.get("responsable"):
+            meta.append(f"@{p['responsable']}")
+        due = p.get("due") or {}
+        fh = " ".join(x for x in (due.get("fecha"), due.get("hora")) if x)
+        if fh:
+            meta.append(f"📅 {fh}")
+        if p.get("transcript_offset"):
+            meta.append(f"⏱ {p['transcript_offset']}")
+        suffix = f" ({' · '.join(meta)})" if meta else ""
+        lines.append(f"- [ ] {p['texto']}{suffix}")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def export_pendientes(meeting: dict, export_dir: str) -> "str | None":
-    """Escribe los pendientes del acta a ``<export_dir>/vflow-pendientes-<id>-<fecha>.md``.
+    """Escribe la tarea v1 (YAML + vista humana) a
+    ``<export_dir>/vflow-pendientes-<instalacion>-<meeting_id>-<hash8>.md``.
 
-    Dead-drop LOCAL: no requiere anti-SSRF. Si *export_dir* está vacío → no hace nada
-    (feature apagada). Devuelve la ruta escrita, o None si no aplica / falla.
+    Dead-drop LOCAL: no requiere anti-SSRF. Contrato (docs/CONTRATO-MACROSISTEMA.md
+    Parte A):
+      - *export_dir* vacío → no hace nada (feature apagada).
+      - ``meeting.get("id")`` None (reunión no persistida, p. ej. SAVE_HISTORY=false)
+        → no hace nada. Vflow NUNCA escribe pendientes de una reunión sin persistir.
+      - Sin pendientes (O7) → no se escribe archivo.
+      - Create-only (O3): si el archivo con ese nombre exacto ya existe (mismo
+        contenido, por definición del hash) → no-op silencioso. Vflow nunca edita
+        ni sobrescribe un archivo del drop. Acta cambiada → hash distinto → archivo
+        nuevo; el viejo queda intacto.
+
+    Devuelve la ruta del archivo (nuevo o preexistente), o None si no aplica / falla.
+    Fail-open: cualquier excepción se loguea y jamás propaga (llamado desde un hilo
+    daemon fire-and-forget).
     """
     export_dir = (export_dir or "").strip()
     if not export_dir:
         return None
+    if meeting.get("id") is None:
+        return None
     try:
-        minutes = _load_json(meeting.get("minutes_json"), {})
-        insights = _load_json(meeting.get("insights_json"), {})
-        pendientes = minutes.get("pendientes") or insights.get("pendientes") or []
+        machine_id = get_machine_id()
+        tarea = build_tarea(meeting, machine_id)
+        if tarea is None:
+            logger.debug(
+                "Export de pendientes: reunión #%s sin pendientes, no se escribe archivo (O7).",
+                meeting.get("id"),
+            )
+            return None
 
-        mid = meeting.get("id", "x")
-        started = meeting.get("started_at") or meeting.get("created_at") or ""
-        date = (started or "")[:10] or "sin-fecha"
-        title = meeting.get("title") or f"Reunión {date}".strip()
+        yaml_text = render_tarea_yaml(tarea)
+        content_hash = hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()[:_CONTENT_HASH_LEN]
+        fname = f"vflow-pendientes-{machine_id}-{tarea['meeting_id']}-{content_hash}.md"
 
         os.makedirs(export_dir, exist_ok=True)
-        fname = f"vflow-pendientes-{mid}-{date}.md"
         path = os.path.join(export_dir, fname)
 
-        lines = [f"# Pendientes — {title}", "", f"Reunión #{mid} · {date}", ""]
-        if pendientes:
-            lines += [_fmt_pendiente_md(p) for p in pendientes]
-        else:
-            lines.append("_(sin pendientes registrados)_")
-        lines.append("")
+        if os.path.exists(path):
+            logger.debug("Export de pendientes: %s ya existe (mismo contenido), no-op.", path)
+            return path
 
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
+        body = yaml_text + "\n---\n\n" + render_tarea_markdown(tarea)
+        try:
+            with open(path, "x", encoding="utf-8") as f:
+                f.write(body)
+        except FileExistsError:
+            # Carrera entre el exists() de arriba y este open("x"): por definición
+            # del hash del nombre, el contenido ya escrito es idéntico. No-op.
+            logger.debug("Export de pendientes: %s creado por una escritura concurrente.", path)
+            return path
+
         logger.info("Pendientes exportados a %s.", path)
         return path
     except Exception as exc:  # noqa: BLE001

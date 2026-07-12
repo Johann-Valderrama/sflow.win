@@ -157,8 +157,11 @@ MEETINGS_DIR = os.getenv("MEETINGS_DIR", os.path.join(_DATA_DIR, "meetings"))
 #       WEBHOOK_SECRET_ENC (DPAPI), descifrado arriba. Nunca se devuelve en GET /api/settings.
 #   WEBHOOK_ALLOW_LOCAL (default "false") — opt-in para permitir destinos internos (LAN,
 #       loopback) y http:// (anti-SSRF relajado, bajo riesgo del usuario).
-#   PENDING_EXPORT_DIR (default "")       — dead-drop LOCAL: si está seteado, escribe los
-#       pendientes del acta a <dir>/vflow-pendientes-<id>-<fecha>.md. Local, sin anti-SSRF.
+#   PENDING_EXPORT_DIR (default "")       — dead-drop LOCAL: si está seteado, escribe una
+#       tarea v1 (YAML + vista humana, unidad 5.4) por reunión con ≥1 pendiente a
+#       <dir>/vflow-pendientes-<instalacion>-<meeting_id>-<hash8>.md. Local, sin anti-SSRF.
+#       Sugerencia de buzón para el consumidor OPS: C:\OPS\_inbox-vflow\ (documentación
+#       únicamente; el default real sigue vacío/apagado).
 
 # Modos de dictado por app activa (unidad 6.3) — flags de entorno de lectura
 # PEREZOSA (se leen en cada dictado, en core/dictation_modes.py, NO aquí: así se
@@ -546,7 +549,10 @@ ENV_CATALOG = {
     },
     "PENDING_EXPORT_DIR": {
         "default": "", "kind": "lazy", "killswitch": False,
-        "doc": "Carpeta del dead-drop local de pendientes; vacío = desactivado.",
+        "doc": "Carpeta del dead-drop local de pendientes (contrato de tarea v1, YAML "
+               "+ vista humana, unidad 5.4); vacío = desactivado. Sugerencia de buzón "
+               "para el consumidor OPS: C:\\OPS\\_inbox-vflow\\ (no es el default real; "
+               "el usuario lo configura explícitamente desde Ajustes).",
     },
 
     # --- Modos de dictado por app activa (unidad 6.3, lazy) -------------------

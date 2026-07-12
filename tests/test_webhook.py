@@ -8,7 +8,9 @@ Cubre (sin salir a internet real salvo el receptor local del flujo end-to-end):
   (d) reintentos con backoff ante fallo (requests.post mockeado);
   (e) meeting_id None → no envía y loguea;
   (f) fallo del webhook no propaga (el hilo daemon muere solo);
-  (g) dead-drop escribe el .md correcto; dir vacío = no hace nada;
+  (g) dead-drop escribe la tarea v1 (YAML + vista humana, unidad 5.4/O1-O11);
+      dir vacío / meeting_id None / sin pendientes = no hace nada; idempotencia
+      create-only por hash de contenido; machine_id estable por instalación;
   (h) el secreto nunca aparece en el GET de settings;
   (i) flujo real local: receptor HTTP en puerto libre recibe el POST con firma válida.
 """
@@ -17,6 +19,7 @@ import hashlib
 import hmac
 import http.server
 import json
+import os
 import threading
 import time
 
@@ -298,33 +301,219 @@ def test_dispatch_async_lanza_hilo_y_no_bloquea(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# (g) dead-drop local
+# (g) dead-drop local — contrato de tarea v1 (unidad 5.4, docs/CONTRATO-MACROSISTEMA.md)
 # ---------------------------------------------------------------------------
 
-def test_deaddrop_escribe_md(tmp_path):
-    path = webhook.export_pendientes(_meeting_row(), str(tmp_path))
+def _meeting_con_pendientes(pendientes, *, meeting_id=42, title="Reunión 2026-07-12 08:42",
+                             started_at="2026-07-12 08:42:00"):
+    minutes = {"resumen": "x", "pendientes": pendientes}
+    return {
+        "id": meeting_id,
+        "title": title,
+        "started_at": started_at,
+        "duration_seconds": 900,
+        "minutes_json": json.dumps(minutes, ensure_ascii=False),
+        "insights_json": json.dumps({}, ensure_ascii=False),
+        # El transcript existe en la fila pero NUNCA debe salir en el dead-drop.
+        "transcript": "[00:10 Yo] hola SECRETO_TRANSCRIPT",
+    }
+
+
+def _yaml_block(content: str) -> str:
+    return content.split("\n---\n", 1)[0]
+
+
+def _try_yaml_load(text: str):
+    """Parsea con PyYAML si está disponible (transitiva ya instalada en este venv,
+    NO agregada como dependencia nueva por esta unidad); si no, None y el test cae
+    a verificación por substring del YAML manual."""
+    try:
+        import yaml  # noqa: PLC0415  (import perezoso solo para el test)
+    except ImportError:
+        return None
+    return yaml.safe_load(text)
+
+
+def test_deaddrop_dir_vacio_no_hace_nada(monkeypatch, tmp_path):
+    monkeypatch.setattr(webhook, "APP_DATA_DIR", str(tmp_path / "appdata"))
+    m = _meeting_con_pendientes([{"texto": "Tarea"}])
+    assert webhook.export_pendientes(m, "") is None
+
+
+def test_deaddrop_sin_pendientes_no_escribe_archivo(monkeypatch, tmp_path):
+    """O7: una reunión sin pendientes NO genera archivo (ya no escribe
+    '_(sin pendientes registrados)_' como el dead-drop viejo)."""
+    monkeypatch.setattr(webhook, "APP_DATA_DIR", str(tmp_path / "appdata"))
+    drop = tmp_path / "drop"
+    m = _meeting_con_pendientes([])
+    path = webhook.export_pendientes(m, str(drop))
+    assert path is None
+    assert not drop.exists() or list(drop.glob("*.md")) == []
+
+
+def test_deaddrop_meeting_id_none_no_escribe_archivo(monkeypatch, tmp_path):
+    """Guard SAVE_HISTORY (B3): reunión no persistida (meeting_id None) nunca
+    genera archivo, aunque tenga pendientes y export_dir esté configurado."""
+    monkeypatch.setattr(webhook, "APP_DATA_DIR", str(tmp_path / "appdata"))
+    drop = tmp_path / "drop"
+    m = _meeting_con_pendientes([{"texto": "Tarea"}], meeting_id=None)
+    path = webhook.export_pendientes(m, str(drop))
+    assert path is None
+    assert not drop.exists() or list(drop.glob("*.md")) == []
+
+
+def test_deaddrop_yaml_parseable_y_schema(monkeypatch, tmp_path):
+    monkeypatch.setattr(webhook, "APP_DATA_DIR", str(tmp_path / "appdata"))
+    m = _meeting_con_pendientes([
+        {"texto": "Enviar el contrato a Acme", "responsable": "Johann",
+         "fecha": "2026-07-15", "t": 252},
+        {"texto": "Revisar presupuesto"},
+    ])
+    path = webhook.export_pendientes(m, str(tmp_path / "drop"))
     assert path is not None
     content = open(path, encoding="utf-8").read()
-    assert "vflow-pendientes-42-2026-07-03.md" in path
-    assert "- [ ] Enviar propuesta" in content
-    assert "@Yo" in content
-    assert "- [ ] Revisar contrato" in content
-    # El transcript NO va en el dead-drop.
     assert "SECRETO_TRANSCRIPT" not in content
+    assert os.path.basename(path).startswith("vflow-pendientes-")
+    assert os.path.basename(path).endswith(".md")
+
+    yaml_text = _yaml_block(content)
+    data = _try_yaml_load(yaml_text)
+    if data is not None:
+        assert data["tipo"] == "tarea-vflow"
+        assert data["schema_version"] == 1
+        assert data["origen"] == "vflow-meeting"
+        assert data["meeting_id"] == 42
+        assert data["fecha_reunion"] == "2026-07-12"
+        assert len(data["pendientes"]) == 2
+        p0 = data["pendientes"][0]
+        assert p0["texto"] == "Enviar el contrato a Acme"
+        assert p0["responsable"] == "Johann"
+        assert p0["due"] == {"fecha": "2026-07-15", "hora": None}
+        assert p0["transcript_offset"] == "04:12"   # 252s -> 04:12
+        assert len(p0["id"]) == 8
+        p1 = data["pendientes"][1]
+        assert p1["responsable"] is None
+        assert p1["due"] == {"fecha": None, "hora": None}
+        assert p1["transcript_offset"] is None
+    else:
+        assert "schema_version: 1" in yaml_text
+        assert "tipo: tarea-vflow" in yaml_text
+        assert "meeting_id: 42" in yaml_text
+        assert '"Enviar el contrato a Acme"' in yaml_text
+        assert '"04:12"' in yaml_text
+        assert "responsable: null" in yaml_text
+
+    # Vista humana debajo del YAML.
+    human = content.split("\n---\n", 1)[1]
+    assert "Enviar el contrato a Acme" in human
+    assert "@Johann" in human
 
 
-def test_deaddrop_dir_vacio_no_hace_nada(tmp_path):
-    assert webhook.export_pendientes(_meeting_row(), "") is None
+def test_deaddrop_naming_instalacion_meeting_id_hash(monkeypatch, tmp_path):
+    monkeypatch.setattr(webhook, "APP_DATA_DIR", str(tmp_path / "appdata"))
+    m = _meeting_con_pendientes([{"texto": "Tarea A"}], meeting_id=7)
+    path = webhook.export_pendientes(m, str(tmp_path / "drop"))
+    machine_id = webhook.get_machine_id()
+    fname = os.path.basename(path)
+    prefix = f"vflow-pendientes-{machine_id}-7-"
+    assert fname.startswith(prefix)
+    hash_part = fname[len(prefix):-len(".md")]
+    assert len(hash_part) == 8
+    assert all(c in "0123456789abcdef" for c in hash_part)
 
 
-def test_deaddrop_sin_pendientes(tmp_path):
-    m = _meeting_row()
-    m["minutes_json"] = json.dumps({"resumen": "x"}, ensure_ascii=False)
-    m["insights_json"] = json.dumps({}, ensure_ascii=False)
-    path = webhook.export_pendientes(m, str(tmp_path))
-    assert path is not None
-    content = open(path, encoding="utf-8").read()
-    assert "sin pendientes" in content.lower()
+def test_deaddrop_ids_de_pendientes_estables_entre_exports(monkeypatch, tmp_path):
+    """Mismo texto (con diferencias triviales de espacio/mayúsculas) → mismo id,
+    tanto dentro de un export como entre reuniones/exports distintos."""
+    monkeypatch.setattr(webhook, "APP_DATA_DIR", str(tmp_path / "appdata"))
+    m1 = _meeting_con_pendientes([{"texto": "  Enviar   el Contrato  "}], meeting_id=1)
+    m2 = _meeting_con_pendientes([{"texto": "Enviar el contrato"}], meeting_id=2)
+
+    p1 = webhook.export_pendientes(m1, str(tmp_path / "drop"))
+    p2 = webhook.export_pendientes(m2, str(tmp_path / "drop"))
+
+    data1 = _try_yaml_load(_yaml_block(open(p1, encoding="utf-8").read()))
+    data2 = _try_yaml_load(_yaml_block(open(p2, encoding="utf-8").read()))
+    if data1 is not None and data2 is not None:
+        assert data1["pendientes"][0]["id"] == data2["pendientes"][0]["id"]
+    else:
+        assert webhook._pendiente_id("  Enviar   el Contrato  ") == webhook._pendiente_id("Enviar el contrato")
+
+
+def test_deaddrop_reexport_identico_es_no_op(monkeypatch, tmp_path):
+    monkeypatch.setattr(webhook, "APP_DATA_DIR", str(tmp_path / "appdata"))
+    drop = tmp_path / "drop"
+    m = _meeting_con_pendientes([{"texto": "Tarea estable"}], meeting_id=5)
+
+    path1 = webhook.export_pendientes(m, str(drop))
+    content1 = open(path1, encoding="utf-8").read()
+    path2 = webhook.export_pendientes(m, str(drop))
+    content2 = open(path2, encoding="utf-8").read()
+
+    assert path1 == path2
+    assert content1 == content2
+    assert len(list(drop.glob("*.md"))) == 1   # create-only: no se duplicó ni sobrescribió
+
+
+def test_deaddrop_acta_cambiada_genera_archivo_nuevo_sin_tocar_el_viejo(monkeypatch, tmp_path):
+    monkeypatch.setattr(webhook, "APP_DATA_DIR", str(tmp_path / "appdata"))
+    drop = tmp_path / "drop"
+    m1 = _meeting_con_pendientes([{"texto": "Tarea version 1"}], meeting_id=5)
+    path1 = webhook.export_pendientes(m1, str(drop))
+    content1_before = open(path1, encoding="utf-8").read()
+
+    m2 = _meeting_con_pendientes([{"texto": "Tarea version 2 (editada)"}], meeting_id=5)
+    path2 = webhook.export_pendientes(m2, str(drop))
+
+    assert path1 != path2
+    assert os.path.exists(path1)
+    assert open(path1, encoding="utf-8").read() == content1_before  # el viejo, intacto
+    assert len(list(drop.glob("*.md"))) == 2
+
+
+# ---------------------------------------------------------------------------
+# (g2) machine_id — id corto estable por instalación (O3)
+# ---------------------------------------------------------------------------
+
+def test_machine_id_estable_entre_dos_llamadas(monkeypatch, tmp_path):
+    monkeypatch.setattr(webhook, "APP_DATA_DIR", str(tmp_path / "appdata"))
+    id1 = webhook.get_machine_id()
+    id2 = webhook.get_machine_id()
+    assert id1 == id2
+    assert len(id1) == 8
+
+
+def test_machine_id_persiste_en_archivo(monkeypatch, tmp_path):
+    data_dir = tmp_path / "appdata"
+    monkeypatch.setattr(webhook, "APP_DATA_DIR", str(data_dir))
+    id1 = webhook.get_machine_id()
+    marker = data_dir / webhook._MACHINE_ID_FILENAME
+    assert marker.exists()
+    assert marker.read_text(encoding="utf-8").strip() == id1
+
+
+def test_machine_id_fallback_determinista_si_no_puede_persistir(monkeypatch, tmp_path):
+    # APP_DATA_DIR apunta a un ARCHIVO (no directorio): os.makedirs falla y
+    # tampoco existe machine_id.txt ahí dentro → cae al fallback determinista.
+    blocked = tmp_path / "no-es-un-directorio"
+    blocked.write_text("bloqueado", encoding="utf-8")
+    monkeypatch.setattr(webhook, "APP_DATA_DIR", str(blocked))
+    id1 = webhook.get_machine_id()
+    id2 = webhook.get_machine_id()
+    assert id1 == id2
+    assert len(id1) == 8
+
+
+# ---------------------------------------------------------------------------
+# (g3) transcript_offset — mm:ss del 't' del pendiente, o null (O2: nunca fecha límite)
+# ---------------------------------------------------------------------------
+
+def test_mmss_convierte_segundos():
+    assert webhook._mmss(252) == "04:12"
+    assert webhook._mmss(0) == "00:00"
+    assert webhook._mmss(None) is None
+    assert webhook._mmss("no numérico") is None
+    assert webhook._mmss(-5) is None
 
 
 # ---------------------------------------------------------------------------
