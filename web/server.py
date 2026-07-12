@@ -39,20 +39,112 @@ _url_worker_lock = threading.Lock()
 _url_worker_started = False
 
 
-def _url_queue_worker() -> None:
-    """Loop infinito que procesa la cola url_queue de forma serial (FIFO).
+def _process_next_url_item(worker_db) -> bool:
+    """Procesa UN item pendiente de la cola url_queue (una iteración del worker).
+
+    Extraído del ``while True`` de ``_url_queue_worker`` (F8/F9, unidad 0.4) para
+    que sea testeable sin depender de un loop infinito.
 
     - Toma el item 'pending' más antiguo.
     - Lo marca 'processing'.
     - Llama a transcribe_url con on_progress → actualiza stage en DB.
-    - Si ok: inserta en transcriptions (respetando SAVE_HISTORY) y marca 'done'.
+    - Si ok: inserta en transcriptions (respetando SAVE_HISTORY, con
+      ``source_queue_id=item_id`` para idempotencia) y marca 'done'. Si la fila
+      ya existe (IntegrityError del índice único post-crash), NO es error: se
+      loguea y se marca 'done' igual (F9).
     - Si no ok: marca 'error'.
-    - Pausa ~1.5s entre items (cortesía anti-baneo).
-    - Items 'processing' huérfanos al arranque (crash anterior) se reencolan como 'pending'.
+
+    F8: ``item_id`` se inicializa a None ANTES del try, así el except nunca
+    reutiliza el id de una iteración anterior si la excepción ocurre antes de
+    tomar el item (p. ej. ``url_queue_next_pending()`` lanza).
+
+    Devuelve True si había un item que procesar (independientemente de si
+    terminó en 'done' o 'error'), False si la cola estaba vacía.
+    """
+    import logging as _log
+    import sqlite3
+    from core.url_transcribe import transcribe_url  # noqa: PLC0415
+
+    _logger = _log.getLogger(__name__)
+
+    item_id = None
+    try:
+        item = worker_db.url_queue_next_pending()
+        if item is None:
+            return False
+
+        item_id = item["id"]
+        url = item["url"]
+        allow_instagram = bool(item.get("allow_instagram", 0))
+
+        _logger.info("URL queue: procesando id=%d url=%s", item_id, url)
+        worker_db.url_queue_set_processing(item_id, "iniciando")
+
+        def _on_progress(stage: str, _id=item_id) -> None:
+            try:
+                worker_db.url_queue_update_stage(_id, stage)
+            except Exception:
+                pass
+
+        result = transcribe_url(url, allow_instagram=allow_instagram, on_progress=_on_progress)
+
+        if result["ok"]:
+            title = result.get("title") or ""
+            if os.getenv("SAVE_HISTORY", "true").lower() == "true":
+                model_label = (
+                    "youtube-subtitles" if result.get("method") == "subtitles"
+                    else "url-audio"
+                )
+                try:
+                    worker_db.insert(
+                        text=result["text"],
+                        language=result.get("language"),
+                        duration_seconds=result.get("duration"),
+                        model=model_label,
+                        source=result.get("source") or "url",
+                        source_queue_id=item_id,
+                    )
+                except sqlite3.IntegrityError:
+                    # Idempotencia post-crash (F9): el proceso murió entre insert()
+                    # y url_queue_set_done() en un run anterior; el repair de
+                    # huérfanos re-encoló el item y ya se re-insertó una vez con
+                    # este source_queue_id. NO es un error de la cola.
+                    _logger.info(
+                        "URL queue: id=%d ya insertado (idempotencia post-crash), "
+                        "no se reintenta ni se marca error",
+                        item_id,
+                    )
+            worker_db.url_queue_set_done(item_id, title)
+            _logger.info("URL queue: id=%d completado — %s", item_id, title)
+        else:
+            error_msg = result.get("error") or "Error desconocido"
+            worker_db.url_queue_set_error(item_id, error_msg)
+            _logger.warning("URL queue: id=%d error — %s", item_id, error_msg)
+
+    except Exception as exc:
+        _logger.error("URL queue worker: excepción inesperada: %s", exc, exc_info=True)
+        # Intentar marcar el item como error para no bloquear la cola. item_id
+        # es None si la excepción ocurrió ANTES de tomar un item (F8): en ese
+        # caso NO se toca ningún item (nunca el de la iteración anterior).
+        try:
+            if item_id is not None:
+                worker_db.url_queue_set_error(item_id, f"Error interno: {exc}")
+        except Exception:
+            pass
+
+    return True
+
+
+def _url_queue_worker() -> None:
+    """Loop infinito que procesa la cola url_queue de forma serial (FIFO).
+
+    Cada iteración delega en ``_process_next_url_item``. Pausa ~1.5s entre
+    items procesados (cortesía anti-baneo), 1.0s si la cola estaba vacía.
+    Items 'processing' huérfanos al arranque (crash anterior) se reencolan
+    como 'pending'.
     """
     import time
     import logging as _log
-    from core.url_transcribe import transcribe_url  # noqa: PLC0415
 
     _logger = _log.getLogger(__name__)
 
@@ -70,58 +162,8 @@ def _url_queue_worker() -> None:
         _logger.warning("No se pudo reparar items processing huérfanos: %s", _exc)
 
     while True:
-        try:
-            item = worker_db.url_queue_next_pending()
-            if item is None:
-                time.sleep(1.0)
-                continue
-
-            item_id = item["id"]
-            url = item["url"]
-            allow_instagram = bool(item.get("allow_instagram", 0))
-
-            _logger.info("URL queue: procesando id=%d url=%s", item_id, url)
-            worker_db.url_queue_set_processing(item_id, "iniciando")
-
-            def _on_progress(stage: str, _id=item_id) -> None:
-                try:
-                    worker_db.url_queue_update_stage(_id, stage)
-                except Exception:
-                    pass
-
-            result = transcribe_url(url, allow_instagram=allow_instagram, on_progress=_on_progress)
-
-            if result["ok"]:
-                title = result.get("title") or ""
-                if os.getenv("SAVE_HISTORY", "true").lower() == "true":
-                    model_label = (
-                        "youtube-subtitles" if result.get("method") == "subtitles"
-                        else "url-audio"
-                    )
-                    worker_db.insert(
-                        text=result["text"],
-                        language=result.get("language"),
-                        duration_seconds=result.get("duration"),
-                        model=model_label,
-                        source=result.get("source") or "url",
-                    )
-                worker_db.url_queue_set_done(item_id, title)
-                _logger.info("URL queue: id=%d completado — %s", item_id, title)
-            else:
-                error_msg = result.get("error") or "Error desconocido"
-                worker_db.url_queue_set_error(item_id, error_msg)
-                _logger.warning("URL queue: id=%d error — %s", item_id, error_msg)
-
-        except Exception as exc:
-            _logger.error("URL queue worker: excepción inesperada: %s", exc, exc_info=True)
-            # Intentar marcar el item como error para no bloquear la cola
-            try:
-                if "item_id" in dir():
-                    worker_db.url_queue_set_error(item_id, f"Error interno: {exc}")  # type: ignore[name-defined]
-            except Exception:
-                pass
-
-        time.sleep(1.5)
+        had_item = _process_next_url_item(worker_db)
+        time.sleep(1.5 if had_item else 1.0)
 
 
 def _start_url_queue_worker() -> None:

@@ -110,6 +110,21 @@ class TranscriptionDB:
         # Texto crudo pre-diccionario (unidad 6.2): NULL si coincide con el texto
         # final (nada que mostrar en el toggle "ver crudo").
         "ALTER TABLE transcriptions ADD COLUMN raw_text TEXT",
+        # Idempotencia del worker de la cola de URLs (F9, unidad 0.4): referencia al
+        # item de url_queue que originó esta fila. NULL para transcripciones que no
+        # vienen de la cola (mic/system/individual). El índice único parcial (creado
+        # más abajo, DESPUÉS de esta migración porque depende de la columna) impide
+        # una segunda inserción para el mismo item si el proceso muere entre el
+        # insert() y el url_queue_set_done() y el item se re-encola y re-procesa.
+        "ALTER TABLE transcriptions ADD COLUMN source_queue_id INTEGER",
+    ]
+
+    # Índice que depende de una columna creada por migración (no puede vivir en
+    # _DDL: se ejecuta DESPUÉS del loop de _MIGRATIONS). CREATE INDEX IF NOT EXISTS
+    # ya es idempotente por sí solo.
+    _POST_MIGRATION_INDEXES = [
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_transcriptions_source_queue "
+        "ON transcriptions(source_queue_id) WHERE source_queue_id IS NOT NULL",
     ]
 
     # DDL adicional para la cola de URLs (Fase 3, paso 2)
@@ -165,6 +180,11 @@ class TranscriptionDB:
                     except sqlite3.OperationalError as e:
                         if "duplicate column" not in str(e).lower():
                             raise
+                # Índices que dependen de columnas recién migradas (deben correr
+                # después de que la columna exista).
+                for index_ddl in self._POST_MIGRATION_INDEXES:
+                    conn.execute(index_ddl)
+                conn.commit()
                 # FTS5: creación con cascada de tokenizer
                 self._fts_enabled = False
                 self._fts_tokenizer = None
@@ -225,18 +245,25 @@ class TranscriptionDB:
                     except sqlite3.OperationalError as e:
                         if "duplicate column" not in str(e).lower():
                             raise
+                for index_ddl in self._POST_MIGRATION_INDEXES:
+                    conn.execute(index_ddl)
+                conn.commit()
 
-    def insert(self, text: str, language: str = None, duration_seconds: float = None, model: str = "whisper-large-v3-turbo", source: str = "mic", raw_text: str = None) -> int:
+    def insert(self, text: str, language: str = None, duration_seconds: float = None, model: str = "whisper-large-v3-turbo", source: str = "mic", raw_text: str = None, source_queue_id: int = None) -> int:
         """Inserta una transcripción y retorna su ID.
 
         raw_text: texto crudo pre-diccionario (unidad 6.2). None cuando no hay
         crudo disponible o coincide con `text` (el caller ya hace esa
         comparación antes de llamar; aquí se guarda tal cual llega).
+        source_queue_id: id del item de url_queue que originó esta fila (F9,
+        unidad 0.4). None para transcripciones que no vienen de la cola. El
+        índice único parcial ``idx_transcriptions_source_queue`` impide una
+        segunda fila para el mismo item (idempotencia post-crash del worker).
         """
         with self._connect() as conn:
             cursor = conn.execute(
-                "INSERT INTO transcriptions (text, language, duration_seconds, model, source, raw_text) VALUES (?, ?, ?, ?, ?, ?)",
-                (text, language, duration_seconds, model, source, raw_text),
+                "INSERT INTO transcriptions (text, language, duration_seconds, model, source, raw_text, source_queue_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (text, language, duration_seconds, model, source, raw_text, source_queue_id),
             )
             return cursor.lastrowid
 

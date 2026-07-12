@@ -204,6 +204,49 @@ def test_reintento_para_al_primer_2xx(monkeypatch):
     assert calls["post"] == 1
 
 
+def test_redirect_3xx_es_terminal_no_reintenta(monkeypatch):
+    """F3: una respuesta 307 es un fallo TERMINAL — no se reintenta ni se sigue."""
+    calls = {"post": 0, "sleep": []}
+    monkeypatch.setattr(webhook, "validate_url", lambda url, allow_local=False: "93.184.216.34")
+    monkeypatch.setattr(webhook.time, "sleep", lambda s: calls["sleep"].append(s))
+
+    class _Resp:
+        status_code = 307
+
+    def fake_post(url, **kw):
+        calls["post"] += 1
+        return _Resp()
+
+    import requests
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    ok = webhook.send_webhook("https://example.com/h", {"a": 1}, "sec", max_attempts=3)
+    assert ok is False
+    assert calls["post"] == 1          # un solo intento, no gasta los 3
+    assert calls["sleep"] == []        # no hay backoff: es terminal, no transitorio
+
+
+def test_post_real_usa_allow_redirects_false(monkeypatch):
+    """F3: el POST real siempre pasa allow_redirects=False (inspección de kwargs)."""
+    monkeypatch.setattr(webhook, "validate_url", lambda url, allow_local=False: "93.184.216.34")
+    monkeypatch.setattr(webhook.time, "sleep", lambda s: None)
+    seen_kwargs = {}
+
+    class _Resp:
+        status_code = 200
+
+    def fake_post(url, **kw):
+        seen_kwargs.update(kw)
+        return _Resp()
+
+    import requests
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    ok = webhook.send_webhook("https://example.com/h", {"a": 1}, "sec", max_attempts=1)
+    assert ok is True
+    assert seen_kwargs.get("allow_redirects") is False
+
+
 def test_send_no_lanza_ante_excepcion(monkeypatch):
     monkeypatch.setattr(webhook, "validate_url", lambda url, allow_local=False: "1.2.3.4")
     monkeypatch.setattr(webhook.time, "sleep", lambda s: None)

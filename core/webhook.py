@@ -231,10 +231,24 @@ def send_webhook(url: str, payload: dict, secret: str, *, allow_local: bool = Fa
             # requests re-resuelve el host; no pinneamos validated_ip al socket).
             if attempt > 1:
                 validate_url(url, allow_local=allow_local)
-            resp = requests.post(url, data=body, headers=headers, timeout=timeout)
+            # allow_redirects=False (F3): un receptor comprometido podría responder
+            # 307/308 hacia una IP privada/loopback y burlar el anti-SSRF de
+            # validate_url(), que solo valida la URL original — nunca la de un
+            # redirect. No seguimos redirects, punto.
+            resp = requests.post(url, data=body, headers=headers, timeout=timeout,
+                                 allow_redirects=False)
             if 200 <= resp.status_code < 300:
                 logger.info("Webhook entregado (%s) intento %d.", resp.status_code, attempt)
                 return True
+            if 300 <= resp.status_code < 400:
+                # Fallo TERMINAL, no transitorio: no se sigue el redirect por
+                # seguridad y no se gastan los reintentos restantes.
+                logger.error(
+                    "Webhook: el receptor respondió una redirección (HTTP %s); "
+                    "no se sigue por seguridad y no se reintenta.",
+                    resp.status_code,
+                )
+                return False
             last_err = f"HTTP {resp.status_code}"
             logger.warning("Webhook intento %d/%d devolvió %s.", attempt, max_attempts, last_err)
         except Exception as exc:  # noqa: BLE001  (red, timeout, validación, etc.)
