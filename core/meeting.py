@@ -222,6 +222,17 @@ class MeetingSession:
         with self._lock:
             return self._stopping
 
+    def get_generation(self) -> int:
+        """Token de generación actual (``_session_gen``, incrementado en cada
+        ``start()`` real — ver comentario en ``__init__``).
+
+        Expuesto para el polling incremental de ``GET /api/meeting`` (unidad 3.1):
+        el cliente compara este valor contra el que guardó en su cursor local para
+        detectar que arrancó una reunión nueva (o se reinició) y descartar su
+        cursor `since`. Lectura bajo el mismo lock que protege el resto del estado."""
+        with self._lock:
+            return self._session_gen
+
     def get_levels(self) -> tuple:
         """(level_mic, level_sys) RMS 0..1 del último chunk, sin el lock (unidad 5.3).
 

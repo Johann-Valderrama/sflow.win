@@ -184,6 +184,46 @@ app.config["SECRET_KEY"] = secrets.token_hex(32)
 # Single DB instance (avoids re-running DDL on every request)
 _db = TranscriptionDB()
 
+# ---------------------------------------------------------------------------
+# Helper JS compartido del polling incremental de /api/meeting (unidad 3.1).
+# FUENTE ÚNICA: este bloque se inyecta en LOS DOS documentos HTML que lo usan
+# (HTML_TEMPLATE → loadMeeting, y MEETING_PAGE → loadLive) sustituyendo el
+# placeholder __MT_INCREMENTAL_JS__ una sola vez a nivel de módulo (ver el
+# bloque de .replace() justo después de la definición de MEETING_PAGE). Son
+# documentos SEPARADOS: definirlo solo en uno deja al otro con ReferenceError.
+# OJO Jinja: ambos templates pasan por render_template_string, así que este JS
+# no debe contener nunca '{{', '{%' ni '{#' (llaves simples son seguras).
+# ---------------------------------------------------------------------------
+_MT_INCREMENTAL_JS = """
+// Polling incremental de /api/meeting (unidad 3.1). Bloque inyectado desde la
+// constante Python _MT_INCREMENTAL_JS (web/server.py) — NO editar en el HTML
+// renderizado; la fuente única vive en esa constante. Dos consumidores REALES
+// con DOM y ciclos de vida distintos ('home' = panel embebido del dashboard,
+// 'live' = vista /reunion) comparten este helper de fetch+cursor. Cada
+// consumidor guarda su propio {gen, since} + su copia acumulada de segments
+// (el server solo manda el delta desde `since`); el render de cada uno sigue
+// recibiendo la lista COMPLETA acumulada, así su lógica de diffing existente
+// (comparar longitud previa vs actual para hacer append) no cambia.
+// Invalidación: gen distinto o total<since (reunión nueva/reiniciada)
+// → se descarta lo acumulado y se repite con since=0 en el mismo poll.
+const _mtCursors = {};
+async function fetchMeetingIncremental(key) {
+    let cur = _mtCursors[key];
+    if (!cur) { cur = { gen: null, since: 0, segments: [] }; _mtCursors[key] = cur; }
+    let res = await fetch('/api/meeting?since=' + cur.since);
+    let data = await res.json();
+    if (cur.gen !== null && (data.gen !== cur.gen || data.total < cur.since)) {
+        cur.segments = [];
+        res = await fetch('/api/meeting?since=0');
+        data = await res.json();
+    }
+    cur.gen = data.gen;
+    cur.segments = cur.segments.concat(data.segments || []);
+    cur.since = data.total;
+    return { status: data.status, insights: data.insights, last_minutes: data.last_minutes, segments: cur.segments };
+}
+"""
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="es" class="dark">
@@ -2165,10 +2205,11 @@ HTML_TEMPLATE = """
             _mtPollInterval = setInterval(loadMeeting, 2000);
         }
 
+        __MT_INCREMENTAL_JS__
+
         async function loadMeeting() {
             try {
-                const res = await fetch('/api/meeting');
-                const data = await res.json();
+                const data = await fetchMeetingIncremental('home');
                 const st = data.status || {};
                 renderMeeting(st, data.segments || []);
                 renderInsights(data.insights || {});
@@ -3290,10 +3331,12 @@ function _pendResetAll(){
   _pendCards.clear();
 }
 
+__MT_INCREMENTAL_JS__
+
 let _mtNotes = [], _mtPaused = false;
 async function loadLive(){
   try{
-    const r = await fetch('/api/meeting'); const d = await r.json(); const s = d.status||{};
+    const d = await fetchMeetingIncremental('live'); const s = d.status||{};
     const startB=document.getElementById('mt-start'), stopB=document.getElementById('mt-stop');
     const liveHeader=document.getElementById('mt-live-header'), actionBar=document.getElementById('mt-action-bar');
     const tabs=document.getElementById('mt-tabs');
@@ -3824,6 +3867,14 @@ async function asstSend(text){
 _fillIcons();  // iconos SVG estáticos (data-icon)
 loadLive(); startPoll(); loadHistory();
 </script></body></html>"""
+
+# Inyección única (a nivel de módulo, no por request) del helper JS compartido
+# del polling incremental en AMBOS documentos. Si el placeholder faltara en
+# alguno, el helper quedaría sin definir en ese documento y loadMeeting/loadLive
+# morirían con ReferenceError — hay un test de integración que lo vigila
+# (tests/test_meeting_incremental.py::TestHelperPresentInBothDocuments).
+HTML_TEMPLATE = HTML_TEMPLATE.replace("__MT_INCREMENTAL_JS__", _MT_INCREMENTAL_JS)
+MEETING_PAGE = MEETING_PAGE.replace("__MT_INCREMENTAL_JS__", _MT_INCREMENTAL_JS)
 
 
 @app.route("/")
@@ -4602,12 +4653,54 @@ def url_queue_cancel_pending():
 
 @app.route("/api/meeting", methods=["GET"])
 def meeting_status():
-    """Devuelve el estado, el transcript en vivo y el Insight Stream (para polling)."""
+    """Devuelve el estado, el transcript en vivo y el Insight Stream (para polling).
+
+    Polling incremental (unidad 3.1, `?since=N`): si se pasa `since` (nº de
+    segmentos que el cliente ya tiene), la respuesta trae SOLO el delta de
+    segmentos desde ese índice (más status/insights/last_minutes completos, que
+    ya son livianos) en vez del transcript entero — shape
+    `{gen, status, insights, last_minutes, segments_from, segments, total}`.
+
+    Sin `since` (ausente o no-parseable como entero — `request.args.get(...,
+    type=int)` devuelve None en ambos casos): respuesta COMPLETA, byte-idéntica
+    al modo legado (compatibilidad con cualquier otro consumidor del endpoint).
+    `since` negativo se trata como 0 (clamp); `since` > total también clampa
+    (delta vacío, sin 500).
+    """
+    since = request.args.get("since", type=int)
+    # El slice se hace aquí, sobre la lista que ya devuelve transcript_segments()
+    # (su sorted() interno se conserva sin cambios).
+    segments = MEETING.transcript_segments()
+    if since is None:
+        return jsonify({
+            "status": MEETING.status(),
+            "segments": segments,
+            "insights": MEETING.get_insights(),
+            "last_minutes": MEETING.get_last_minutes(),  # acta de la última reunión terminada
+        })
+
+    total = len(segments)
+    since = max(0, min(since, total))
+    # Orden de lectura elegido para la "foto atómica" (gen + segmentos): los
+    # SEGMENTOS se leen PRIMERO y el GEN se lee DESPUÉS. Motivo: get_generation()
+    # y transcript_segments() toman el lock por separado (no se cambia la firma
+    # de transcript_segments() para fusionarlos en una sola sección crítica), así
+    # que una start() concurrente puede colarse entre las dos lecturas. Con este
+    # orden, si eso ocurre, el `gen` reportado será el de la generación NUEVA (o
+    # igual) respecto a los segmentos ya leídos — nunca uno viejo emparejado con
+    # segmentos nuevos. Eso garantiza que el cliente SIEMPRE detecte el cambio de
+    # generación por el mismatch de `gen` (invalidación primaria), en vez de
+    # depender solo de `total < since` (que tiene un caso límite si los tamaños
+    # coinciden por casualidad justo en el boundary).
+    gen = MEETING.get_generation()
     return jsonify({
+        "gen": gen,
         "status": MEETING.status(),
-        "segments": MEETING.transcript_segments(),
         "insights": MEETING.get_insights(),
-        "last_minutes": MEETING.get_last_minutes(),  # acta de la última reunión terminada
+        "last_minutes": MEETING.get_last_minutes(),
+        "segments_from": since,
+        "segments": segments[since:],
+        "total": total,
     })
 
 
