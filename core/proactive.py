@@ -1,8 +1,12 @@
 """Proactivo v2 (unidad 5.3) — modo, gate de push, cola de lull y coaching de monólogo.
 
-Módulo PURO (sin Qt, sin threading propio, sin I/O de red): solo estado en memoria
+Módulo PURO (sin Qt, sin I/O de red, sin hilos propios): solo estado en memoria
 y funciones/objetos testeables de forma sintética (el caller — main.py, en el tick
 del ``_meeting_sync_timer`` — decide CUÁNDO llamar ``update``/``pop_deliverable``).
+``ProactiveGate`` SÍ es mutado concurrentemente por 3 hilos reales de la app (tick
+Qt, daemon de insight, daemon de consolidación — ver unidad 1.1), así que protege
+su estado con un ``threading.Lock`` interno; eso no lo vuelve "impuro": no lanza
+hilos ni hace I/O, solo serializa el acceso a memoria compartida.
 
 Producto (no se re-litiga aquí, ver unidad): un "push" es cualquier tarjeta que
 aparece sin que el usuario la pida; el presupuesto es ~1 push/5min salvo que sea
@@ -13,9 +17,22 @@ este módulo solo decide QUÉ y CUÁNDO entregar.
 Modos (PROACTIVE_MODE): "silent" (solo pendientes, cero proactividad extra),
 "copilot" (default: pendientes + detecciones + memoria cruzada), "trainer"
 (+ coaching, p.ej. monólogo prolongado).
+
+Concurrencia (unidad 1.1, 2026-07): TODOS los métodos públicos que leen o mutan
+``_queue``/presupuesto/dedup toman ``self._lock`` UNA sola vez y delegan en
+helpers privados ``_*_locked`` (nunca en otro método público, que también toma
+el lock — ``threading.Lock`` no es reentrante: hacerlo produciría deadlock).
+El lock solo protege mutaciones de estado en memoria; nunca se retiene durante
+trabajo largo (no hay LLM ni I/O en esta clase). ``try_push`` es el método
+atómico que reemplaza el patrón previo should_push→enqueue→mark_pushed en 3
+llamadas separadas (TOCTOU real entre hilos): decide, encola y consume
+presupuesto bajo un único acquire.
 """
 import os
+import threading
 import time
+
+from config import MEETING_SILENCE_RMS
 
 _VALID_MODES = ("silent", "copilot", "trainer")
 _DEFAULT_MODE = "copilot"
@@ -29,10 +46,12 @@ _PUSH_BUDGET_SECONDS = 300.0
 _LULL_FORCE_AFTER_SECONDS = 60.0
 _QUEUE_EXPIRE_SECONDS = 180.0
 
-# Umbral de silencio compartido con MEETING_SILENCE_RMS (config.py); se repite
-# aquí como literal para que este módulo siga siendo puro (sin import de Qt/app
-# config) — mismo valor, ver config.py MEETING_SILENCE_RMS.
-_SILENCE_RMS = 0.012
+# Umbral de silencio: MISMO valor que MEETING_SILENCE_RMS (config.py), importado
+# directamente (unidad 1.4) — antes era un literal duplicado aquí, que quedaba
+# desincronizado si alguien cambiaba MEETING_SILENCE_RMS por .env. Alias local
+# conservado (mismo nombre) porque is_lull/LullDetector/MonologueWatch ya lo usan
+# como valor por defecto de sus parámetros.
+_SILENCE_RMS = MEETING_SILENCE_RMS
 _LULL_MIN_TICKS = 2  # ticks sostenidos (~1s cada uno) por debajo del umbral
 
 # Monólogo (modo trainer): ~90 ticks de 1s = ~90s hablando yo, sin que ellos hablen.
@@ -57,6 +76,7 @@ class ProactiveGate:
     """
 
     def __init__(self):
+        self._lock = threading.Lock()  # protege TODO lo de abajo (unidad 1.1)
         self._last_push_at: dict = {}  # kind -> monotonic del último push de ese tipo
         self._last_nonpending_push_at: float = 0.0
         self._queue: list = []          # [{key,tipo,texto,detail?,t,queued_at}]
@@ -65,6 +85,10 @@ class ProactiveGate:
 
     def reset(self):
         """Reinicia todo el estado (usar al terminar/empezar una reunión nueva)."""
+        with self._lock:
+            self._reset_locked()
+
+    def _reset_locked(self):
         self._last_push_at.clear()
         self._last_nonpending_push_at = 0.0
         self._queue.clear()
@@ -83,7 +107,17 @@ class ProactiveGate:
           push NO-pendiente hace menos de _PUSH_BUDGET_SECONDS (presupuesto global
           de ruido, no por-kind: un push de detección y uno de coaching comparten
           el mismo presupuesto de "algo apareció sin que lo pidiera").
+
+        NOTA (unidad 1.1): expuesto para tests sintéticos y para el coaching de
+        main.py, que no necesita atomicidad con un enqueue. Los callers de
+        producción que SÍ encolan a partir de esta decisión (detecciones 5.1,
+        memoria cruzada 5.2) deben usar ``try_push`` para evitar el TOCTOU entre
+        esta llamada y ``mark_pushed``.
         """
+        with self._lock:
+            return self._should_push_locked(kind, now)
+
+    def _should_push_locked(self, kind: str, now: float = None) -> bool:
         if kind == "pendiente":
             return True
         if get_mode() == "silent":
@@ -94,6 +128,10 @@ class ProactiveGate:
     def mark_pushed(self, kind: str, now: float = None):
         """Registra que se empujó una tarjeta de tipo ``kind`` (consume presupuesto
         si no es un pendiente)."""
+        with self._lock:
+            self._mark_pushed_locked(kind, now)
+
+    def _mark_pushed_locked(self, kind: str, now: float = None):
         now = now if now is not None else time.monotonic()
         self._last_push_at[kind] = now
         if kind != "pendiente":
@@ -103,23 +141,31 @@ class ProactiveGate:
     # Cola de espera a lull
     # ------------------------------------------------------------------
 
-    def enqueue(self, card: dict, now: float = None):
+    def enqueue(self, card: dict, now: float = None) -> bool:
         """Encola una tarjeta candidata a entregarse en la próxima pausa natural.
 
         Dedup por ``key``: si ya se entregó o se descartó esa key, se ignora (nunca
-        reaparece). Si ya está en cola, no duplica.
+        reaparece). Si ya está en cola, no duplica. Devuelve True si la tarjeta
+        quedó efectivamente encolada, False si se descartó por dedup/falta de key
+        (el valor de retorno es nuevo en la unidad 1.1; los callers que lo ignoraban
+        antes siguen funcionando igual).
         """
+        with self._lock:
+            return self._enqueue_locked(card, now)
+
+    def _enqueue_locked(self, card: dict, now: float = None) -> bool:
         key = card.get("key")
         if not key:
-            return
+            return False
         if key in self._delivered_keys or key in self._discarded_keys:
-            return
+            return False
         if any(c["key"] == key for c in self._queue):
-            return
+            return False
         now = now if now is not None else time.monotonic()
         entry = dict(card)
         entry["queued_at"] = now
         self._queue.append(entry)
+        return True
 
     def pop_deliverable(self, lull: bool, now: float = None) -> "dict | None":
         """Extrae de la cola LA SIGUIENTE tarjeta lista para entregarse (FIFO), o
@@ -129,8 +175,12 @@ class ProactiveGate:
         entregarse). Luego, si hay lull o la más vieja lleva >= _LULL_FORCE_AFTER_SECONDS
         esperando, la entrega (queda marcada como entregada — dedup futuro).
         """
+        with self._lock:
+            return self._pop_deliverable_locked(lull, now)
+
+    def _pop_deliverable_locked(self, lull: bool, now: float = None) -> "dict | None":
         now = now if now is not None else time.monotonic()
-        self._purge_expired(now)
+        self._purge_expired_locked(now)
         if not self._queue:
             return None
         oldest = self._queue[0]
@@ -142,7 +192,7 @@ class ProactiveGate:
             return oldest
         return None
 
-    def _purge_expired(self, now: float):
+    def _purge_expired_locked(self, now: float):
         keep = []
         for c in self._queue:
             if now - c["queued_at"] >= _QUEUE_EXPIRE_SECONDS:
@@ -152,13 +202,41 @@ class ProactiveGate:
         self._queue = keep
 
     def queue_size(self) -> int:
-        return len(self._queue)
+        with self._lock:
+            return len(self._queue)
 
     def delivered(self, key: str) -> bool:
         """¿Esta key ya se entregó al HUD? Lectura pura (unidad 5.1): la usa
         MEETING.status() para exponer al panel web solo las tarjetas que el
         usuario ya vio y aún no tienen feedback ✓/✗."""
-        return key in self._delivered_keys
+        with self._lock:
+            return key in self._delivered_keys
+
+    # ------------------------------------------------------------------
+    # Decisión + encolado + presupuesto ATÓMICOS (unidad 1.1)
+    # ------------------------------------------------------------------
+
+    def try_push(self, kind: str, card: dict, now: float = None) -> bool:
+        """should_push → enqueue → mark_pushed bajo UN solo ``acquire`` del lock.
+
+        Reemplaza el patrón previo de 3 llamadas separadas (should_push,
+        enqueue, mark_pushed) que dos hilos podían intercalar: ambos veían
+        presupuesto disponible antes de que ninguno marcara el push, y los dos
+        terminaban empujando tarjeta (doble push en la misma ventana). Aquí la
+        decisión completa ocurre bajo un único lock.
+
+        Regla dura (no se re-litiga): si el dedup de ``enqueue`` rechaza la
+        tarjeta (ya entregada/descartada/ya en cola), el presupuesto NO se
+        consume — ``mark_pushed`` solo se llama tras un ``enqueue`` exitoso.
+        Devuelve True si la tarjeta quedó efectivamente encolada.
+        """
+        with self._lock:
+            if not self._should_push_locked(kind, now):
+                return False
+            if not self._enqueue_locked(card, now):
+                return False
+            self._mark_pushed_locked(kind, now)
+            return True
 
 
 def is_lull(level_yo: float, level_ellos: float, threshold: float = _SILENCE_RMS) -> bool:

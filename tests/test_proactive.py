@@ -90,12 +90,13 @@ class TestQueue:
     def test_expires_after_180s(self):
         gate = proactive.ProactiveGate()
         # Encolar y purgar manualmente sin pasar por pop_deliverable (que a los
-        # >=60s SIEMPRE entrega): se ejercita _purge_expired vía una segunda
+        # >=60s SIEMPRE entrega): se ejercita _purge_expired_locked vía una segunda
         # tarjeta que queda detrás y expira sin ser nunca la más vieja entregable.
+        # (unidad 1.1: renombrado a *_locked al introducir el lock de concurrencia)
         gate._queue.append({"key": "k1", "tipo": "deteccion", "texto": "x", "queued_at": 0.0})
-        gate._purge_expired(now=179.9)
+        gate._purge_expired_locked(now=179.9)
         assert gate.queue_size() == 1
-        gate._purge_expired(now=180.0)
+        gate._purge_expired_locked(now=180.0)
         assert gate.queue_size() == 0
         assert "k1" in gate._discarded_keys
 

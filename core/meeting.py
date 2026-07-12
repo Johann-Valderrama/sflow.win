@@ -1147,10 +1147,13 @@ class MeetingSession:
           3. Dedup local por key (hash del texto normalizado) contra el rastro
              de la reunión — complementa el dedup del LLM (ya_reportadas) y el
              de la cola (delivered/discarded keys).
-          4. Presupuesto de atención should_push("deteccion") — ~1 push no-pendiente
-             cada 5 min. Si el presupuesto está agotado, la detección NO se encola
-             NI se registra: si sigue vigente, el LLM la re-reporta en un ciclo
-             posterior y entra entonces (mejor tarde que perdida o que en ráfaga).
+          4. Presupuesto de atención vía try_push("deteccion", card) — ~1 push
+             no-pendiente cada 5 min, decidido y consumido ATÓMICAMENTE (unidad
+             1.1: un solo acquire del lock de PROACTIVE evita el TOCTOU entre
+             decidir y marcar el push que existía con should_push/mark_pushed
+             separados). Si el presupuesto está agotado, la detección NO se
+             encola NI se registra: si sigue vigente, el LLM la re-reporta en un
+             ciclo posterior y entra entonces (mejor tarde que perdida o ráfaga).
         La cola (PROACTIVE) añade encima caducidad y espera de lull; la entrega
         al HUD ya está cableada en main.py (_tick_proactive, genérica por tipo).
         """
@@ -1173,15 +1176,13 @@ class MeetingSession:
                 with self._lock:
                     if any(d["key"] == key for d in self._detections):
                         continue
-                if not _proactive.PROACTIVE.should_push("deteccion"):
-                    continue
                 texto = self._format_detection_card(clase, item)
                 card = {"key": key, "tipo": "deteccion", "texto": texto}
                 detail = str(item.get("time") or "").strip() or None
                 if detail:
                     card["detail"] = detail
-                _proactive.PROACTIVE.enqueue(card)
-                _proactive.PROACTIVE.mark_pushed("deteccion")
+                if not _proactive.PROACTIVE.try_push("deteccion", card):
+                    continue
                 with self._lock:
                     t = self._elapsed()
                     self._detections.append({
@@ -1249,9 +1250,11 @@ class MeetingSession:
           4. Overlap REAL de tokens (≥ CROSS_MEMORY_MIN_OVERLAP significativos,
              helper _tokens) entre UN tema actual y el texto del acta pasada.
           5. Dedup: máx 1 tarjeta por reunión pasada por sesión (_cross_emitted).
-          6. Presupuesto should_push("cruzada") de la máquina 5.3 — si está
-             agotado NO se registra el dedup: si el tema sigue vivo, re-entra
-             en una consolidación posterior (mejor tarde que perdida).
+          6. Presupuesto vía try_push("cruzada", card) de la máquina 5.3 —
+             decisión + encolado atómicos (unidad 1.1); si está agotado o el
+             dedup de la cola rechaza la tarjeta, NO se registra el dedup local
+             (_cross_emitted): si el tema sigue vivo, re-entra en una
+             consolidación posterior (mejor tarde que perdida).
         Se excluyen SIEMPRE la reunión activa y las reuniones sin acta.
         """
         if not self._cross_memory_enabled():
@@ -1308,16 +1311,15 @@ class MeetingSession:
             if best_text is None or best_overlap < CROSS_MEMORY_MIN_OVERLAP:
                 continue
 
-            # Presupuesto de atención (máquina 5.3): sin presupuesto no se emite
-            # NI se registra el dedup — puede re-entrar en la próxima consolidación.
-            if not _proactive.PROACTIVE.should_push("cruzada"):
-                return
             fecha = self._fmt_ddmm(row.get("started_at"))
             prefijo = f"El {fecha} se acordó" if fecha else "En una reunión pasada se acordó"
             texto = f"{prefijo}: {best_text}"
             card = {"key": f"cruz-{mid}", "tipo": "cruzada", "texto": texto}
-            _proactive.PROACTIVE.enqueue(card)
-            _proactive.PROACTIVE.mark_pushed("cruzada")
+            # Presupuesto de atención (máquina 5.3), atómico: sin presupuesto (o
+            # rechazada por dedup de la cola) no se emite NI se registra el dedup
+            # local — puede re-entrar en la próxima consolidación.
+            if not _proactive.PROACTIVE.try_push("cruzada", card):
+                return
             with self._lock:
                 self._cross_emitted.add(mid)
                 t = self._elapsed()

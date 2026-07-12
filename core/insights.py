@@ -48,7 +48,14 @@ _client = None
 _client_lock = threading.Lock()
 _anthropic_client = None
 _anthropic_client_lock = threading.Lock()
-_last_error: str | None = None  # último error real de llamada (para surfacing en la UI)
+# Último error real de llamada por TAREA (para surfacing en la UI). Antes era un
+# único global compartido entre "live" y "batch" (unidad 1.1, bug real): una
+# llamada batch (acta, Asistente de reuniones) podía pisar/limpiar el error que
+# el Insight Stream en vivo venía mostrando en el HUD, o viceversa. Un dict con
+# escritura atómica bajo lock simple basta (no hay sección crítica larga que
+# proteger, solo la asignación de una clave).
+_last_error: dict = {"live": None, "batch": None}
+_last_error_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Circuit breaker de fallback (ver _chat / _fallback_backend)
@@ -57,9 +64,18 @@ _breaker: dict[str, float] = {}  # backend → time.monotonic() del último fall
 _breaker_lock = threading.Lock()
 
 
-def last_error() -> "str | None":
-    """Último error de una llamada al backend de insights (None si la última fue OK)."""
-    return _last_error
+def last_error(task: str = "live") -> "str | None":
+    """Último error de una llamada al backend de insights para ``task`` ("live"
+    o "batch"), o None si la última de esa tarea fue OK. El default "live"
+    preserva al único consumidor actual (core/meeting.py:1084, que muestra el
+    error del Insight Stream en vivo en el panel)."""
+    with _last_error_lock:
+        return _last_error.get(task)
+
+
+def _set_last_error(task: str, value: "str | None") -> None:
+    with _last_error_lock:
+        _last_error[task] = value
 
 
 def _extract_json(text: str):
@@ -338,7 +354,6 @@ def _chat(messages: list, *, task: str = "live", json_mode: bool = False,
     y se abre un circuit breaker de INSIGHTS_FALLBACK_COOLDOWN segundos (default 300)
     para no reintentar el primario roto en cada llamada.
     """
-    global _last_error
     backend = _resolve_backend(task)
     fallback_on = _fallback_enabled()
 
@@ -350,16 +365,16 @@ def _chat(messages: list, *, task: str = "live", json_mode: bool = False,
             logger.debug("insights: breaker abierto para '%s', usando fallback '%s' directo", backend, fb)
             result = _dispatch(fb, messages, task=task, json_mode=json_mode,
                                temperature=temperature, max_tokens=max_tokens, reasoning=reasoning)
-            _last_error = None
+            _set_last_error(task, None)
             return result
 
     try:
         result = _dispatch(backend, messages, task=task, json_mode=json_mode,
                            temperature=temperature, max_tokens=max_tokens, reasoning=reasoning)
-        _last_error = None
+        _set_last_error(task, None)
         return result
     except InsightsUnavailable as exc:
-        _last_error = str(exc)
+        _set_last_error(task, str(exc))
         fb = _fallback_backend(backend) if fallback_on else None
         _breaker_trip(backend, fb, exc)
         if fb is None:
@@ -367,7 +382,7 @@ def _chat(messages: list, *, task: str = "live", json_mode: bool = False,
         # Única llamada al fallback; si también falla, se propaga tal cual.
         result = _dispatch(fb, messages, task=task, json_mode=json_mode,
                            temperature=temperature, max_tokens=max_tokens, reasoning=reasoning)
-        _last_error = None
+        _set_last_error(task, None)
         return result
 
 
@@ -738,7 +753,6 @@ def update_state(state: dict, delta_text: str, *, detections_out: "dict | None" 
     el prompt original intacto. ``ya_reportadas`` (lista de textos ya avisados al
     usuario) viaja al LLM como contexto de dedup para no repetir detecciones.
     """
-    global _last_error
     if detections_out is not None:
         detections_out.clear()
         detections_out.update(empty_detections())
@@ -768,9 +782,9 @@ def update_state(state: dict, delta_text: str, *, detections_out: "dict | None" 
         # Validar forma mínima; si falla, conservar el estado anterior (fail-safe)
         if not isinstance(new_state, dict) or "temas" not in new_state:
             logger.debug("Insights: JSON con forma inesperada, conservando estado previo")
-            _last_error = "el modelo no devolvió un JSON válido"
+            _set_last_error("live", "el modelo no devolvió un JSON válido")
             return state
-        _last_error = None  # llamada OK
+        _set_last_error("live", None)  # llamada OK
         if detections_out is not None:
             detections_out.update(_clean_detections(new_state.get("detecciones")))
         return {
@@ -780,11 +794,11 @@ def update_state(state: dict, delta_text: str, *, detections_out: "dict | None" 
             "citas": new_state.get("citas", []) or [],
         }
     except InsightsUnavailable as exc:
-        _last_error = str(exc)
+        _set_last_error("live", str(exc))
         return state
     except Exception as exc:  # noqa: BLE001
         logger.warning("Insights: error actualizando estado (se conserva el previo): %s", exc)
-        _last_error = str(exc)
+        _set_last_error("live", str(exc))
         return state
 
 
