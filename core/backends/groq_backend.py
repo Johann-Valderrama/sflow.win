@@ -33,6 +33,7 @@ class GroqBackend(TranscriptionBackend):
     def __init__(self):
         """Inicializa el backend con cliente Groq diferido (lazy init)."""
         self._client = None
+        self._client_key = None  # Rastrea la key con la que se creó el cliente
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -157,14 +158,31 @@ class GroqBackend(TranscriptionBackend):
 
     def _get_client(self) -> Groq:
         """Lazy init: crea el cliente en el primer uso para que la clave
-        configurada en el FirstRunDialog esté disponible."""
+        configurada en el FirstRunDialog esté disponible.
+
+        Si la API key cambió desde la creación del cliente (p. ej. el usuario la
+        actualizó en el dashboard), descarta el cliente viejo y crea uno nuevo.
+        """
+        current_key = os.getenv("GROQ_API_KEY", "")
+
+        # Verificar si la key cambió: si el cliente existe pero la key es distinta,
+        # descartar el cliente viejo
+        if self._client is not None and current_key != self._client_key:
+            with self._lock:
+                # Double-check bajo lock: otro thread podría haber hecho lo mismo
+                if self._client is not None and current_key != self._client_key:
+                    self._client = None
+                    self._client_key = None
+
+        # Lazy init normal: si no hay cliente (o recién lo descartamos), crear uno
         if self._client is None:
             with self._lock:
                 if self._client is None:
-                    key = os.getenv("GROQ_API_KEY", "")
-                    if not key:
+                    if not current_key:
                         raise ValueError("GROQ_API_KEY not configured")
-                    self._client = Groq(api_key=key, timeout=10.0)
+                    self._client = Groq(api_key=current_key, timeout=10.0)
+                    self._client_key = current_key
+
         return self._client
 
     def _llm_translate(self, text: str, target_lang: str) -> str:

@@ -597,6 +597,18 @@ class TranscriptionDB:
             )
             return cursor.rowcount
 
+    def url_queue_repair_orphans(self) -> int:
+        """Repara items 'processing' huérfanos de un crash anterior.
+
+        Items con status='processing' sin proceso activo (crash con el worker a
+        mitad de un item) se reencolan como 'pending'. Devuelve filas reparadas.
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE url_queue SET status = 'pending', stage = NULL WHERE status = 'processing'"
+            )
+            return cursor.rowcount
+
     def url_queue_summary(self) -> dict:
         """Devuelve un resumen de conteos por status."""
         with self._connect() as conn:

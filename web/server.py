@@ -155,9 +155,9 @@ def _url_queue_worker() -> None:
 
     # Reparar items 'processing' huérfanos de un crash anterior
     try:
-        import sqlite3 as _sqlite3
-        with _sqlite3.connect(DB_PATH) as _c:
-            _c.execute("UPDATE url_queue SET status='pending', stage=NULL WHERE status='processing'")
+        repaired = worker_db.url_queue_repair_orphans()
+        if repaired > 0:
+            _logger.info("Reparados %d items 'processing' huérfanos de crash anterior", repaired)
     except Exception as _exc:
         _logger.warning("No se pudo reparar items processing huérfanos: %s", _exc)
 

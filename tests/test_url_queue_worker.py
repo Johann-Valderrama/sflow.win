@@ -203,3 +203,43 @@ def test_f8_excepcion_antes_de_tomar_item_no_toca_item_anterior(tmp_path, monkey
     item_after = next(i for i in db.url_queue_list() if i["id"] == item_id)
     assert item_after["status"] == "done"
     assert item_after["error"] is None
+
+
+# ---------------------------------------------------------------------------
+# Unidad 1.5(a): url_queue_repair_orphans() repara items huérfanos
+# ---------------------------------------------------------------------------
+
+def test_url_queue_repair_orphans_repara_items_processing(tmp_path):
+    """url_queue_repair_orphans() convierte items 'processing' huérfanos a 'pending'
+    con stage limpio, devolviendo el número de filas reparadas."""
+    db = TranscriptionDB(db_path=str(tmp_path / "test.db"))
+
+    # Crear un item normal, encolarlo y marcarlo como processing manualmente
+    # (simula que el worker murió justo después de marcar processing)
+    item_id = db.url_queue_enqueue("https://youtube.com/watch?v=orphan", platform="youtube")
+    db.url_queue_set_processing(item_id, "descargando")
+
+    # Verificar estado antes del repair
+    item_before = next(i for i in db.url_queue_list() if i["id"] == item_id)
+    assert item_before["status"] == "processing"
+    assert item_before["stage"] == "descargando"
+
+    # Reparar huérfanos
+    repaired = db.url_queue_repair_orphans()
+    assert repaired == 1
+
+    # Verificar que se convirtió a 'pending' con stage = None
+    item_after = next(i for i in db.url_queue_list() if i["id"] == item_id)
+    assert item_after["status"] == "pending"
+    assert item_after["stage"] is None
+
+
+def test_url_queue_repair_orphans_con_cola_limpia(tmp_path):
+    """url_queue_repair_orphans() devuelve 0 si no hay items 'processing'."""
+    db = TranscriptionDB(db_path=str(tmp_path / "test.db"))
+
+    # Enqueue un item pero no lo proceses (queda 'pending')
+    db.url_queue_enqueue("https://youtube.com/watch?v=clean", platform="youtube")
+
+    repaired = db.url_queue_repair_orphans()
+    assert repaired == 0
