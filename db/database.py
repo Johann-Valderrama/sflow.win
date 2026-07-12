@@ -25,6 +25,12 @@ class TranscriptionDB:
         self._fts_enabled = False
         self._fts_tokenizer = None
         self._fts_probed = False
+        # Unidad 1.2: bandera pública para que el caller (main.py, que sí conoce
+        # el tray de Qt) pueda avisar al usuario cuando _init_db tuvo que
+        # recuperarse de una DB corrupta. Este módulo no conoce Qt, así que solo
+        # deja constancia en el objeto; nunca muestra UI por sí mismo.
+        self.recovered_from_corruption = False
+        self.corrupt_backup_path = None
         if not read_only:
             self._init_db()
 
@@ -214,9 +220,11 @@ class TranscriptionDB:
         except sqlite3.DatabaseError as e:
             logger.error("SQLite database corrupt or unreadable: %s", e)
             corrupt_path = self.db_path + ".corrupt"
+            self.recovered_from_corruption = True
             try:
                 os.rename(self.db_path, corrupt_path)
                 logger.warning("Renamed corrupt DB to %s, creating fresh database", corrupt_path)
+                self.corrupt_backup_path = corrupt_path
             except OSError:
                 # If rename fails, try removing the corrupt file
                 try:

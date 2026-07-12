@@ -69,6 +69,23 @@ class TestTranscriptionDB:
         tid = db.insert(text="recovered")
         assert tid >= 1
 
+    def test_corrupt_db_sets_recovery_flag_and_backup_path(self, tmp_path):
+        """Unidad 1.2: la recuperación deja constancia en el objeto (main.py la usa
+        para avisar por tray, ya que este módulo no conoce Qt) y el .corrupt existe."""
+        corrupt_path = str(tmp_path / "corrupt2.db")
+        with open(corrupt_path, "wb") as f:
+            f.write(b"this is not a valid sqlite database either")
+        from db.database import TranscriptionDB
+        db = TranscriptionDB(db_path=corrupt_path)
+        assert db.recovered_from_corruption is True
+        assert db.corrupt_backup_path == corrupt_path + ".corrupt"
+        assert os.path.exists(db.corrupt_backup_path)
+
+    def test_healthy_db_does_not_set_recovery_flag(self):
+        """Contraparte: una DB sana no debe marcar recovered_from_corruption."""
+        assert self.db.recovered_from_corruption is False
+        assert self.db.corrupt_backup_path is None
+
 
 # ---------------------------------------------------------------------------
 # TestAudioRecorder

@@ -167,6 +167,50 @@ _CHUNK_JOIN_GRACE_SECONDS = 12.0
 # por cambio de generación sin bloquear en un único join() largo por thread.
 _CHUNK_JOIN_POLL_SECONDS = 0.2
 
+# Unidad 1.2: WAV de la última grabación fallida (ver _transcribe_final). Se
+# sobrescribe en cada fallo nuevo (solo existe el último), así que un TTL al
+# arrancar + borrado tras el siguiente dictado exitoso bastan para que la voz
+# en claro no quede en disco indefinidamente si Groq falló durante algo
+# confidencial.
+FAILED_RECORDING_PATH = os.path.join(APP_DATA_DIR, "last_failed_recording.wav")
+_FAILED_WAV_TTL_HOURS = 24
+
+
+def _cleanup_stale_failed_wav(path: str = FAILED_RECORDING_PATH, max_age_hours: float = _FAILED_WAV_TTL_HOURS):
+    """Borra `last_failed_recording.wav` al arrancar si supera el TTL (best-effort).
+
+    Se llama una vez en main(), antes de crear cualquier componente. Un fallo
+    aquí nunca debe abortar el arranque de la app — solo se registra en el log.
+    """
+    try:
+        if not os.path.exists(path):
+            return
+        age_seconds = time.time() - os.path.getmtime(path)
+        if age_seconds > max_age_hours * 3600:
+            os.remove(path)
+            logger.info(
+                "last_failed_recording.wav eliminado por TTL (>%dh sin uso): %s",
+                max_age_hours, path,
+            )
+    except OSError as e:
+        logger.warning("No se pudo evaluar/eliminar last_failed_recording.wav por TTL: %s", e)
+
+
+def _cleanup_failed_wav(path: str = FAILED_RECORDING_PATH):
+    """Borra `last_failed_recording.wav` tras un dictado exitoso (best-effort).
+
+    Se llama desde `_on_transcription_done`, el único punto de éxito que sigue
+    a `_transcribe_final` (dictado normal Y traducción — ambos flujos son los
+    que escriben este WAV al fallar; ver el except de `_transcribe_final`).
+    Nunca debe romper el flujo de pegado/guardado si la eliminación falla.
+    """
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+            logger.info("last_failed_recording.wav eliminado tras dictado exitoso: %s", path)
+    except OSError as e:
+        logger.warning("No se pudo eliminar last_failed_recording.wav tras éxito: %s", e)
+
 
 def _join_pending_chunks(threads, gen, get_generation, grace_seconds=_CHUNK_JOIN_GRACE_SECONDS):
     """Espera, con presupuesto acotado, a que terminen los workers de chunk en vuelo.
@@ -839,7 +883,7 @@ class VflowApp(QObject):
                 return
             # Guardar audio fallido para diagnóstico
             try:
-                failed_path = os.path.join(APP_DATA_DIR, "last_failed_recording.wav")
+                failed_path = FAILED_RECORDING_PATH
                 wav_buffer.seek(0)
                 with open(failed_path, "wb") as f:
                     f.write(wav_buffer.read())
@@ -857,6 +901,11 @@ class VflowApp(QObject):
             return  # resultado de sesión vieja: descartar
         _play_sound(660)  # beep bajo = transcripción lista
         raw_text = self._pending_raw.pop(gen, None)
+        # Unidad 1.2: este es el único punto de éxito tras _transcribe_final
+        # (dictado normal y traducción comparten este slot vía transcription_done),
+        # que es también el único flujo que escribe last_failed_recording.wav al
+        # fallar — un éxito posterior implica que el WAV de diagnóstico ya no hace falta.
+        _cleanup_failed_wav()
         # Insertar en DB solo si el historial está habilitado (SAVE_HISTORY=true por defecto)
         if os.getenv("SAVE_HISTORY", "true").lower() == "true":
             self.db.insert(text=text, duration_seconds=duration, source=self.recorder.source, raw_text=raw_text)
@@ -1329,6 +1378,10 @@ def main():
     # Migrar clave legacy en texto plano a DPAPI cifrado (operación idempotente)
     _migrate_plaintext_key()
 
+    # Unidad 1.2: TTL de last_failed_recording.wav — restos de una grabación
+    # fallida con más de 24h en disco se eliminan antes de crear ningún componente.
+    _cleanup_stale_failed_wav()
+
     ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
 
     app = QApplication(sys.argv)
@@ -1374,6 +1427,19 @@ def main():
     # Icono de bandeja del sistema
     tray = _setup_tray(app, port, vflow)  # noqa: F841 — debe mantenerse la referencia viva
     vflow.tray = tray  # exponer tray al controlador para mensajes de notificación
+
+    # Unidad 1.2: aviso de DB recuperada de corrupción. db/database.py no conoce
+    # Qt, así que solo deja la bandera en el objeto (_init_db corrió dentro de
+    # VflowApp.__init__, ANTES de que el tray existiera) — se notifica aquí, ya
+    # con el tray disponible, en vez de perderse en un logger.warning silencioso.
+    if getattr(vflow.db, "recovered_from_corruption", False):
+        tray.showMessage(
+            "Vflow",
+            "La base de datos estaba dañada y se recreó vacía. "
+            "El archivo anterior quedó como .corrupt junto a la DB.",
+            QSystemTrayIcon.MessageIcon.Warning,
+            8000,
+        )
 
     # Clic corto en la pill con reunión activa → abrir el dashboard en /reunion.
     # QueuedConnection no es estrictamente necesaria aquí (la señal se emite desde
