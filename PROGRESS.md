@@ -82,19 +82,27 @@
     (no bloquean el run).
 
 ## En curso (PLAN-MEJORAS)
-- [ ] Ola 4 — Partir el monolito web/server.py  (SIN ARRANCAR; siguiente para ventana nueva)
-  - Last checkpoint: Olas 0-3 COMPLETAS y commiteadas (ver Completado); suite 617 pass / 0
-    fail; techo de ~2 olas/ventana alcanzado (regla 8), ventana cerrada limpia. D1:B →
-    alcance COMPLETO de la ola: 4.0 (debate de diseño) + 4.1 + 4.2 + 4.3 + abrir debate 4.4.
-  - Next action: abrir ventana nueva con el Kickoff Ola 4 del plan (o el Kickoff Orquestador
-    Autónomo, que la tomará como siguiente). El director ejecuta 4.0 PRIMERO (debate con
-    Opus 4.8 y código real) y DEBE llevar a ese debate el Apéndice C de la investigación
-    2026-07-12 (contrato de 4.5 como "paquete de contexto consolidado" — tarea anotada en
-    PARA JOHANN) + los cambios AJENOS ya presentes en PLAN-MEJORAS (4.5 con CLI, 5.6, 5.7,
-    docs/CONTRATO-MACROSISTEMA.md) que esta ventana NO commiteó (regla 7): el director de
-    la Ola 4 decide si los commitea como docs antes de arrancar. Después de la 4: Ola 5
-    (orden 5.2→5.4[G1]→5.1→5.3→5.5, + decidir encaje de 5.6/5.7) y Ola 6 (re-validar
-    docs/FASE3_SPEC.md primero).
+- [ ] Ola 4 — Partir el monolito web/server.py  (@opus-4.8 orquestador, IN_PROGRESS 2026-07-12)
+  - **4.0 (debate de diseño) COMPLETA** — ver Decisiones + `docs/OLA4-DISENO-EXTRACCION.md`
+    (sección "RECONCILIACIÓN DEL DEBATE" = spec a ejecutar). Reconocimiento hecho (4 destilados:
+    50 rutas reales no 112, templates ya bajo Jinja, 14 constantes config muertas, impacto
+    PyInstaller cubierto). Apéndice C transferido a docs/PENDIENTES.md (4 ítems nuevos, ninguno
+    bloquea). Ventana cerrada aquí por regla 8 (una ola grande/ventana; el debate + recon
+    consumió la ventana) — la EJECUCIÓN de código (4.1→4.2→4.3) va en ventana nueva con contexto
+    fresco (el reorden es delicado y el debate advirtió de errores silenciosos; no arrancar
+    extracción de 3600 líneas sobre contexto cargado, regla 5).
+  - Next action: **ventana nueva** con el Kickoff Ola 4 (o el Orquestador Autónomo, que la
+    retomará). El director LEE `docs/OLA4-DISENO-EXTRACCION.md` sección "RECONCILIACIÓN DEL
+    DEBATE" (NO re-debate 4.0, ya está) y ejecuta EN SERIE 4.1 → 4.2 → 4.3 siguiendo ese spec
+    al pie de la letra. Puntos que NO se pueden olvidar (del debate): 4.1 vuelca el VALOR
+    renderizado (no el fuente) + variables de contexto (no `{% raw %}`) + assert de acento;
+    4.2 re-exporta los símbolos que la suite importa + suite ENTRE blueprints; 4.3 toca
+    config.py+main.py+tests, opción A + test de sincronía, grep antes de borrar constantes.
+    Verificación por vista: navegador computed-state + substring (NUNCA byte-diff) + suite
+    pytest verde (baseline 617). 4.4 sigue siendo GATE (no ejecutar sin OK de Johann).
+    Después de la 4: Ola 5 (orden 5.2→5.4→5.1→5.3→5.5, + encaje de 5.6/5.7) y Ola 6
+    (re-validar docs/FASE3_SPEC.md primero). 4.5/5.4 se implementan contra
+    docs/CONTRATO-MACROSISTEMA.md DESPUÉS del reorden.
 
 ## Completado (PLAN-MEJORAS)
 - [x] **OLA 3 COMPLETA** (2026-07-12, 2 commits, suite final 617 pass / 0 fail). Debate
@@ -145,6 +153,26 @@
   6 tests nuevos de carrera. Suite 346 pass / 10 preexistentes, 0 regresiones.
 
 ## Decisiones (PLAN-MEJORAS, append-only)
+- 2026-07-12 **Debate adversarial Ola 4 / unidad 4.0** (director Opus 4.8 propone el diseño de extracción,
+  adversario Opus 4.8 ataca con código real; veredicto APROBAR CON CAMBIOS; 7 objeciones, todas aceptadas —
+  2 no-op/BAJA). Diseño FINAL reconciliado en **`docs/OLA4-DISENO-EXTRACCION.md`** (sección "RECONCILIACIÓN
+  DEL DEBATE" = el spec a ejecutar). Cambios que forzó el debate: (O1 ALTA) los templates son triple-quoted
+  NO-raw con 66 sitios `\\u`/`\\n`/regex → la extracción DEBE volcar el VALOR renderizado de la string a
+  `.html`, NO copiar el fuente (si no, UI con acentos/emojis literales); verificación añade assert de acento
+  por textContent · (O2 ALTA) ~8 tests importan `_db`/`MEETING`/`_validate_*`/`_process_next_url_item` de
+  `web.server` → `web/server.py` re-exporta esos símbolos + `app=create_app()`, y se corre la suite ENTRE
+  cada blueprint · (O3 ALTA→MED) R2 estaba MAL: `GROQ_API_KEY` y `AUDIO_SOURCE` SÍ se importan en `main.py:67`
+  (sin uso en cuerpo) → borrar cualquiera de las 14 exige grep previo, y esas 2 exigen tocar main.py; 4.3 no es
+  1 archivo · (O4 MED) `{% raw %}` descartado por miscount silencioso → los 3 puntos de inyección van como
+  variables de contexto `{{ ...|safe }}` (incl. `mt_js`, sin `{% include %}`) + test guardián de `{{`/`{%`
+  sueltos · (O5 MED) catálogo 4.3 opción A + test de sincronía que falla si un default diverge o hay un
+  `os.getenv` no catalogado (sin el test, A es doc que envejece); opción B —churnear 48 call-sites— descartada
+  (rompería hot-reload) · (O6 MED) "HTML idéntico" NO es diff-verificable (whitespace Jinja) → oráculo =
+  DOM/computed-state/substring, byte-diff PROHIBIDO · (O7 BAJA) `TestHelperPresentInBothDocuments` ya asserta
+  sobre HTML renderizado → NO se toca (no-op). No-problemas confirmados: sin import circular (solo disciplina
+  de singleton), CSRF es un único before_request sin handlers ocultos, PyInstaller bajo riesgo y cubierto.
+  Unidad más peligrosa = 4.2 (mueve la propiedad de los globals que la suite importa). : gatillo regla 6 del
+  kickoff (debate por ola obligatorio) : @opus-4.8 (dir) + @opus-4.8 (adversario)
 - 2026-07-12 Debate adversarial Ola 3 (Fable propone el plan literal, Opus 4.8 ataca con código real;
   veredicto: APROBAR CON CAMBIOS; 8 objeciones, 8 ACEPTADAS). O1 (BLOCKER) `since` sin token de
   generación pierde la reunión nueva (A deja since=50, B resetea _segments → cliente nunca ve B) →

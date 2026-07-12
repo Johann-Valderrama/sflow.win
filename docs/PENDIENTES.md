@@ -526,3 +526,36 @@ modo Silencioso al compartir pantalla (ya existe el modo).
   `_safe_int_env` en el GET), un valor no numérico guardado para el setting de dictados podría
   dejar `GET /api/settings` en error persistente. Fix mecánico: registrar el mismo validador y
   leerlo con `_safe_int_env`. (Candidato a colarse en cualquier unidad futura que toque settings.)
+
+---
+
+# Apéndice C de la investigación de mercado (2026-07-12) — ítems NUEVOS sin unidad
+
+> Transferidos aquí por el orquestador al arrancar la Ola 4 (tarea anotada en PROGRESS). El
+> informe completo vive en `C:\OPS\_VelOS\cerebro-investigacion\raw\022_mercado-captura-personal-ia_F318.md`
+> (Apéndice C, líneas 118-133). De los 9 ítems del Apéndice, 4 YA tienen unidad en el plan (5.6 notas
+> híbridas Granola, 5.7 panel de privacidad verificable, CLI dentro de 4.5, y 2 refinamientos de diseño
+> ya incorporados textualmente en 4.5/5.3). Los de abajo son los que NO estaban en ningún plan ni en
+> este backlog. NINGUNO bloquea el reorden de la Ola 4.
+
+- **Sync a Obsidian/Notion del CLIENTE** (no solo dead-drop al OPS propio): versión genérica de la
+  unidad 5.4 (pendientes→OPS) para el mercado business-os. El mismo contrato de export (markdown de
+  tarea/acta) pero con destino configurable a la bóveda del usuario. Candidato natural a construirse
+  SOBRE el contrato macrosistema (`docs/CONTRATO-MACROSISTEMA.md`) una vez 5.4 exista: cambiar el
+  destino, no el formato. Prioridad: media, tras validar 5.4 como experimento.
+- **Pricing "ilimitado honesto" + opción lifetime** (patrón superwhisper/MacWhisper): sin taxímetro de
+  minutos, con opción de compra única. Es decisión de NEGOCIO/empaquetado, no código — no ejecutable
+  como unidad. Se anota para cuando Vflow se productice; refuerza el posicionamiento local-first
+  (sin cuota) ya identificado en las notas Tactiq/Fireflies de arriba.
+- **Capa "Team" / memoria compartida organizacional** (anchor ~$20-35/usuario/mes): v2 del macrosistema
+  con un segundo cliente/organización. Backlog ESTRATÉGICO v2, no ejecución inmediata; choca con el
+  modelo local mono-usuario actual (multi-tenant cloud). Solo si el macrosistema valida con el primer
+  usuario (Johann/OPS).
+- **Open-source parcial** como jugada de confianza anti lock-in (ángulo Omi): abrir parte del código
+  como señal de "tu data es tuya". Decisión de NEGOCIO a debatir, no código. Backlog estratégico.
+
+> Refinamientos del Apéndice ya incorporados en el plan (no son ítems nuevos, se anotan para trazar):
+> (a) el contrato de 4.5 se diseña como "paquete de contexto consolidado" / memoria-de-trabajo, no CRUD
+> de transcripts — ya en `docs/CONTRATO-MACROSISTEMA.md` (`get_related_context`); (b) el cierre de 5.3
+> es el entregable ACCIONADO hacia el OS del usuario (email/informe vía contrato 5.4), no el chat en sí
+> — ya en `PLAN-MEJORAS-2026-07-06.md:369`.
