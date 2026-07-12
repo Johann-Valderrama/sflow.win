@@ -96,13 +96,18 @@ Te soltaría tarjetas "esto se relaciona con tu proyecto X" mientras hablas.
 
 ## COMO EMPEZAR (esto es lo único que necesitas; tú solo tienes este documento)
 
-Ruteo por régimen de costos:
-- **Hasta 2026-07-12 ~mediodía (régimen A, Fable en cuota):** **director/orquestador = Fable 5
-  (esfuerzo high, techo xhigh)** — se aprovecha la ventana en cuota (amortizar antes que API);
-  **debate adversarial = Opus 4.8 high** (el adversario distinto de modelo da diversidad);
+Ruteo por régimen de costos (deadline PRECISADO por Johann 2026-07-12: la suscripción con Fable
+vence el 12 jul 2026 a las 11:59:59 PM PT = **13 jul 2026, 01:59:59 AM hora Colombia/Bogotá**;
+el "~mediodía del 12" de la versión anterior era una estimación conservadora, quedan ~14 h más):
+- **Hasta 2026-07-13 01:59 AM Colombia (régimen A, Fable en cuota):** **director/orquestador =
+  Fable 5 (esfuerzo high, techo xhigh)** — se aprovecha la ventana en cuota (amortizar antes que
+  API); **debate adversarial = Opus 4.8 high** (el adversario distinto de modelo da diversidad);
   **ejecutores = Sonnet 5 (estándar) y Haiku 4.5 (mecánico)**.
-- **Desde 2026-07-12 mediodía (régimen B, Fable solo API):** **director = Opus 4.8 (techo xhigh)**;
-  debate = Opus 4.8 high; ejecutores = Sonnet 5 / Haiku 4.5; Fable solo por API para clase diamante.
+- **Desde 2026-07-13 02:00 AM Colombia (régimen B, Fable solo API):** **director = Opus 4.8 (techo
+  xhigh)**; debate = Opus 4.8 high; ejecutores = Sonnet 5 / Haiku 4.5; Fable solo por API para
+  clase diamante.
+- Una ventana ABIERTA en régimen A puede terminar su ola aunque cruce la hora; lo que no se abre
+  nuevo después del corte es un director Fable.
 - Este plan no estampa ninguna unidad diamante; si un debate eleva una, se justifica en la unidad.
 - El ejecutor hace auto-check: si su modelo es más débil que el mínimo del régimen vigente, avisa.
 
@@ -441,8 +446,8 @@ JOHANN. 1 unidad = 1 commit. PROHIBIDO: push, borrar datos, leer .env.
 
 ```
 Eres el ORQUESTADOR AUTÓNOMO del plan de mejoras de Vflow (Sflow.Win). Auto-check: declara tu
-modelo. Director válido según el régimen de la cabecera del plan: hasta 2026-07-12 ~mediodía
-Fable 5 (en cuota) dirige; después Opus 4.8. Si eres Fable o Opus, procede; si eres más débil
+modelo. Director válido según el régimen de la cabecera del plan: hasta el 13 jul 2026 01:59 AM
+hora Colombia Fable 5 (en cuota) dirige; después Opus 4.8. Si eres Fable o Opus, procede; si eres más débil
 (Sonnet/Haiku como director), avisa y espera. Corres DESATENDIDO (Johann duerme): no le
 preguntes nada que no sea un GATE; ante duda no bloqueante, elige la opción más conservadora,
 anótala en PROGRESS.md y sigue. Lee en orden: C:\OPS\_VelOS\proyectos\Sflow.Win\PROGRESS.md (si existe

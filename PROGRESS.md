@@ -92,7 +92,10 @@
     fresco (el reorden es delicado y el debate advirtió de errores silenciosos; no arrancar
     extracción de 3600 líneas sobre contexto cargado, regla 5).
   - Next action: **ventana nueva** con el Kickoff Ola 4 (o el Orquestador Autónomo, que la
-    retomará). El director LEE `docs/OLA4-DISENO-EXTRACCION.md` sección "RECONCILIACIÓN DEL
+    retomará). RÉGIMEN precisado por Johann 2026-07-12: Fable en cuota dirige hasta el **13 jul
+    2026 01:59 AM hora Colombia** (11:59:59 PM PT del 12 jul; el "~mediodía" anterior era
+    estimación conservadora) — ventana abierta antes de esa hora = director Fable 5; después =
+    Opus 4.8. El director LEE `docs/OLA4-DISENO-EXTRACCION.md` sección "RECONCILIACIÓN DEL
     DEBATE" (NO re-debate 4.0, ya está) y ejecuta EN SERIE 4.1 → 4.2 → 4.3 siguiendo ese spec
     al pie de la letra. Puntos que NO se pueden olvidar (del debate): 4.1 vuelca el VALOR
     renderizado (no el fuente) + variables de contexto (no `{% raw %}`) + assert de acento;
