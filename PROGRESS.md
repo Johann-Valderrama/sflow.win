@@ -16,6 +16,22 @@
 > locales, sin push. 1 unidad = 1 commit.
 
 ## PARA JOHANN (PLAN-MEJORAS)
+- **🙋 DECISIÓN 4.4 — ¿Reordenamos también core/ por features?** (la web ya quedó partida en
+  la Ola 4; core/ sigue siendo archivos sueltos: meeting.py, insights.py, transcriber.py...).
+  Reordenarlo deja fronteras limpias para la capa de agentes (4.5) y el crecimiento a móvil,
+  pero toca MUCHOS archivos a la vez (riesgo alto, se haría como ola propia con su debate).
+  - **A (recomendada)**: sí, como ola nueva DESPUÉS de las Olas 5 y 6 → primero valor de
+    producto, el reorden profundo al final con todo verde.
+  - **B**: sí, ANTES de la Ola 5 → fronteras limpias ya, pero retrasa las features elegidas.
+  - **C**: no por ahora → 4.5 se implementa igual (el contrato ya existe), solo que sobre la
+    estructura actual de core/.
+  Responde "4.4: A/B/C".
+- **G2 Ola 4 — Prueba física del reorden web** (3 min, con la app reiniciada tras estos
+  commits): (1) abre el dashboard → todo debe verse y funcionar EXACTAMENTE igual que antes
+  (la UI servida es byte-idéntica por diseño; si notas CUALQUIER diferencia visual, repórtala:
+  sería un bug del reorden); (2) /reunion igual; (3) cambia un ajuste en Ajustes (p.ej. fuente
+  de audio) y verifica que aplica sin reiniciar (los flags en caliente siguen vivos — hay test,
+  pero el ojo real confirma). G3 visual: MOOT (cero cambio de bytes en la UI).
 - **G2 Ola 3 (nueva) — Prueba física del polling incremental + retención** (5-10 min, con la app
   reiniciada tras estos commits): (1) inicia una reunión real (AltGr+R) y ten abierto /reunion un
   rato largo → el transcript debe crecer con fluidez y sin saltos/duplicados (por dentro ahora
@@ -82,7 +98,53 @@
     (no bloquean el run).
 
 ## En curso (PLAN-MEJORAS)
-- [ ] Ola 4 — Partir el monolito web/server.py  (@opus-4.8 orquestador, IN_PROGRESS 2026-07-12)
+- [ ] Ola 5 — Producto (D4: las 4 + 5.5 elegida; orden 5.2 → 5.4 → 5.1 → 5.3 → 5.5, + encaje
+  de 5.6/5.7 del Apéndice C). PENDIENTE de ventana nueva.
+  - Next action: **ventana nueva con el Kickoff Ola 5** (o el Orquestador Autónomo, que la
+    retoma). Régimen: antes del 13 jul 01:59 AM Colombia dirige Fable 5; después Opus 4.8.
+    Primera tarea de esa ventana: **debate adversarial de la ola** (regla 6 del kickoff; Opus
+    4.8 high con código real) sobre las unidades elegidas — EXCEPTO el contrato de 5.4/4.5 que
+    YA está debatido y aprobado (docs/CONTRATO-MACROSISTEMA.md, gates G1/G-agent resueltos por
+    Johann: 5.4 se implementa DIRECTO contra ese contrato, buzón C:\OPS\_inbox-vflow\). El
+    debate debe decidir además el encaje de 5.6 (notas híbridas Granola) y 5.7 (panel de
+    privacidad) como unidades de esta ola o posteriores. Tras Ola 5: Ola 6 (re-validar
+    docs/FASE3_SPEC.md primero, D5: ambas). 4.5 (superficie agéntica MCP+CLI) espera el
+    cierre del reorden (decisión 4.4 de Johann) y se implementa contra el contrato.
+  - Hotspots a serializar: core/meeting.py (5.1, 5.6), core/insights.py (5.1, 5.2, 5.7),
+    core/transcriber.py (5.5, 5.7), web (5.3, 5.7).
+
+## Completado (PLAN-MEJORAS, cont.)
+- [x] **OLA 4 COMPLETA en su parte ejecutable** (2026-07-12, ventana 2, director @fable-5,
+  ejecutores 3×@sonnet-5; 5 commits, suite 617 → 636 pass / 0 fail; 4.4 queda como GATE de
+  Johann y 4.5 espera el reorden — ver PARA JOHANN).
+  - 4.1 extracción del frontend (3 commits: eca600a plumbing WEB_TEMPLATES_DIR+template_folder+
+    spec datas · 7c04e4b dashboard.html · a9f09db reunion.html + tests guardián + CLAUDE.md).
+    Método del debate respetado: volcado del VALOR renderizado (no el fuente), inyecciones como
+    variables de contexto `{{ mt_js|safe }}`/`{{ template_options_html|safe }}`/`{{ chips_json|safe }}`,
+    sin `{% raw %}`. Ambas páginas BYTE-IDÉNTICAS a los goldens pre-cambio (180.198/57.719 chars);
+    verificación en navegador ENTRE páginas (computed-state, router 6 vistas, trío paleta,
+    dropdown 4 plantillas, chips, acentos, consola limpia). web/server.py 5086 → 1460 líneas.
+    +8 tests guardián (sin `{{`/`{%` sueltos, `${...}` intacto, acentos por substring, chips
+    sobre la línea real de asignación).
+  - 4.2 blueprints (commit b886e2f): web/server.py 1460 → 93 líneas (create_app() + CSRF único
+    a nivel app + shim que re-exporta _db/MEETING/PROACTIVE/_validate_*/_process_next_url_item/
+    _assistant para la suite); web/state.py dueño único de singletons/helpers (266 líneas);
+    web/blueprints/ 8 features, 50 rutas exactas sin url_prefix. CSRF verificado en vivo
+    (Origin evil→403 — probe server-side; fetch del navegador NO puede falsificar Origin).
+    url_for sin usos en el repo (endpoint names sin impacto). Desviación aceptada: cadencia
+    por-blueprint → lote con doble suite + equivalencia + smoke (relocaciones verbatim).
+  - 4.3 catálogo config (commit f5734fb): ENV_CATALOG con 67 vars (11 static / 56 lazy, 14
+    kill-switches, 3 dynamic vía _DETECTION_FLAGS) + ENV_KNOWN_DIVERGENCES (4 benignas API-keys
+    + bug CLAUDE_CLI_MODEL_* pineado por test SIN corregir) + tests/test_env_catalog.py (11
+    tests: sincronía AST bidireccional + hot-reload de TRANSCRIPTION_BACKEND/AUDIO_SOURCE/
+    SAVE_HISTORY). 15 constantes muertas borradas de config.py (las 12 de import + GROQ_API_KEY/
+    AUDIO_SOURCE con limpieza del import de main.py:67 + WHISPER_LANGUAGE literal-trampa), cada
+    una con grep triple previo. CLAUDE.md apunta al catálogo; PENDIENTES +2 ítems de higiene
+    (LOCAL_WHISPER_MODEL sin recarga en caliente; defaults CLAUDE_CLI_MODEL_* inconsistentes).
+  - Hallazgos menores para follow-up: comentario stale "web/server.py" dentro de
+    _MT_INCREMENTAL_JS (vive en web/state.py; corregirlo cambia bytes servidos — hacerlo junto
+    a la próxima edición real del template); worker de url_queue con TranscriptionDB propia
+    (PREEXISTENTE, no regresión).
   - **4.0 (debate de diseño) COMPLETA** — ver Decisiones + `docs/OLA4-DISENO-EXTRACCION.md`
     (sección "RECONCILIACIÓN DEL DEBATE" = spec a ejecutar). Reconocimiento hecho (4 destilados:
     50 rutas reales no 112, templates ya bajo Jinja, 14 constantes config muertas, impacto
@@ -91,21 +153,9 @@
     consumió la ventana) — la EJECUCIÓN de código (4.1→4.2→4.3) va en ventana nueva con contexto
     fresco (el reorden es delicado y el debate advirtió de errores silenciosos; no arrancar
     extracción de 3600 líneas sobre contexto cargado, regla 5).
-  - Next action: **ventana nueva** con el Kickoff Ola 4 (o el Orquestador Autónomo, que la
-    retomará). RÉGIMEN precisado por Johann 2026-07-12: Fable en cuota dirige hasta el **13 jul
-    2026 01:59 AM hora Colombia** (11:59:59 PM PT del 12 jul; el "~mediodía" anterior era
-    estimación conservadora) — ventana abierta antes de esa hora = director Fable 5; después =
-    Opus 4.8. El director LEE `docs/OLA4-DISENO-EXTRACCION.md` sección "RECONCILIACIÓN DEL
-    DEBATE" (NO re-debate 4.0, ya está) y ejecuta EN SERIE 4.1 → 4.2 → 4.3 siguiendo ese spec
-    al pie de la letra. Puntos que NO se pueden olvidar (del debate): 4.1 vuelca el VALOR
-    renderizado (no el fuente) + variables de contexto (no `{% raw %}`) + assert de acento;
-    4.2 re-exporta los símbolos que la suite importa + suite ENTRE blueprints; 4.3 toca
-    config.py+main.py+tests, opción A + test de sincronía, grep antes de borrar constantes.
-    Verificación por vista: navegador computed-state + substring (NUNCA byte-diff) + suite
-    pytest verde (baseline 617). 4.4 sigue siendo GATE (no ejecutar sin OK de Johann).
-    Después de la 4: Ola 5 (orden 5.2→5.4→5.1→5.3→5.5, + encaje de 5.6/5.7) y Ola 6
-    (re-validar docs/FASE3_SPEC.md primero). 4.5/5.4 se implementan contra
-    docs/CONTRATO-MACROSISTEMA.md DESPUÉS del reorden.
+  - (El "Next action: ejecutar 4.1→4.3" de la ventana 1 quedó CUMPLIDO en la ventana 2 —
+    ver la entrada consolidada de arriba. El spec ejecutado fue el de la RECONCILIACIÓN,
+    al pie de la letra, sin re-debate.)
 
 ## Completado (PLAN-MEJORAS)
 - [x] **OLA 3 COMPLETA** (2026-07-12, 2 commits, suite final 617 pass / 0 fail). Debate
