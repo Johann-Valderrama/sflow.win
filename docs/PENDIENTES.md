@@ -36,6 +36,23 @@ El esquema ya está preparado (`source`, `hit_count` en la tabla `dictionary`):
 - **Modelo `medium`** local: ya soportado por el selector del dashboard; solo descargar si `small` falla con vocabulario difícil (probar antes el diccionario, que suele bastar).
 - **Regenerar `requirements.lock`** al añadir cualquier dependencia: `pip-compile --generate-hashes --allow-unsafe --output-file requirements.lock requirements.in` (política: paquetes con >30 días en PyPI).
 
+## 4. Sensor externo de nombres reales para el canal "Ellos" (Parte C del contrato macrosistema)
+
+**Que es:** hoy el canal "Ellos" (loopback del sistema) no distingue participantes, solo
+audio mezclado de todos los demas. Existe una skill nueva del OPS,
+`C:\OPS\skills-on-demand\captura-hablantes-reuniones\` (extension de Chrome que lee los
+subtitulos nativos de Google Meet: nombre real + texto por hablante, sin bot), que podria
+alimentar ese canal con atribucion real por persona.
+
+**Por que no se integro ya:** la extension nace 2026-07-16 y aun no se probo en una llamada
+real. Primero se valida sola; si funciona, se disena una Parte C del
+`docs/CONTRATO-MACROSISTEMA.md` (simetrica a la A: sensor externo -> Vflow, opt-in, fail-open,
+sin romper el principio de autosuficiencia) antes de tocar `core/meeting.py`.
+
+**Cuando retomarlo:** despues de que Johann confirme que la extension capturo bien los nombres
+en al menos una reunion real (ver `aprendizajes.md` de esa skill). Decision registrada
+2026-07-16 (chat): opcion elegida fue "esperar el resultado de hoy" antes de redactar el spec.
+
 ## Decisiones de diseño que NO revisar sin motivo
 
 - En modo local nada sale a internet; el fallback a Groq es opt-in explícito (`GROQ_FALLBACK`, default false).
