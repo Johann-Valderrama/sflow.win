@@ -96,18 +96,12 @@ Te soltaría tarjetas "esto se relaciona con tu proyecto X" mientras hablas.
 
 ## COMO EMPEZAR (esto es lo único que necesitas; tú solo tienes este documento)
 
-Ruteo por régimen de costos (deadline PRECISADO por Johann 2026-07-12: la suscripción con Fable
-vence el 12 jul 2026 a las 11:59:59 PM PT = **13 jul 2026, 01:59:59 AM hora Colombia/Bogotá**;
-el "~mediodía del 12" de la versión anterior era una estimación conservadora, quedan ~14 h más):
-- **Hasta 2026-07-13 01:59 AM Colombia (régimen A, Fable en cuota):** **director/orquestador =
-  Fable 5 (esfuerzo high, techo xhigh)** — se aprovecha la ventana en cuota (amortizar antes que
-  API); **debate adversarial = Opus 4.8 high** (el adversario distinto de modelo da diversidad);
-  **ejecutores = Sonnet 5 (estándar) y Haiku 4.5 (mecánico)**.
-- **Desde 2026-07-13 02:00 AM Colombia (régimen B, Fable solo API):** **director = Opus 4.8 (techo
-  xhigh)**; debate = Opus 4.8 high; ejecutores = Sonnet 5 / Haiku 4.5; Fable solo por API para
-  clase diamante.
-- Una ventana ABIERTA en régimen A puede terminar su ola aunque cruce la hora; lo que no se abre
-  nuevo después del corte es un director Fable.
+Ruteo por régimen de costos: Fable está permanentemente en la suscripción (sin fecha de corte).
+- **Director/orquestador = Fable (esfuerzo high, techo xhigh)**: se aprovecha la ventana en cuota
+  (amortizar antes que API); **debate adversarial = Opus high** (el adversario distinto de modelo
+  da diversidad); **ejecutores = Sonnet (estándar) y Haiku (mecánico)**.
+- Si el director no tiene Fable disponible: director = Opus (techo xhigh); debate = Opus high;
+  ejecutores = Sonnet / Haiku.
 - Este plan no estampa ninguna unidad diamante; si un debate eleva una, se justifica en la unidad.
 - El ejecutor hace auto-check: si su modelo es más débil que el mínimo del régimen vigente, avisa.
 
@@ -120,7 +114,7 @@ el "~mediodía del 12" de la versión anterior era una estimación conservadora,
 | 4 | Panel en vivo sin techo (Ola 3) | Después de Olas 1-2 | `Lee C:\OPS\_VelOS\proyectos\Sflow.Win\PLAN-MEJORAS-2026-07-06.md y ejecuta el Kickoff Ola 3. Sigue sus instrucciones al pie de la letra, incluido el auto-check de modelo.` | Opus 4.8 · high |
 | 5 | Partir el monolito web (Ola 4, LA palanca) | Tras responder **D1** (arriba) | `Lee C:\OPS\_VelOS\proyectos\Sflow.Win\PLAN-MEJORAS-2026-07-06.md y ejecuta el Kickoff Ola 4. Sigue sus instrucciones al pie de la letra, incluido el auto-check de modelo.` | Opus 4.8 · xhigh |
 | 6 | Features de producto elegidas | Tras responder **D4** (arriba) | `Lee C:\OPS\_VelOS\proyectos\Sflow.Win\PLAN-MEJORAS-2026-07-06.md y ejecuta el Kickoff Ola 5 SOLO con las unidades que indico: <lo que elegiste en D4>.` | Opus 4.8 · xhigh |
-| 7 | Ejecutar la FASE3 heredada (Ola 6) | Tras responder **D5**, si elegiste alguna | `Lee C:\OPS\_VelOS\proyectos\Sflow.Win\PLAN-MEJORAS-2026-07-06.md y ejecuta el Kickoff Ola 6 SOLO con las features que indico: <lo que elegiste en D5>.` | Opus 4.8 · high |
+| 7 | Ejecutar la FASE3 heredada (Ola 6) | Tras responder **D5**, si elegiste alguna | `Lee C:\OPS\_VelOS\proyectos\Sflow.Win\PLAN-MEJORAS-2026-07-06.md y ejecuta el Kickoff Ola 6 SOLO con las features que indico: <lo que elegiste en D5>.` | Opus · high |
 
 Las decisiones (🙋) ya no son pasos sueltos: viven todas en el bloque **DECISIONES** de arriba
 (D1-D8). Respóndelas una vez y el resto fluye. Los únicos gates que quedan durante la ejecución
@@ -424,7 +418,7 @@ qué cambió; el debate adversarial ataca ESA reconciliación, no el spec origin
 
 ```
 Eres el director de la Ola 6 (FASE3 heredada) del plan de mejoras de Vflow. Auto-check:
-declara tu modelo (esperado Opus 4.8; si eres más débil, avisa y espera). PRECONDICIÓN dura:
+declara tu modelo (esperado Opus; si eres más débil, avisa y espera). PRECONDICIÓN dura:
 Johann debe haber respondido la decisión D5 (bloque DECISIONES del plan) — opción 1 = 6.1
 mute al dictar, opción 2 = 6.2 hotkeys configurables; si D5 está sin responder, PARA y
 preséntala con sus opciones tal cual. Lee: PROGRESS.md, PLAN-MEJORAS-2026-07-06.md sección "Ola 6",
@@ -432,7 +426,7 @@ docs/FASE3_SPEC.md COMPLETO (es el spec original, DESACTUALIZADO a sabiendas), C
 repo secciones "Hotkeys" y "Audio", y core/hotkey.py + core/recorder.py reales. Primera
 tarea: reconciliación escrita spec-vs-código-actual en PROGRESS.md (qué sigue vigente, qué
 cambió, qué side cases nuevos aparecieron: AltGr+H/A/M/R, AUDIO_SOURCE=system, reunión
-activa). Debate adversarial (Opus 4.8 high) sobre ESA reconciliación antes de codear.
+activa). Debate adversarial (Opus high) sobre ESA reconciliación antes de codear.
 Restricciones: mute (6.1) es opt-in apagado por default, fail-open total, y con exclusión
 mutua explícita con la captura de reunión (jamás mutear la fuente que se graba); pycaw pasa
 la política de dependencias (30 días en PyPI + requirements.in + lock regenerado con hashes).
@@ -446,8 +440,8 @@ JOHANN. 1 unidad = 1 commit. PROHIBIDO: push, borrar datos, leer .env.
 
 ```
 Eres el ORQUESTADOR AUTÓNOMO del plan de mejoras de Vflow (Sflow.Win). Auto-check: declara tu
-modelo. Director válido según el régimen de la cabecera del plan: hasta el 13 jul 2026 01:59 AM
-hora Colombia Fable 5 (en cuota) dirige; después Opus 4.8. Si eres Fable o Opus, procede; si eres más débil
+modelo. Director válido según el régimen de la cabecera del plan: Fable (permanente en cuota) o
+Opus dirigen. Si eres Fable o Opus, procede; si eres más débil
 (Sonnet/Haiku como director), avisa y espera. Corres DESATENDIDO (Johann duerme): no le
 preguntes nada que no sea un GATE; ante duda no bloqueante, elige la opción más conservadora,
 anótala en PROGRESS.md y sigue. Lee en orden: C:\OPS\_VelOS\proyectos\Sflow.Win\PROGRESS.md (si existe
@@ -490,7 +484,7 @@ Reglas:
 5. Higiene de contexto del padre: nunca leas tú los archivos grandes; delega y recibe
    destilados. Al ~50% de tu ventana: cierra la unidad en curso, actualiza PROGRESS.md
    (plantilla §8, Next action exacto) y pide reanudar en ventana nueva con ESTE kickoff.
-6. Debate adversarial POR OLA antes de ejecutarla (Opus 4.8 high ataca con el código real
+6. Debate adversarial POR OLA antes de ejecutarla (Opus high ataca con el código real
    delante; reconciliación por escrito en PROGRESS.md). Este plan NO ha sido debatido aún:
    el debate de cada ola es parte del run, no opcional.
 7. Coexistencia: git status antes de cada unidad; cambios ajenos sin commitear se respetan.

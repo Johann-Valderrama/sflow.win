@@ -10,12 +10,12 @@
 
 **Regla (feedback modelo-esfuerzo-por-tarea, régimen de costo vigente):**
 
-- **Hasta 2026-07-07 (régimen A, Fable en cuota):** kickoff en plan mode con **Fable 5,
-  esfuerzo `medium`** (techo `high` si el diseño se complica). La ventana se aprovecha para
-  las sesiones de PLAN/DISEÑO (donde Fable rinde más), NO para apurar ejecución: un contrato
-  mal diseñado cuesta más que los tokens de Opus después (objeción #6 del debate, aceptada).
-- **Desde 2026-07-08 (régimen B, Fable solo API):** kickoff con **Opus 4.8 `high→xhigh`**.
-  Escalar a Fable 5 API solo para lo clase-Diamond o si Opus falla tras 2 reintentos.
+- **Si el director es Fable** (permanente en la suscripción): kickoff en plan mode con **Fable,
+  esfuerzo `medium`** (techo `high` si el diseño se complica). Se usa para las sesiones de
+  PLAN/DISEÑO abierto, donde Fable rinde más, NO para apurar ejecución: un contrato mal
+  diseñado cuesta más que los tokens de después (objeción #6 del debate, aceptada).
+- **Si el director es Opus:** kickoff con **Opus `high→xhigh`**. En dificultad de CÓDIGO con la
+  dirección ya dada, Opus es la opción correcta y no hay que escalar a Fable.
 - El que planea estampa el ruteo por unidad (ya viene estampado abajo); el ejecutor hace
   auto-check: si su modelo es más débil que el estampado, avisa antes de proceder.
 - Techo de esfuerzo SIEMPRE `xhigh`, nunca `max`.
@@ -34,9 +34,8 @@ permisos amplios (o aceptar ediciones), sabiendo el tradeoff.
 
 ```
 Eres el ORQUESTADOR AUTÓNOMO del plan de olas de Vflow. Auto-check: declara tu modelo.
-Director esperado según régimen de costos: hasta 2026-07-07 Fable 5 (en cuota); desde
-2026-07-08 Opus 4.8 (Fable pasa a API: solo para escaladas puntuales). Si eres más débil
-que Opus 4.8, avisa y espera. Lee en orden: PROGRESS.md (si existe: reanuda desde su
+Director esperado: Fable (permanente en la suscripción) u Opus, indistinto. Si eres más
+débil que eso, avisa y espera. Lee en orden: PROGRESS.md (si existe: reanuda desde su
 Next action y sáltate lo hecho), docs/PLAN-OLAS.md completo, y la skill según tu modelo:
 C:\OPS\.claude\skills\orquestar-agentes-fable\SKILL.md si eres Fable, o
 C:\OPS\.claude\skills\orquestar-agentes\SKILL.md si eres Opus. En ambos casos las reglas

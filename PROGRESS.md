@@ -128,7 +128,7 @@
 - [ ] Ola 6 — FASE3 heredada (D5: ambas → 6.1 mute al dictar + 6.2 hotkeys configurables).
   PENDIENTE de ventana nueva.
   - Next action: **ventana nueva con el Kickoff Ola 6** (o el Orquestador Autónomo, que la
-    retoma). Régimen: antes del 13 jul 01:59 AM Colombia dirige Fable 5; después Opus 4.8.
+    retoma). Régimen: dirige Fable (permanente en la suscripción) u Opus, indistinto.
     Primera tarea DURA de esa ventana: re-validar docs/FASE3_SPEC.md contra el código actual
     (el spec está desactualizado a sabiendas) y registrar la reconciliación aquí; el debate
     adversarial ataca ESA reconciliación, no el spec original. 6.1 exige pycaw (política de
