@@ -9,8 +9,7 @@
 |---|---|---|---|---|
 | Ejecutar una ola suelta | Cuando quieras avanzar una sola pieza | `Lee docs/PLAN-DICTADO-2026-07-31.md y ejecuta el Kickoff Ola <N>. Sigue sus instrucciones al pie de la letra, incluido el auto-check de modelo.` | el director en cuota | H |
 | Ejecutar todo seguido | Cuando tengas una tarde | `Lee docs/PLAN-DICTADO-2026-07-31.md y actúa como ORQUESTADOR AUTÓNOMO según su sección "Kickoff Orquestador".` | el director en cuota | H |
-| 🙋 **Paso humano, antes de la Ola 3** | Una vez | Responder el **Gate G1** (abajo). Bloquea las Olas 3 y 5. | - | - |
-| 🙋 **Paso humano, antes de la Ola 6** | Una vez | Responder el **Gate G2** (abajo). No bloquea nada más. | - | - |
+| ✅ Gates humanos | Ya respondidos (2026-07-31) | **G1-A** previsualizar antes de aplicar · **G2-A** Hub nativo en Qt. Ninguna ola queda bloqueada por un humano | - | - |
 
 **Ruteo por régimen (regla, no modelo fijo):** dirige el mejor modelo en cuota de la suscripción.
 Ejecutores baratos (Sonnet/Haiku) para lo mecánico; el modelo fuerte del régimen solo donde la
@@ -32,10 +31,10 @@ upstream: va de menor a mayor riesgo, y lo que ya está medio construido va ante
 | 0 | Orden canónico de las pasadas de texto | Ninguno; es una decisión escrita + un test | - |
 | 1 | Smart commands (voz → puntuación) | **Ninguno.** Regex puro, sin LLM, sin red, sin UI | Ola 0 |
 | 2 | Presets a la carta (la idea vieja de Johann) | Ninguno nuevo: el motor ya existe | - |
-| 3 | Transform sobre selección | **Alto si se copia tal cual.** Ver Gate G1 | G1 |
+| 3 | Transform sobre selección | Acotado por G1-A: el resultado se previsualiza, no se aplica solo | Ola 0 |
 | 4 | Snippets | Ninguno | - |
-| 5 | Command Mode (voz + selección) | El mismo de la Ola 3, amplificado | Ola 3, G1 |
-| 6 | Ventana nativa | Ninguno de seguridad; es costo de esfuerzo | G2 |
+| 5 | Command Mode (voz + selección) | El mismo de la Ola 3, con la misma previsualización | Ola 3 |
+| 6 | Ventana nativa | Ninguno de seguridad; es costo de esfuerzo | - |
 | 7 | GPU para el backend local | Ninguno; se decide con un número | - |
 
 **Dependencias reales, corregidas tras el debate adversarial (objeción A3):**
@@ -110,6 +109,17 @@ mejora es **[Probable], no medida**. Por eso la Ola 7 empieza midiendo y solo de
 
 ---
 
+## GATE G1: RESPONDIDO (Johann, 2026-07-31) → **G1-A, previsualizar antes de aplicar**
+
+**Las Olas 3 y 5 quedan DESBLOQUEADAS.** El resultado del LLM no se aplica solo: aparece en un
+panel pequeño, se acepta con Enter y se descarta con Esc. La unidad `3c` implementa esto y su
+verificación es el lente *"¿existe algún camino por el que la salida del LLM llegue a la ventana
+del usuario sin pasar por el panel?"*. Las otras dos opciones quedan descartadas y el texto de
+abajo se conserva como registro de por qué.
+
+<details>
+<summary>Opciones que se evaluaron (registro, ya decidido)</summary>
+
 ## GATE G1 (🙋 humano): cómo se copia Transform, bloquea Olas 3 y 5
 
 En el upstream, Transform y Command Mode mandan a un LLM el texto que tengas seleccionado en
@@ -131,6 +141,19 @@ instrucción y el texto seleccionado; y si se ofrece modo local, apagar `INSIGHT
 comprobar el endpoint antes de mandar nada (ver la corrección 2 arriba). Lo del texto crudo y el
 Deshacer **ya no va como frase suelta**: el debate mostró que no encaja en el modelo de datos
 actual, así que es la unidad `3z` y se diseña antes de escribir código.
+
+</details>
+
+## GATE G2: RESPONDIDO (Johann, 2026-07-31) → **G2-A, Hub nativo en Qt**
+
+**La Ola 6 queda DESBLOQUEADA.** Se escribe una ventana nativa en PyQt6, sin motor de navegador,
+tomando `ui/hub_window.py` del upstream (1.118 líneas) como referencia leíble. Decisión sostenida
+después de que se le corrigiera la premisa original y se le mostrara el costo real: el bucle de
+editar-y-recargar del dashboard se pierde, porque cada cambio de interfaz pasa a ser código Python
+que exige reiniciar la app. Lo aceptó con eso a la vista.
+
+<details>
+<summary>Opciones que se evaluaron y la corrección de premisa (registro, ya decidido)</summary>
 
 ## GATE G2 (🙋 humano): ventana nativa, bloquea solo la Ola 6
 
@@ -159,6 +182,8 @@ notoriamente delicado. O sea que G2-B no es solo "conservas la interfaz y son ho
 - **G2-A, Hub nativo en Qt.** Lo que Johann eligió. Sigue en pie si acepta el costo del bucle.
 - **G2-B, `QWebEngineView`.** Ventana propia conservando el dashboard actual.
 - **G2-C, dejarlo en el navegador** y gastar el esfuerzo en dictado.
+
+</details>
 
 ---
 
@@ -248,7 +273,7 @@ justamente porque el motor ya estaba y nadie lo veía.
 
 ---
 
-## Ola 3: Transform sobre selección (bloqueada por G1)
+## Ola 3: Transform sobre selección (G1-A: se previsualiza antes de aplicar)
 
 | Unidad | Qué | Dificultad | Ejecutar con | Por qué | Depende de | Escribe | Verifica | Si falla |
 |---|---|---|---|---|---|---|---|---|
@@ -278,7 +303,7 @@ commands y diccionario, que lo fija el test de 4b.
 
 ---
 
-## Ola 5: Command Mode (bloqueada por Ola 3 y G1)
+## Ola 5: Command Mode (depende de la Ola 3)
 
 Voz + selección: seleccionas texto, hablas una instrucción, se transforma. Reusa TODO lo de la
 Ola 3 (captura de selección, delimitadores, el control de G1) y solo agrega transcribir la orden
@@ -287,10 +312,10 @@ existe. Una sola unidad, `Sonnet.M`, con la misma verificación de dos lentes de
 
 ---
 
-## Ola 6: ventana nativa (bloqueada por G2)
+## Ola 6: ventana nativa (G2-A: Hub nativo en Qt)
 
-No se planifica en detalle hasta que G2 esté respondido: G2-A y G2-B producen olas completamente
-distintas. Referencia leíble para G2-A: `ui/hub_window.py` del upstream, 1.118 líneas de PyQt6
+G2 quedó en **G2-A: Hub nativo en Qt**. Falta planificar sus unidades en detalle, y eso merece
+su propia sesión en plan mode: es reescribir una interfaz que hoy funciona. Referencia leíble: `ui/hub_window.py` del upstream, 1.118 líneas de PyQt6
 puro, en cuarentena.
 
 ---
@@ -343,9 +368,9 @@ orquestación que corresponda a tu modelo.
 
 Ejecuta las olas EJECUTABLES en orden de dependencias. La Ola 0 va SIEMPRE PRIMERO: sin
 ella las Olas 1 y 4 se pisan. Después, sin gate: Ola 1, luego Ola 4 (la 4 depende de 1b,
-NO las lances en paralelo), y las Olas 2 y 7 en cualquier momento. Olas 3 y 5 NO se tocan
-sin G1 respondido. Ola 6 NO se toca sin G2. Si un gate está sin responder, sáltate esa ola
-y sigue con la siguiente ejecutable; NO adivines la respuesta del gate.
+NO las lances en paralelo), y las Olas 2 y 7 en cualquier momento. Los dos gates YA están respondidos (G1-A previsualizar, G2-A Hub nativo), así que no
+queda ninguna ola bloqueada por un humano. La Ola 6 sí necesita que alguien planifique sus
+unidades antes de ejecutarla: no la improvises.
 
 Reglas: 1 unidad = 1 commit local, sin push. Máx 2 reintentos por unidad; al tercero, gate.
 Las unidades que tocan core/transcriber.py van EN SERIE (hotspot compartido de las Olas 1 y
