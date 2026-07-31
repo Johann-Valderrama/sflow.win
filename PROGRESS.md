@@ -124,6 +124,20 @@
     unidades, y llevar el Apéndice C al debate de diseño de 4.0/4.5. D2/D3/D6/D7/D8 sin responder
     (no bloquean el run).
 
+## En curso (PLAN-DICTADO, plan NUEVO del 2026-07-31)
+- [ ] **Plan nuevo y paralelo al PLAN-MEJORAS**: `docs/PLAN-DICTADO-2026-07-31.md` (commit 9bc8c99).
+  8 olas, nacidas de auditar el upstream `daniel-carreon/sflow` desde OPS. Debate adversarial ya
+  hecho y reconciliado dentro del propio documento (APROBAR CON CAMBIOS, 4 objeciones ALTAS).
+  - **Next action:** ventana nueva con `Lee docs/PLAN-DICTADO-2026-07-31.md y ejecuta el Kickoff
+    Ola 0.` La Ola 0 va primero siempre (fija el orden canónico de las pasadas de texto; sin ella
+    las Olas 1 y 4 se pisan). Modelo: `Fable.H` u `Opus.H`, indistinto. Después de la 0, ejecutables
+    sin gate: Ola 1, luego Ola 4 (depende de `1b`, NO en paralelo), y Olas 2 y 7 cuando se quiera.
+  - **Bloqueadas por gate humano:** Olas 3 y 5 esperan **G1** (cómo se copia Transform sobre
+    selección: previsualizar, lista negra, o no hacerlo). Ola 6 espera **G2** (Hub nativo Qt vs
+    `QWebEngineView` vs dejarlo en el navegador). Los dos gates están escritos con opciones dentro
+    del plan; ninguno bloquea las otras cinco olas.
+  - Los 3 commits de este frente (`f3faf67`, `0eb1264`, `9bc8c99`) están LOCALES, **sin push**.
+
 ## En curso (PLAN-MEJORAS)
 - [ ] Ola 6 — FASE3 heredada (D5: ambas → 6.1 mute al dictar + 6.2 hotkeys configurables).
   PENDIENTE de ventana nueva.
