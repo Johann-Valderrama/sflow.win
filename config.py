@@ -612,6 +612,14 @@ ENV_CATALOG = {
                "gate F12 (_normalize_momentos).",
     },
 
+    # --- Auth local del dashboard (lazy) --------------------------------------
+    "DASHBOARD_AUTH_ENABLED": {
+        "default": "true", "kind": "lazy", "killswitch": True,
+        "doc": "Exige el token local de sesión (core/localauth.py) en el dashboard y su API; "
+               "sin él, cualquier proceso local podía leer transcripts y actas por HTTP. "
+               "Solo 'false' lo apaga (cualquier otro valor deja la protección encendida).",
+    },
+
     # --- Copiloto con contexto OPS (unidad 7.1, lazy) -------------------------
     "OPS_BRIEFING_PATH": {
         "default": "", "kind": "lazy", "killswitch": False,

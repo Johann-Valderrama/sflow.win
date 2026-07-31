@@ -14,11 +14,12 @@ import os
 import threading
 from urllib.parse import urlparse
 
-from flask import jsonify, request
+from flask import jsonify, redirect, request
 from dotenv import set_key
 
 from db.database import TranscriptionDB
 from config import APP_DATA_DIR
+from core import localauth
 from core.meeting import MEETING
 from core.proactive import PROACTIVE
 
@@ -124,6 +125,81 @@ def _csrf_check():
     if referer and not origin:
         if not _is_local_url(referer):
             return jsonify({"error": "CSRF: referer not allowed"}), 403
+
+
+# ---------------------------------------------------------------------------
+# Auth local por token de sesión (hermano de _csrf_check)
+# ---------------------------------------------------------------------------
+# Nombre de la cookie de sesión del dashboard y de la cabecera equivalente para
+# clientes que no son un navegador (scripts locales legítimos del usuario).
+_AUTH_COOKIE = "vflow_token"
+_AUTH_HEADER = "X-Vflow-Token"
+
+# Rutas que sirven HTML navegable (web/blueprints/pages.py): son las únicas que
+# aceptan el token por query string `?t=` y lo canjean por una cookie. El resto
+# (/api/*, /logo, /media/*) exige cookie o cabecera.
+_AUTH_PAGE_ROUTES = {"/", "/reunion"}
+
+_AUTH_DENIED_HTML = """<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vflow - acceso local requerido</title></head>
+<body style="font-family:system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:0 1.25rem;line-height:1.6">
+<h1 style="font-size:1.25rem">Acceso local requerido</h1>
+<p>Este dashboard solo se abre con el token local de esta sesion.</p>
+<p>Abrelo desde el icono de Vflow en la bandeja del sistema
+(&quot;Abrir Dashboard&quot; o &quot;Abrir ventana de reunion&quot;).</p>
+</body></html>"""
+
+
+def _auth_check():
+    """Exige el token local de sesión (ver ``core/localauth.py``).
+
+    Cierra el hueco que ``_csrf_check`` deja abierto por diseño: ese hook exime
+    ``GET``/``HEAD``/``OPTIONS``, así que sin este guard cualquier proceso local
+    podía leer transcripts y actas con un ``curl``.
+
+    Contrato:
+      - Guard apagado (``DASHBOARD_AUTH_ENABLED=false``) -> pasa todo.
+      - ``/static/*`` exento: assets, sin datos del usuario.
+      - Páginas HTML: ``?t=<token>`` válido -> se setea la cookie y se REDIRIGE a
+        la misma ruta sin query string (el token no queda en la barra de
+        direcciones ni en el historial del navegador). Sin token en el query,
+        vale la cookie. Si no hay nada, 401 con HTML mínimo.
+      - Todo lo demás (``/api/*``, ``/logo``, ...): cookie válida o cabecera
+        ``X-Vflow-Token`` válida; si no, 401 JSON.
+
+    Fail-CLOSED: si el token no se puede resolver, ``localauth.verify`` devuelve
+    ``False`` y aquí se deniega. Nunca se abre por un fallo de I/O.
+    """
+    if not localauth.is_enabled():
+        return
+
+    path = request.path or ""
+    if path.startswith("/static/"):
+        return
+
+    if path in _AUTH_PAGE_ROUTES:
+        qs_token = request.args.get("t")
+        if qs_token and localauth.verify(qs_token):
+            response = redirect(path)
+            response.set_cookie(
+                _AUTH_COOKIE, qs_token,
+                httponly=True, samesite="Strict", path="/",
+            )
+            return response
+        if localauth.verify(request.cookies.get(_AUTH_COOKIE)):
+            return
+        return _AUTH_DENIED_HTML, 401
+
+    if localauth.verify(request.cookies.get(_AUTH_COOKIE)):
+        return
+    if localauth.verify(request.headers.get(_AUTH_HEADER)):
+        return
+    return jsonify({
+        "error": "No autorizado: falta el token local de sesion. "
+                 "Abre el dashboard desde el icono de Vflow en la bandeja."
+    }), 401
 
 
 def _set_env_key(key: str, value: str):

@@ -29,6 +29,7 @@ from web.blueprints.url_queue import _process_next_url_item  # noqa: F401 — re
 from web.state import (  # noqa: F401 — MEETING/PROACTIVE/_db/_validate_* re-exportados (tests)
     MEETING,
     PROACTIVE,
+    _auth_check,
     _csrf_check,
     _db,
     _validate_briefing_path,
@@ -52,6 +53,11 @@ def create_app() -> Flask:
     # CSRF: UN solo hook global a nivel de app (nunca @bp.before_request, eso
     # dejaría blueprints sin CSRF — decisión del debate de la unidad 4.2).
     flask_app.before_request(_csrf_check)
+
+    # Auth local por token: mismo criterio (hook único a nivel de app, nunca
+    # @bp.before_request). Va DESPUÉS del CSRF: los hooks corren en orden de
+    # registro, así que un origen cruzado se rechaza antes de mirar el token.
+    flask_app.before_request(_auth_check)
 
     flask_app.register_blueprint(_bp_pages.bp)
     flask_app.register_blueprint(_bp_transcriptions.bp)

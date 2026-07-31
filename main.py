@@ -391,6 +391,31 @@ def _set_audio_source_env(source: str):
 
 
 # ---------------------------------------------------------------------------
+# URL del dashboard con token local de sesión
+# ---------------------------------------------------------------------------
+
+def _dashboard_url(port: int, path: str = "") -> str:
+    """URL del dashboard llevando el token local de sesión (`?t=`).
+
+    El guard de web/state.py canjea ese token por una cookie HttpOnly y redirige
+    a la misma ruta sin query string, así que el token no queda en la barra de
+    direcciones ni en el historial.
+
+    Best-effort del lado del CLIENTE: si el token no se puede resolver
+    (permisos/disco), se devuelve la URL sin `?t=` y el usuario verá el 401 con
+    instrucciones. La decisión de denegar es siempre del guard (fail-closed);
+    aquí nunca se abre nada de más.
+    """
+    base = f"http://localhost:{port}{path}"
+    try:
+        from core import localauth
+        return f"{base}?t={localauth.get_token()}"
+    except Exception:  # noqa: BLE001
+        logger.warning("No se pudo resolver el token del dashboard; se abre sin token.")
+        return base
+
+
+# ---------------------------------------------------------------------------
 # Bandeja del sistema
 # ---------------------------------------------------------------------------
 def _setup_tray(app: QApplication, port: int, vflow: "VflowApp") -> QSystemTrayIcon:
@@ -411,11 +436,11 @@ def _setup_tray(app: QApplication, port: int, vflow: "VflowApp") -> QSystemTrayI
     menu.addSeparator()
 
     dashboard = QAction(f"Abrir Dashboard (:{port})", menu)
-    dashboard.triggered.connect(lambda: subprocess.run(["cmd", "/c", "start", f"http://localhost:{port}"], capture_output=True))
+    dashboard.triggered.connect(lambda: subprocess.run(["cmd", "/c", "start", "", _dashboard_url(port)], capture_output=True))
     menu.addAction(dashboard)
 
     meeting_window = QAction("Abrir ventana de reunión", menu)
-    meeting_window.triggered.connect(lambda: subprocess.run(["cmd", "/c", "start", f"http://localhost:{port}/reunion"], capture_output=True))
+    meeting_window.triggered.connect(lambda: subprocess.run(["cmd", "/c", "start", "", _dashboard_url(port, "/reunion")], capture_output=True))
     menu.addAction(meeting_window)
     menu.addSeparator()
 
@@ -1500,7 +1525,7 @@ def main():
     # mouseReleaseEvent, ya en el hilo Qt), pero se usa por consistencia con el resto
     # de conexiones de señales de la app.
     vflow.pill.open_dashboard_requested.connect(
-        lambda: webbrowser.open(f"http://localhost:{port}/reunion"),
+        lambda: webbrowser.open(_dashboard_url(port, "/reunion")),
         Qt.ConnectionType.QueuedConnection,
     )
     vflow.pill.hud_toggle_requested.connect(

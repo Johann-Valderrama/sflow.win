@@ -28,6 +28,10 @@ cookies.txt
 *_cookies.txt
 *_cookies.dat
 
+# Token local de sesion del dashboard (core/localauth.py). En dev el data dir ES
+# la raiz del repo, asi que sin esta linea el token acabaria commiteado.
+dashboard_token.txt
+
 # Artefactos de prueba de captura dual
 mic_yo.wav
 loopback_ellos.wav

@@ -54,6 +54,13 @@ def _aislar_entorno_real(tmp_path_factory):
     mp.setenv("PENDING_EXPORT_DIR", "")
     mp.setenv("WEBHOOK_ENABLED", "false")
 
+    # 3. El guard de auth local (web.state._auth_check) responde 401 a todo lo
+    #    que llegue sin token, y ~29 archivos de test usan el test_client de
+    #    Flask sin cookie ni cabecera. Baseline de sesión: guard APAGADO. El
+    #    guard tiene su propio archivo (tests/test_dashboard_auth.py), que lo
+    #    enciende explícitamente con su monkeypatch function-scoped.
+    mp.setenv("DASHBOARD_AUTH_ENABLED", "false")
+
     import core.webhook as _webhook
     mp.setattr(_webhook, "APP_DATA_DIR", str(tmp / "appdata"))
 

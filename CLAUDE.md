@@ -488,6 +488,14 @@ Set `HISTORY_RETENTION_DAYS` in `.env` (default: `0` = keep forever). If > 0, th
 
 The dashboard validates exact Origin/Referer hosts (`localhost`, `127.0.0.1`, or `::1` only) instead of prefix matching. This closes bypasses like `localhost.evil.com`.
 
+### 5. Token local de sesión del dashboard
+
+`_csrf_check` exime `GET`/`HEAD`/`OPTIONS` por diseño, así que cualquier proceso local podía leer `/api/transcriptions`, `/api/meetings` y `/api/meetings/<id>` con un `curl`, y aquí eso son transcripts y actas de reuniones con otras personas. `core/localauth.py` genera un token (`secrets.token_hex(32)`) persistido en `dashboard_token.txt` dentro de `APP_DATA_DIR` (gitignored), cacheado a nivel módulo bajo lock con la I/O fuera del lock; el archivo es la fuente de verdad (creación con `O_CREAT|O_EXCL`). El guard `_auth_check` (`web/state.py`, registrado como segundo `before_request` en `create_app()`, después del CSRF) exime `/static/*`; en las páginas HTML (`/`, `/reunion`) canjea `?t=<token>` por una cookie `vflow_token` (HttpOnly, SameSite=Strict) y **redirige a la misma ruta sin query string** para que el token no quede en la barra ni en el historial; el resto (`/api/*`, `/logo`) exige esa cookie o la cabecera `X-Vflow-Token`. Sin credencial: 401 (HTML mínimo en páginas, JSON en API). `main.py` añade `?t=` a las tres aperturas de navegador (bandeja: dashboard y reunión; clic en el pill).
+
+**Fail-CLOSED, al revés que `core/ops_briefing.py`**: si el token no se puede crear ni leer, `verify()` devuelve `False` y se deniega; abrirse ante un error de I/O sería exactamente el bug que cierra.
+
+**Límite conocido y aceptado (no es un pendiente)**: un proceso que corre como el mismo usuario de Windows puede leer el archivo del token o abrir la SQLite directamente. Esto sube el listón de "curl trivial" a "hay que leer un archivo del directorio de datos"; no sustituye al cifrado en reposo. El servidor MCP (`mcp_server/`) no se ve afectado: lee la SQLite directamente en modo `mode=ro`, nunca por HTTP.
+
 ## Customization
 
 ### App Version
@@ -565,6 +573,7 @@ Edit `config.py`:
 - `TRANSCRIPTION_FALLBACK` (default `false`, unidad 5.5) — Espejo de `GROQ_FALLBACK`: con backend primario groq, un fallo de RED en el DICTADO (nunca reunión/URL) cae al modelo local si ya está descargado (sin auto-descarga; aviso de tray si falta). Breaker con cooldown `TRANSCRIPTION_FALLBACK_COOLDOWN` (default `120`s): dentro del cooldown el dictado va directo a local; un éxito de Groq lo resetea. translate solo con target `en`.
 - `DICTATION_MODES_ENABLED` (default: `false`) — Activa el reformateo post-dictado por app activa (Ola 6).
 - `DICTATION_MODE_MAP` — Mapa `exe:preset` (p. ej. `outlook.exe:email,slack.exe:chat,code.exe:codigo`) que asigna un preset de reformateo por `.exe` en foco; parseo tolerante a espacios/mayúsculas.
+- `DASHBOARD_AUTH_ENABLED` (default: `true`) - Exige el token local de sesión (`core/localauth.py`) en el dashboard y su API. Solo el valor `false` lo apaga; cualquier otro valor deja la protección encendida (fail-closed). Ver "Security & Privacy" → "Token local de sesión del dashboard".
 - `OPS_BRIEFING_PATH` (default: `""`) — Ruta a un `.md` curado por el usuario (proyectos activos, compromisos, metas); si está seteado, su contenido se inyecta SOLO en el chat en vivo "Preguntar" (Ola 7, unidad 7.1). Vacío = apagado.
 - `MEETING_RETENTION_DAYS` (default: `0` = conservar siempre) — Si > 0, al ARRANCAR la app se borran definitivamente las reuniones (actas y transcripts) más viejas que N días, incluida su entrada en el índice de búsqueda (`meetings_fts`). Es la única operación destructiva de la unidad 3.2; apagada por defecto. Configurable desde el dashboard (Ajustes → Reuniones), se aplica en el próximo reinicio, no al guardar.
 
