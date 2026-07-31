@@ -36,6 +36,40 @@ El esquema ya está preparado (`source`, `hit_count` en la tabla `dictionary`):
 - **Modelo `medium`** local: ya soportado por el selector del dashboard; solo descargar si `small` falla con vocabulario difícil (probar antes el diccionario, que suele bastar).
 - **Regenerar `requirements.lock`** al añadir cualquier dependencia: `pip-compile --generate-hashes --allow-unsafe --output-file requirements.lock requirements.in` (política: paquetes con >30 días en PyPI).
 
+### 3.1 Lo que tiene el upstream y aquí no (auditoría de `daniel-carreon/sflow`, 2026-07-31)
+
+> Salidas de comparar este fork contra su upstream, medido sobre el código de los dos. Ninguna
+> estaba ya en este backlog (los patrones de Wispr Flow que sí estaban, puntos 6/7/8 de
+> "Inspiración accionable", ya se cerraron en la Ola 6). Sin compromiso: son insumo, no plan.
+> El upstream está en el MISMO stack (PyQt6, sin Tauri/Rust/Electron), así que nada de esto
+> exige migrar infraestructura.
+
+- **Smart commands** (`core/smart_commands.py` del upstream): 12 reglas de regex ES/EN que
+  convierten dictado en puntuación ("nueva línea" → salto, "coma" → `,`, "punto y aparte" →
+  `.\n\n`). **La de mejor valor/esfuerzo de las cuatro:** regex puro, sin LLM, sin red, y no
+  agrega superficie de seguridad. Aquí no existe nada equivalente.
+- **Transform sobre selección** (Option+1..8 en el upstream, `core/transform.py` + 8 prompts en
+  su `config.py`): transformaciones fijas sobre el texto seleccionado sin hablar. Reusa el
+  backend que ya existe en `core/insights.py`. **Copiarla ARREGLADA:** en el upstream es la
+  cadena que la auditoría marcó ALTA (salida de LLM remoto tecleada sin validar sobre texto
+  ajeno). Aquí ya se pega por portapapeles y no tecleando, que es media mitigación; falta
+  mostrar el resultado antes de aplicarlo y delimitar en el prompt la frontera entre la
+  instrucción y el texto seleccionado.
+- **Snippets** (`core/snippets_matcher.py` + `db/snippets.py` del upstream): disparador de voz →
+  expansión de texto. Autónoma, sin riesgo, encaja con el diccionario que ya existe aquí.
+- **Ventana nativa** (`ui/hub_window.py` del upstream, 1.118 líneas de PyQt6 puro, cero HTML):
+  su dashboard PRINCIPAL es nativo y el web es secundario; aquí el web es el único. Es la pieza
+  cara. Tres caminos: envolver el dashboard actual en `QWebEngineView` (conserva todo el HTML/JS,
+  horas de trabajo, engorda el `.exe` porque empaqueta Chromium), reescribir un Hub Qt como el
+  suyo (mejor resultado, cero navegador, reescribe UI que ya funciona), o no hacerlo.
+- **Command Mode** (voz + selección → LLM → reemplaza): el feature más vistoso del upstream y el
+  de mayor riesgo. Si se hace, va después de Transform y con las mismas mitigaciones.
+- NO copiar: su `llm_cleanup` (aquí la fidelidad del dictado se cuida con filtro de alucinaciones
+  + diccionario, y su propio default está apagado), su `focus_mode` (API exclusiva de macOS), y
+  su empaquetado (firma ad-hoc + `xattr -cr` para saltarse Gatekeeper; aquí la higiene de
+  supply-chain ya es mejor). Su dashboard web carga Tailwind y las fuentes desde CDN, así que
+  se cae sin internet: eso aquí ya está resuelto con `web/static/vendor/`.
+
 ## 4. Sensor externo de nombres reales para el canal "Ellos" (Parte C del contrato macrosistema)
 
 **Que es:** hoy el canal "Ellos" (loopback del sistema) no distingue participantes, solo

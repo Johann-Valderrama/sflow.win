@@ -138,6 +138,37 @@
     la decisión 4.4 de Johann.
 
 ## Completado (PLAN-MEJORAS, cont.)
+- [x] **Token local de sesion para el dashboard** (2026-07-31, director @fable-5 desde OPS,
+  ejecuto @opus-5, verifico @sonnet-5 read-only; commit f3faf67; suite 766 -> 794 pass)
+  - Origen: NO salio del backlog. Salio de auditar `daniel-carreon/sflow` (el upstream de este
+    fork) en OPS ese mismo dia. De las 5 fallas que se le encontraron, esta era la unica
+    heredada aca: `_csrf_check` exime `GET/HEAD/OPTIONS` a proposito, asi que las LECTURAS de
+    `/api/transcriptions` y `/api/meetings` estaban abiertas a cualquier proceso local. Pesa mas
+    que en el repo original porque alli exponia dictados sueltos y aca expone transcripts y
+    actas de reuniones con otras personas. Informe:
+    `C:\OPS\repositorios-terceros\auditorias\sflow-AUDITORIA.md`.
+  - Que: `core/localauth.py` (token de 32 bytes en `dashboard_token.txt` dentro de `APP_DATA_DIR`,
+    cache bajo lock con la I/O fuera del lock, `compare_digest`) + `_auth_check` en `web/state.py`
+    registrado despues de `_csrf_check`. `/static/*` exento; `/` y `/reunion` canjean `?t=` por
+    cookie HttpOnly SameSite=Strict y redirigen sin query string; el resto exige cookie o
+    cabecera `X-Vflow-Token`. `DASHBOARD_AUTH_ENABLED` en `ENV_CATALOG` (default `true`, lazy).
+  - Dos divergencias DELIBERADAS de la convencion del repo, ambas por el mismo motivo (aqui el
+    lado seguro del fallo es el contrario al habitual): es **fail-CLOSED** al reves que
+    `ops_briefing.py` (si el token no se puede leer ni crear, se DENIEGA), y el killswitch apaga
+    **solo** con el literal `false`, no con el `== "true"` de siempre, para que basura en el
+    `.env` deje la proteccion encendida en vez de apagarla.
+  - Limite conocido y ACEPTADO, no es deuda: un proceso corriendo como el mismo usuario de
+    Windows tambien puede leer el archivo del token o la SQLite directamente. Esto sube el liston
+    de "curl trivial" a "hay que leer un archivo". Johann lo decidio con ese tradeoff a la vista.
+  - MCP no afectado: `mcp_server/` lee SQLite en `mode=ro` por stdio, nunca por HTTP (verificado).
+  - Verificado: 794 passed (766 previos intactos + 28 nuevos). La suite corre con el guard
+    APAGADO desde `tests/conftest.py` (29 archivos usan el `test_client` sin token) y
+    `test_dashboard_auth.py` lo reenciende con monkeypatch function-scoped. Verificacion
+    INDEPENDIENTE read-only con lente de bypass: las 51 rutas vivas de los 8 blueprints
+    golpeadas sin credenciales (401 en las 51), path traversal contra `/static` con socket crudo
+    contra el servidor real y no solo el test client, fuzz de 14 valores del killswitch, y
+    mutacion de `is_enabled`/`verify` para probar que los tests nuevos DETECTAN un guard roto en
+    vez de pasar por casualidad. PASS sin hallazgos.
 - [x] **OLA 5 COMPLETA** (2026-07-12 tarde, ventana 3, director @fable-5, debate @opus-4.8,
   ejecutores 5×@sonnet-5; 6 commits, suite 636 → 766 pass / 0 fail). Debate adversarial de la
   ola previo (APROBAR CON CAMBIOS, 16 objeciones, todas reconciliadas — ver Decisiones).
