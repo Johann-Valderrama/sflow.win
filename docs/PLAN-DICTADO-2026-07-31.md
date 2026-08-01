@@ -395,6 +395,158 @@ de que el entorno del agente no compone frames, porque sigue siendo cierta para 
 | 3c | El panel de previsualización de G1-A, **agregándole un modo a `ui/hud_widget.py`, NO construyendo un widget nuevo** | Media | el fuerte del régimen.H | Es el control de seguridad de la ola; si queda mal, falla en silencio. La evaluación del 2026-07-31 midió que el HUD ya ES ese panel: flotante sin robar foco (`:436-439`), Enter (`:410`), Esc (`:416`), y hasta un método para mostrar respuesta de modelo (`:749`); el cableado ya existe (`main.py:556`, señales en `:641-642`). Reusarlo hereda su corrección pagada: jamás togglear `WindowDoesNotAcceptFocus` en caliente (`ui/hud_widget.py:23`) | 3b | `ui/hud_widget.py`, `main.py`, `tests/test_transform.py` | `JUICIO: ¿puede el resultado del LLM llegar a la ventana del usuario SIN pasar por el panel?` | GATE G4 |
 | 3d | Atajos + panel de configuración de los 8 prompts + `raw_text` conservado | Media | Sonnet.M | Mecánico sobre patrones que ya existen en el repo | 3c | `core/hotkey.py`, `main.py`, `web/`, `CLAUDE.md` | `SCRIPT: pytest` completo | REINTENTO |
 
+### 3z EJECUTADA (2026-08-01): el crudo de un Transform NO se guarda
+
+> Unidad de DISEÑO, sin código. Nace de la objeción A4 del debate adversarial. Esta sección es la
+> decisión, y es lo que las unidades `3a` a `3d` tienen que obedecer. El juicio que la cierra está
+> respondido al final, punto por punto.
+
+#### La pregunta, y por qué no se responde igual que en el dictado
+
+En el dictado, `raw_text` significa una cosa clara: *lo que dijo el backend antes de las pasadas
+locales* (contrato de `CLAUDE.md` sección 19). Funciona porque **Vflow es el autor de ese texto**: el
+usuario habló, Vflow lo escribió, y guardarlo es guardar lo que el propio usuario acaba de producir.
+
+En un Transform la asimetría se invierte y esa es toda la unidad: **el insumo es texto que ya existía
+en otra aplicación, que Vflow nunca oyó y que el usuario nunca autorizó a almacenar.** Autorizó a
+*transformarlo*. Esa selección puede ser el contrato de un cliente, el correo de otra persona, una
+historia clínica, el campo de un gestor de contraseñas o una fila de una base de datos ajena. La
+palabra "crudo" es la misma que en 6.2, pero el dato que nombra no se parece.
+
+#### Decisión 1 (la principal): un Transform NO crea fila en `transcriptions`, ni con `SAVE_HISTORY=true`
+
+Ni el texto seleccionado, ni el resultado del modelo, ni el par de los dos. **Vflow no gana una
+memoria nueva por tener Transform.** El texto vive en RAM mientras el panel de previsualización está
+abierto y muere con él.
+
+Cuatro razones medidas en el código de hoy, no supuestas:
+
+1. **Contaminaría las métricas de uso en silencio.** `db.stats()` (`db/database.py:426-451`) cuenta
+   `SELECT COUNT(*) FROM transcriptions` sin filtrar por `source`, así que cada Transform inflaría
+   "dictados hoy" y el total del dashboard. Un dato que dice "dictaste 40 veces" cuando dictaste 12
+   se lee igual de bien que el correcto.
+2. **Entraría a la búsqueda de todo el historial.** La paleta Ctrl+K llama
+   `GET /api/transcriptions/search`, que hace LIKE sobre la tabla completa
+   (`web/blueprints/transcriptions.py:28-34`). Una selección de otra app se volvería buscable desde
+   una caja de texto que el usuario abre para encontrar sus propios dictados.
+3. **El botón que justificaría guardarlo no sirve aquí.** "Deshacer edición IA" reescribe la fila de
+   la base de datos con `raw_text`. En un Transform el texto que hay que restaurar no está en la base
+   de datos: está en el documento del usuario, en otra aplicación. Restaurar la fila no le devuelve
+   nada donde le importa. Ver la decisión 2.
+4. **`raw_text` dejaría de tener un significado único.** Hoy es "lo que dijo el backend de
+   transcripción". Meter ahí "lo que había seleccionado en otra ventana" obliga a leer `source` para
+   saber qué significa la columna, que es exactamente el tipo de ambigüedad que la sección 19 cerró a
+   propósito.
+
+**La regla durable, para cuando esta sección envejezca y nazca otra feature parecida (la Ola 5 ya es
+una):** Vflow persiste texto del que el usuario es autor ante Vflow (lo dictó) o que pidió traer
+explícitamente por su identificador (una URL que escribió). **Texto que Vflow lee de la pantalla o de
+la selección de otra aplicación se procesa y se suelta, nunca se archiva.**
+
+#### Decisión 2: el Deshacer de 6.2 NO cubre Transform, y no se finge que sí
+
+La reversión existe, pero repartida en tres capas y cada una en el lugar donde el usuario la va a
+buscar. Ninguna de las tres necesita base de datos:
+
+1. **Antes de aplicar: Esc.** Es el control de G1-A y es el que de verdad importa, porque nada tocó
+   el documento todavía. Un resultado secuestrado se descarta viéndolo.
+2. **Al aplicar: el Ctrl+Z de la propia aplicación.** El pegado reemplaza la selección, así que el
+   deshacer nativo del editor devuelve el texto original. Se documenta, no se construye.
+3. **Después de aplicar, dentro de la sesión: "copiar original" en el panel.** El HUD conserva EN
+   MEMORIA la última transformación (entrada y salida, una sola, se pisa con la siguiente) y ofrece
+   copiar el texto original al portapapeles. Cubre el caso en que la aplicación destino no tiene
+   deshacer decente (un textarea web, una terminal). Se borra al cerrar el panel y al salir de Vflow;
+   nunca toca disco. **Va en la unidad `3c`.**
+
+#### Decisión 3: el portapapeles también es un lugar donde el crudo vive, y se trata como tal
+
+La captura de `3a` funciona mandando Ctrl+C a la ventana en foco, así que el texto ajeno pasa por el
+portapapeles del sistema, que es compartido con todo el equipo. Tres reglas obligatorias para `3a`:
+
+- **Restaurar siempre el contenido anterior del portapapeles tras la captura**, sin mirar
+  `RESTORE_CLIPBOARD` (que gobierna el pegado del dictado, no esto). Dejar una selección ajena
+  colgada en el portapapeles es una fuga por un canal que el usuario no está mirando.
+- **Nunca caer al contenido previo del portapapeles cuando no hay selección.** Sin esto aparece el
+  peor fallo posible de esta ola y es silencioso: el usuario dispara el atajo sin nada seleccionado,
+  el Ctrl+C no copia nada, y Vflow manda al modelo lo que hubiera en el portapapeles desde antes, que
+  puede ser cualquier cosa. La captura tiene que poder distinguir "no había selección" de "la
+  selección era igual a lo que ya estaba": se vacía el portapapeles (o se pone un centinela) ANTES de
+  mandar Ctrl+C, y si al leer sigue vacío se **aborta con aviso**, jamás se transforma un texto que
+  el usuario no seleccionó en ese momento.
+- **Tope de tamaño con aviso.** Una selección enorme (un documento entero con Ctrl+A) se corta o se
+  rechaza diciéndolo, nunca se manda entera y en silencio a un modelo remoto. El número lo fija `3b`
+  con `insights.budget_chars`, que ya existe.
+
+#### Decisión 4: qué se registra en los logs (y qué no)
+
+**El contenido del texto seleccionado y del resultado NO se loguea a ningún nivel**, ni en DEBUG.
+Mismo criterio ya aplicado en `core/ops_briefing.py`, que loguea la ruta del briefing pero jamás su
+contenido. Lo que sí puede ir al log: el nombre del prompt usado, la longitud en caracteres, el
+backend resuelto, la duración y el resultado (aceptado o descartado). Tampoco se persiste el `.exe`
+de la ventana en foco al transformar: eso sería un registro de qué aplicaciones usa el usuario y con
+qué contenido, y ninguna decisión del producto lo necesita.
+
+#### Decisión 5: `SAVE_HISTORY` se respeta, y además no es la única llave
+
+Con la decisión 1, `SAVE_HISTORY` queda satisfecho por construcción: no hay escritura que apagar. Se
+escribe igual como invariante ejecutable para que ninguna unidad futura la rompa sin notarlo:
+**ninguna ruta de código de Transform escribe en `transcriptions`, en ninguna tabla nueva, ni en un
+archivo, sin importar el valor de `SAVE_HISTORY`.** Y si algún día se agrega la persistencia opcional
+del punto siguiente, falla **CERRADO**: solo el literal `true` en las dos llaves habilita, cualquier
+otro valor no guarda (al revés de `SMART_COMMANDS_ENABLED`, que falla abierto porque no hay dato que
+se escape; aquí sí lo hay).
+
+#### Decisión 6: el gate `silent` del modo proactivo NO aplica al panel de Transform
+
+El briefing de OPS se apaga con `PROACTIVE_MODE=silent` porque su contenido es contexto privado que
+el usuario no puso en la pantalla y que aparecería en una pantalla compartida. Aquí es al revés: **lo
+que el panel muestra es el texto que el usuario acaba de seleccionar, que ya está en la pantalla que
+está compartiendo.** Mostrárselo de vuelta no filtra nada nuevo, y apagar el panel en `silent`
+rompería el control de seguridad de G1-A justo cuando más importa. La diferencia general, que vale
+para la Ola 5: se apaga en `silent` lo que Vflow EMPUJA por su cuenta, no lo que el usuario acaba de
+pedir con un atajo.
+
+#### Punto de extensión declarado (hoy no se construye)
+
+Si alguna vez se quiere historial de transformaciones, la forma ya está pensada para no rediseñarla
+en caliente: fila en `transcriptions` con `source='transform'`, `text` = salida, `raw_text` =
+selección, `duration_seconds` NULL, `model` = el modelo LLM real (no el default de Whisper, que sería
+mentira), detrás de `TRANSFORM_SAVE_HISTORY` (default `false`) **en conjunción con** `SAVE_HISTORY`.
+Y con las tres deudas que habría que pagar en el mismo commit, no después: excluir `source='transform'`
+de `db.stats()`, badge propio en la tabla del historial, y decir en Ajustes, sin eufemismos, que eso
+guarda en el equipo el texto que seleccionas en otras aplicaciones.
+
+**No se construye ahora por una razón, no por pereza:** no se puede nombrar la decisión que ese
+historial habilita. Se puede nombrar, en cambio, lo que cuesta: una superficie de captura de texto
+ajeno, buscable desde una caja de texto. Agregarlo después es aditivo y no invalida nada de esta ola.
+
+#### El juicio de la unidad, respondido
+
+*"¿Respeta `SAVE_HISTORY` y no captura texto arbitrario de otras apps sin decirlo?"*
+
+- **Respeta `SAVE_HISTORY`:** sí, y de la forma más fuerte posible, que es no teniendo nada que
+  apagar (decisión 1, invariante escrito en la decisión 5).
+- **No captura sin decirlo:** el texto seleccionado sale del equipo hacia un modelo de lenguaje, y
+  eso es una captura aunque no se guarde. Por eso la unidad `3d` **debe** llevar en el panel de
+  Ajustes, con el patrón que la Ola 2 ya construyó y probó: la frase directa de que Transform manda
+  el texto seleccionado a un modelo de lenguaje, cuál backend concreto aplica hoy leído de la
+  configuración real, y el requisito no negociable del modo local (apagar `INSIGHTS_FALLBACK` y
+  comprobar el endpoint antes de mandar nada). Sin ese panel la ola incumple este juicio aunque el
+  código funcione.
+
+**Veredicto: PASA.** No se abre gate.
+
+#### Lo que esta unidad le exige a las siguientes
+
+| Unidad | Obligación que sale de 3z |
+|---|---|
+| `3a` | Restaurar el portapapeles tras capturar; abortar con aviso si no había selección (nunca usar el portapapeles previo); tope de tamaño explícito |
+| `3b` | No loguear contenido; el texto seleccionado viaja entre delimitadores explícitos y nunca se concatena a la instrucción |
+| `3c` | "Copiar original" en memoria, una sola transformación, se borra al cerrar; el panel NO se apaga en `PROACTIVE_MODE=silent` |
+| `3d` | Panel de Ajustes con la advertencia del modelo de lenguaje y el backend real; **cero** escritura en `transcriptions` |
+
+---
+
 **Verificación de la ola:** aquí SÍ hay error silencioso, así que verificador independiente
 read-only con este lente exacto: *"¿existe algún camino por el que la salida del LLM llegue a la
 ventana del usuario sin pasar por el control de G1?"*, más un segundo lente ortogonal barato:
