@@ -571,6 +571,15 @@ ENV_CATALOG = {
                "el usuario lo configura explícitamente desde Ajustes).",
     },
 
+    # --- Smart commands: voz -> puntuación (unidad 1a de PLAN-DICTADO, lazy) ---
+    "SMART_COMMANDS_ENABLED": {
+        "default": "true", "kind": "lazy", "killswitch": True,
+        "doc": "Convierte disparadores dictados con prefijo ('signo coma') en su signo. "
+               "Regex local, sin red ni LLM: por eso es el único killswitch con default ON. "
+               "Solo el literal 'false' apaga (fail-open); cualquier otro valor deja encendido. "
+               "Pasada 3 del contrato del pipeline de texto (CLAUDE.md sección 19).",
+    },
+
     # --- Modos de dictado por app activa (unidad 6.3, lazy) -------------------
     "DICTATION_MODES_ENABLED": {
         "default": "false", "kind": "lazy", "killswitch": True,
