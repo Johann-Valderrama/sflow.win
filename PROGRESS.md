@@ -177,13 +177,43 @@
     hacia las 01:36 del 2026-08-01 y NO lo produjo la ventana que lo commiteó a las 08:30. Se validó
     antes de integrarlo (default intacto, 10 tests nuevos verdes, suite completa verde). Si otra
     ventana lo estaba haciendo, su trabajo está commiteado y el árbol quedó limpio.
+- **OLA 7 COMPLETA (2026-08-01), la GPU sí ganó: 6 commits** `4a0924f` → `a389708` → `8cb8657` →
+  `543e05d` (7a, cuatro corridas) → `7b5ab3f` + `a52689e` (7b + su arreglo) → `885ed78` + `0600dd1`
+  (7c + corrección). Suite 1012 → **1042 pass, 0 fail**. Dirigió `Opus.H`, ejecutó `@sonnet-5`,
+  documentó `@haiku-4.5`, verificaron 2 `verificador-qa` con lentes ortogonales.
+  - **Lo que se midió** (reporte completo: `docs/benchmarks/local-backend-gpu-2026-08-01.md`, con el
+    banco reproducible en `tests/bench_local_backend.py`): CUDA `int8` es **3.6x-4.9x más rápido**
+    que CPU con `small`, y con `medium` es la diferencia entre inservible (x0.7-x1.1 tiempo real en
+    CPU, más lento que el propio audio) y usable (x4.5-x7.6 en CUDA). VRAM holgada: ~2079 MiB de
+    6144 con `medium`. Sin evidencia de que CUDA transcriba peor NI mejor.
+  - **`LOCAL_DEVICE`** (`auto` default / `cpu` / `cuda`) resuelve el dispositivo, y **un fallo de
+    CUDA cae a CPU en los DOS momentos**: al cargar el modelo y al inferir. El segundo lo encontró un
+    verificador y no estaba en 7b: sin él, un fallo de VRAM a media sesión dejaba el singleton roto
+    repitiendo el error en cada dictado hasta el release por inactividad (10 min). Hoy libera el
+    modelo roto, reintenta ESE dictado en CPU para no perder el audio ya grabado, y abre un breaker
+    (`LOCAL_CUDA_FALLBACK_COOLDOWN`, 300 s, copiado de `TRANSCRIPTION_FALLBACK_COOLDOWN`).
+    Verificado end-to-end rompiendo la inferencia a propósito sobre el camino real.
+  - **Premisas del plan que resultaron falsas y quedan corregidas:** `int8_float16` NO existe en esta
+    GPU (Pascal, CC 6.1; `int8` e `int8_float32` son el mismo kernel), y los dos WAV de la raíz del
+    repo NO son "grabaciones reales de una reunión" sino fixtures de hardware de
+    `test_dual_capture.py` (silencio + tono sintético).
+  - **🙋 QUEDA UNA DECISIÓN DE JOHANN, sin bloquear nada:** ¿el default de `LOCAL_WHISPER_MODEL` pasa
+    de `small` a `medium`, ahora que la GPU lo vuelve viable? Está escrita con su tradeoff en
+    `docs/PENDIENTES.md` §3. El default sigue en `small` hasta que él decida.
   - **Next action:** ventana nueva con `Lee docs/PLAN-DICTADO-2026-07-31.md y ejecuta el Kickoff
-    Ola 7.` (medir si la GTX 1060 le gana a la CPU en el backend local; es la única ola del plan que
-    se decide con un NÚMERO y no con un juicio, y si 7a no muestra ganancia la ola se DESCARTA y se
-    anota el dato). Modelo: `Opus.H` o `Fable.H`. Quedan además la **Ola 3** (Transform sobre
-    selección, con G1-A: se previsualiza antes de aplicar, reusando `ui/hud_widget.py`) y la
-    **Ola 5** (Command Mode, que no empieza sin la 3 cerrada y verificada). La Ola 3 arranca por su
-    unidad `3z`, que es DISEÑO en documento y no código.
+    Ola 3.` Modelo: `Opus.H` o `Fable.H`. Quedan la **Ola 3** (Transform sobre selección, con G1-A:
+    se previsualiza antes de aplicar, reusando `ui/hud_widget.py`) y la **Ola 5** (Command Mode, que
+    no empieza sin la 3 cerrada y verificada). La Ola 3 arranca por su unidad `3z`, que es DISEÑO en
+    documento y no código.
+  - **Lección de método que la Ola 7 pagó y que sirve a las que faltan:** tres defectos de
+    INSTRUMENTO seguidos, ninguno visible desde el resultado. El banco corrió sobre audio sin habla y
+    dio un veredicto de descarte que era falso; luego se atribuyó una divergencia al dispositivo sin
+    medir la varianza de la línea base; luego `difflib.SequenceMatcher` con su `autojunk=True` por
+    defecto infló esa divergencia de 1,8% a 18% (usar SIEMPRE `autojunk=False` en texto natural). Los
+    tres devolvieron números plausibles con exit 0. Lo que los cazó fue chocarlos contra un número
+    EXTERNO (la bitácora de la skill `transcribir-video` del OPS registra ~10x tiempo real en esta
+    misma GPU; el banco falso decía 80x-220x) y añadir CONTROLES que miden el instrumento y no el
+    fenómeno. Todo medidor nuevo lleva un guardián que ABORTA si su insumo no cumple la premisa.
   - **Lección de método de esta tanda, aplicable a las olas que faltan:** un test que REPLICA la
     lógica que quiere vigilar no es un guardián. Antes de cerrar una unidad, romper el sistema a
     propósito y comprobar que el test cae. Pasó dos veces seguidas (`0b` lo hizo bien por

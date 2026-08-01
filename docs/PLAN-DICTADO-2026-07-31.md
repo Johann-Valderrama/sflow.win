@@ -534,6 +534,30 @@ código: el backend local está fijado a CPU teniendo GPU y CUDA 12.9 en la máq
 decisión la toma un número y no un juicio, así que si 7a no muestra ganancia real, la ola se
 DESCARTA y se anota el número para no volver a preguntarlo.
 
+**EJECUTADA el 2026-08-01, y NO se descartó: la GPU ganó.** Seis commits: `4a0924f`/`a389708`/
+`8cb8657`/`543e05d` (`7a`), `7b5ab3f`+`a52689e` (`7b` y su arreglo), `885ed78`+`0600dd1` (`7c`).
+Suite 1012 → 1042 pass, 0 fail. Reporte reproducible en `docs/benchmarks/local-backend-gpu-2026-08-01.md`.
+
+- **El número que decidió:** CUDA `int8` es 3.6x-4.9x más rápido que CPU con `small`, y con `medium`
+  es la diferencia entre inservible (x0.7-x1.1 tiempo real en CPU) y usable (x4.5-x7.6 en CUDA).
+- **Dos premisas de este plan resultaron FALSAS al medirlas.** (1) La fila `7a` decía comparar contra
+  `int8_float16`: ese modo no existe en una GTX 1060 (Pascal, CC 6.1), y `int8` con `int8_float32`
+  son el mismo kernel aquí. (2) El banco iba a usar `mic_yo.wav` y `loopback_ellos.wav` como
+  "audio real": son fixtures de hardware de `test_dual_capture.py`, silencio y un tono sintético.
+- **El plan pedía medir "latencia y precisión" y el primer intento midió NINGUNA de las dos.** Con
+  `vad_filter=True` el VAD descarta el audio sin habla antes de decodificar, así que CPU y CUDA
+  empataban porque ninguna trabajaba, y de ahí salió un veredicto de DESCARTAR que era falso. Se
+  rehizo con habla real, más un control de auto-consistencia (cada dispositivo contra sí mismo) y un
+  proxy de referencia (`large-v3-turbo`) para separar "distinto" de "peor". La corrida inválida se
+  conserva en el reporte marcada SUPERADA, a propósito.
+- **`7b` estaba incompleta y lo encontró un verificador ortogonal, no el ejecutor ni yo:** el
+  fallback cubría el fallo al CARGAR el modelo pero no al INFERIR, así que un fallo de VRAM a media
+  sesión dejaba el singleton roto fallando en cada dictado hasta el release por inactividad. Cerrado
+  en `a52689e`, con reintento en CPU del mismo audio y breaker con cooldown.
+- **🙋 Queda una DECISIÓN de Johann que este plan no preveía y que no bloquea nada:** si el default
+  de `LOCAL_WHISPER_MODEL` pasa de `small` a `medium`, ahora que la GPU lo vuelve viable. Escrita con
+  su tradeoff en `docs/PENDIENTES.md` §3.
+
 ---
 
 ## Registro del debate adversarial
