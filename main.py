@@ -47,7 +47,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, pyqtSlot, QTimer
-from PyQt6.QtGui import QIcon, QPixmap, QAction
+from PyQt6.QtGui import QIcon, QPixmap, QAction, QActionGroup
 
 from dotenv import set_key, unset_key
 from ui.pill_widget import PillWidget
@@ -393,6 +393,48 @@ def _set_audio_source_env(source: str):
 
 
 # ---------------------------------------------------------------------------
+# Preset manual de dictado — "Próximo dictado" en la bandeja (unidad 2b, Ola 2
+# de docs/PLAN-DICTADO-2026-07-31.md)
+# ---------------------------------------------------------------------------
+# Mismas líneas de justificación de la tabla de la Ola 2 (una por preset, la
+# que decide si el usuario elige este o el de al lado), reusadas aquí para
+# que el submenú se explique solo — sin mandar a leer Ajustes ni documentación.
+_DICTATION_PRESET_LABELS: list[tuple["str | None", str]] = [
+    (None, "Automático (según la app en foco)"),
+    ("email", "Email — prosa formal de correo"),
+    ("chat", "Chat — mensaje casual"),
+    ("codigo", "Código — términos técnicos literales"),
+    ("lista", "Lista — viñetas, una por ítem"),
+    ("notas", "Notas — prosa limpia, sin formalidad ni relajación"),
+]
+_DICTATION_PRESET_SHORT_NAMES: dict = {
+    None: "Automático",
+    "email": "Email",
+    "chat": "Chat",
+    "codigo": "Código",
+    "lista": "Lista",
+    "notas": "Notas",
+}
+
+
+def _tray_tooltip_text() -> str:
+    """Tooltip de la bandeja: base + el preset manual armado, si hay uno.
+
+    Es la señal que deja ver el preset activo SIN abrir el menú (basta con
+    pasar el mouse por el icono): se reusa el tooltip que la bandeja ya
+    tenía en vez de inventar una superficie nueva. Cuando no hay ningún
+    preset manual armado (el caso normal: automático por .exe, o recién
+    consumido tras un dictado) el tooltip vuelve a su texto de siempre.
+    """
+    base = f"Vflow v{APP_VERSION} - Voice to Text"
+    manual = dictation_modes.get_manual_preset()
+    if manual is None:
+        return base
+    short_name = _DICTATION_PRESET_SHORT_NAMES.get(manual, manual)
+    return f"{base} — Próximo dictado: {short_name}"
+
+
+# ---------------------------------------------------------------------------
 # URL del dashboard con token local de sesión
 # ---------------------------------------------------------------------------
 
@@ -478,6 +520,73 @@ def _setup_tray(app: QApplication, port: int, vflow: "VflowApp") -> QSystemTrayI
     menu.addAction(src_sys)
     menu.addSeparator()
 
+    # Preset manual de dictado — "Próximo dictado" (unidad 2b, Ola 2 de
+    # docs/PLAN-DICTADO-2026-07-31.md). Completa la mitad que faltaba del
+    # reformateo por preset: hasta ahora solo se elegía por la app en foco
+    # (dictation_modes.preset_for_exe); esto deja elegir "esto que voy a
+    # dictar ahora va como lista" sin importar dónde tengas el foco, y esa
+    # elección GANA sobre el mapeo automático (precedencia explícita en
+    # dictation_modes.resolve_preset, no aquí). Uso ÚNICO: se consume al
+    # terminar el siguiente dictado y vuelve solo a "Automático" — ver el
+    # docstring de core.dictation_modes.consume_manual_preset.
+    #
+    # El submenú queda VISIBLE aunque DICTATION_MODES_ENABLED esté apagado
+    # (el default): elegir un preset aquí solo arma un estado en memoria, no
+    # manda nada a ninguna parte por sí solo — el reformateo real sigue
+    # exigiendo el flag global encendido, igual que el mapeo automático. Con
+    # el flag apagado se avisa arriba del submenú para que no parezca que
+    # "no funciona" cuando en realidad el usuario no lo ha activado en
+    # Ajustes (unidad 2c).
+    preset_menu = QMenu("Próximo dictado", menu)
+    preset_group = QActionGroup(preset_menu)
+    preset_group.setExclusive(True)
+    preset_actions: dict = {}
+
+    if not dictation_modes.modes_enabled():
+        preset_hint = QAction("Reformateo por IA apagado (actívalo en Ajustes)", preset_menu)
+        preset_hint.setEnabled(False)
+        preset_menu.addAction(preset_hint)
+        preset_menu.addSeparator()
+
+    def _make_preset_handler(preset_value):
+        def _on_preset_toggled(checked):
+            if checked:
+                dictation_modes.set_manual_preset(preset_value)
+                tray.setToolTip(_tray_tooltip_text())
+        return _on_preset_toggled
+
+    for preset_value, preset_label in _DICTATION_PRESET_LABELS:
+        preset_action = QAction(preset_label, preset_menu)
+        preset_action.setCheckable(True)
+        preset_action.setChecked(preset_value == dictation_modes.get_manual_preset())
+        preset_action.toggled.connect(_make_preset_handler(preset_value))
+        preset_group.addAction(preset_action)
+        preset_menu.addAction(preset_action)
+        preset_actions[preset_value] = preset_action
+
+    def _refresh_preset_menu():
+        """Re-sincroniza los checkmarks con el estado real (get_manual_preset,
+        que NO consume) al abrir el menú o al terminar un dictado. Cubre el
+        caso de uso único: si el preset manual ya se gastó desde la última
+        vez que se pintó el menú, este refresco lo vuelve a mostrar en
+        "Automático" en vez de dejar el checkmark viejo mintiendo."""
+        current = dictation_modes.get_manual_preset()
+        action = preset_actions.get(current)
+        if action is not None and not action.isChecked():
+            action.setChecked(True)
+        tray.setToolTip(_tray_tooltip_text())
+
+    menu.aboutToShow.connect(_refresh_preset_menu)
+    # El preset manual se consume desde el hilo de background de la
+    # transcripción (main.py::_transcribe_final); QueuedConnection cruza al
+    # hilo Qt antes de tocar el tooltip/checkmarks, mismo patrón que el
+    # resto de notificaciones de tray (transcription_fallback_notice, etc.).
+    vflow.dictation_manual_preset_consumed.connect(
+        _refresh_preset_menu, Qt.ConnectionType.QueuedConnection
+    )
+    menu.addMenu(preset_menu)
+    menu.addSeparator()
+
     # Modo reunión (captura dual mic + sistema). Es un MODO, no una fuente de
     # dictado: comparte la misma vía que el hotkey AltGr+R (toggle iniciar/terminar).
     meeting_action = QAction("Iniciar reunión (AltGr+R)", menu)
@@ -499,7 +608,7 @@ def _setup_tray(app: QApplication, port: int, vflow: "VflowApp") -> QSystemTrayI
     menu.addAction(quit_action)
 
     tray.setContextMenu(menu)
-    tray.setToolTip(f"Vflow v{APP_VERSION} - Voice to Text")
+    tray.setToolTip(_tray_tooltip_text())
     tray.show()
     return tray
 
@@ -517,6 +626,7 @@ class VflowApp(QObject):
     lost_answer_ready = pyqtSignal(dict)                # resultado de answer_live() (unidad 5.3)
     chunk_loss_warning = pyqtSignal(int)                 # generación; un chunk se perdió tras la gracia (unidad 0.2)
     transcription_fallback_notice = pyqtSignal(str)      # unidad 5.5: aviso de fallback de red Groq -> local
+    dictation_manual_preset_consumed = pyqtSignal()       # unidad 2b: el preset manual armado se acaba de gastar
 
     def __init__(self):
         """Inicializa componentes (recorder, transcriber, DB, hotkey, pill) y conecta señales."""
@@ -966,7 +1076,23 @@ class VflowApp(QObject):
                     and dictation_modes.modes_enabled()
                 ):
                     exe_name = get_saved_exe()
-                    preset = dictation_modes.preset_for_exe(exe_name)
+                    # Precedencia EXPLÍCITA (unidad 2b, Ola 2 de
+                    # PLAN-DICTADO-2026-07-31): un preset elegido a mano en la
+                    # bandeja para "el siguiente dictado" GANA sobre el mapeo
+                    # automático por .exe. `resolve_preset` implementa esa
+                    # precedencia (y consume el valor manual armado, ver
+                    # core/dictation_modes.py) en vez de dejarla implícita en
+                    # el orden de estas líneas.
+                    manual_was_armed = dictation_modes.get_manual_preset() is not None
+                    preset = dictation_modes.resolve_preset(exe_name)
+                    if manual_was_armed:
+                        # Avisa al hilo Qt (bandeja) que el preset manual ya
+                        # se gastó, para que el tooltip/menú vuelvan a
+                        # "Automático" sin esperar a que el usuario abra el
+                        # menú y lo note por su cuenta. Cruza de este hilo de
+                        # background al hilo Qt vía señal — mismo patrón que
+                        # transcription_fallback_notice más arriba.
+                        self.dictation_manual_preset_consumed.emit()
                     if preset:
                         reformatted = dictation_modes.reformat_text(text, preset)
                         if reformatted and reformatted != text:

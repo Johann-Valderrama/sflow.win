@@ -1,11 +1,16 @@
 """Modos de dictado por app activa (unidad 6.3; ampliado a 5 presets en la Ola 2 de
-``docs/PLAN-DICTADO-2026-07-31.md``, unidad 2a).
+``docs/PLAN-DICTADO-2026-07-31.md``, unidad 2a; elección manual del preset para el
+siguiente dictado en la unidad 2b).
 
 5 presets de reformateo post-dictado (email formal / chat casual / código / lista /
 notas), aplicados vía LLM SOLO si el usuario lo activó (opt-in,
-``DICTATION_MODES_ENABLED``, default "false"). Elegidos según la app en foco al
-dictar (nombre del .exe capturado en ``core/clipboard.save_frontmost_app``), vía un
-mapa configurable ``DICTATION_MODE_MAP`` (exe:preset,exe:preset,...).
+``DICTATION_MODES_ENABLED``, default "false"). Elegidos por DOS vías, con
+precedencia explícita entre ellas (ver ``resolve_preset``): (1) automático, según
+la app en foco al dictar (nombre del .exe capturado en
+``core/clipboard.save_frontmost_app``), vía un mapa configurable
+``DICTATION_MODE_MAP`` (exe:preset,exe:preset,...); (2) manual, elegido a mano en
+el menú de bandeja para "el siguiente dictado" (``set_manual_preset`` /
+``consume_manual_preset``), que GANA sobre el automático cuando hay uno armado.
 
 Sin builder de modos custom (lección superwhisper): un conjunto FIJO y CURADO de
 presets hardcodeados en este módulo — el usuario solo edita el MAPA exe→preset,
@@ -139,6 +144,107 @@ def preset_for_exe(exe_name: "str | None", mode_map: "dict | None" = None) -> "s
 
 def modes_enabled() -> bool:
     return os.getenv("DICTATION_MODES_ENABLED", "false").strip().lower() == "true"
+
+
+# ---------------------------------------------------------------------------
+# Elección MANUAL del preset para el SIGUIENTE dictado (unidad 2b, Ola 2 de
+# docs/PLAN-DICTADO-2026-07-31.md). Completa la mitad que faltaba: hasta
+# ahora el preset solo se podía elegir por el .exe en foco (`preset_for_exe`
+# arriba); esto agrega "esto que voy a dictar AHORA va como lista", sin
+# importar en qué app tengas el foco.
+# ---------------------------------------------------------------------------
+
+# Estado de SESIÓN, en memoria del proceso — nunca en DB ni en archivo (así lo
+# exige la unidad 2b): es una elección de "ahora mismo", no una preferencia
+# persistente como DICTATION_MODE_MAP. Se pierde al reiniciar Vflow, lo cual
+# es correcto: no hay razón para que un preset armado ayer siga vivo hoy.
+_manual_preset: "str | None" = None
+
+
+def set_manual_preset(preset: "str | None") -> None:
+    """Arma (o limpia con ``None``) el preset manual para el dictado que sigue.
+
+    Llamado desde el hilo Qt (clic en el menú de bandeja). No valida contra
+    ``PRESETS`` aquí a propósito: quien llama esto en producción (el menú)
+    solo ofrece nombres que ya son válidos, y un valor corrupto/desconocido
+    nunca llega a ``reformat_text`` porque ``consume_manual_preset`` lo
+    filtra al leerlo (ver abajo) — un preset manual inválido no rompe nada,
+    simplemente se ignora y el dictado sigue el mapeo automático.
+    """
+    global _manual_preset
+    _manual_preset = preset
+
+
+def get_manual_preset() -> "str | None":
+    """Lee el preset manual armado SIN consumirlo.
+
+    Para pintar estado (tooltip de la bandeja, checkmarks del submenú) sin
+    gastar el "un solo uso" de abajo con solo mirar qué hay armado.
+    """
+    return _manual_preset
+
+
+def consume_manual_preset() -> "str | None":
+    """Lee y BORRA en la misma llamada el preset manual armado.
+
+    Decisión de diseño [un solo uso, NO pegajoso]: la propia unidad del plan
+    lo llama "el preset para el SIGUIENTE dictado" (singular), y esa es la
+    lectura que sigue el usuario en la práctica — el caso que originó todo
+    el plan es "dictar UNA lista de compras estando en cualquier app", no
+    "quedarme en modo lista hasta que yo lo cambie". Si el modo fuera
+    pegajoso, dictar la lista y luego seguir con un mensaje normal en
+    WhatsApp saldría también convertido en viñetas sin que el usuario lo
+    pidiera de nuevo — una trampa silenciosa que además reintroduce el
+    riesgo de "settings infinitos" que la Ola 2 ya discutió (CLAUDE.md
+    sección 16): un modo que se olvida encendido termina reformateando cosas
+    que el usuario no quería tocar. Un uso único es más fácil de razonar
+    ("¿qué va a pasar con mi próximo dictado?" siempre tiene la misma
+    respuesta salvo que yo elija otra cosa) y más barato de revertir si el
+    uso real muestra lo contrario: bastaría con que el caller no borre el
+    valor tras leerlo, no hace falta rediseñar nada.
+
+    Devuelve ``None`` si no había nada armado, o si el valor guardado ya no
+    es un preset válido (defensivo: un preset manual inválido no debe colarse
+    silenciosamente al reformateo; simplemente se descarta y el caller cae al
+    mapeo automático por .exe).
+    """
+    global _manual_preset
+    preset = _manual_preset
+    _manual_preset = None
+    if preset not in PRESETS:
+        return None
+    return preset
+
+
+def resolve_preset(exe_name: "str | None", mode_map: "dict | None" = None) -> "str | None":
+    """Resuelve el preset a aplicar al dictado recién terminado, con la
+    PRECEDENCIA explícita del contrato de la unidad 2b: el preset elegido a
+    mano para "el siguiente dictado" (si hay uno armado y es válido) GANA
+    sobre el mapeo automático por .exe (``preset_for_exe``). Se escribe aquí,
+    en el módulo, y no queda implícita en el orden de llamadas de main.py.
+
+    Efecto secundario: CONSUME el preset manual (ver ``consume_manual_preset``).
+    Llamar dos veces para el mismo dictado devuelve el automático la segunda
+    vez — ``main.py`` la llama UNA sola vez por dictado.
+
+    Concurrencia (mismo patrón que el selector de "Fuente de audio" de
+    ``main.py``, que guarda su estado en ``os.environ`` sin un ``Lock``
+    explícito): ``_manual_preset`` es una única referencia a nivel de módulo,
+    y su lectura/escritura es atómica bajo el GIL de CPython — no hace falta
+    un ``threading.Lock`` para un get/set de un solo valor (mismo argumento
+    que usa ``core/hotkey.py`` para sus flags booleanos: "el GIL garantiza
+    atomicidad en la lectura/escritura de atributos individuales"). El único
+    llamador que además ESCRIBE tras leer (``consume_manual_preset``) es esta
+    función, invocada una vez por dictado desde el hilo de background de la
+    transcripción; el menú de bandeja (hilo Qt) solo hace escrituras puras
+    (``set_manual_preset``) o lecturas puras (``get_manual_preset``), nunca
+    un ciclo leer-y-borrar, así que no hay una ventana real de carrera entre
+    "leer para pintar el menú" y "consumir al terminar un dictado".
+    """
+    manual = consume_manual_preset()
+    if manual is not None:
+        return manual
+    return preset_for_exe(exe_name, mode_map)
 
 
 def reformat_text(text: str, preset: str, *, timeout: float = 8.0) -> "str | None":

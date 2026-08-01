@@ -469,6 +469,405 @@ class TestReformatTextNewPresets:
 
 
 # ---------------------------------------------------------------------------
+# (l) Ola 2 (unidad 2b): elección MANUAL del preset para el siguiente
+# dictado (menú de bandeja), que GANA sobre el mapeo automático por .exe.
+# ---------------------------------------------------------------------------
+class TestManualPresetPrecedence:
+    """`core.dictation_modes._manual_preset` es estado de PROCESO (no DB, no
+    archivo): cada test lo limpia antes y después para no contaminar a los
+    demás, incluidos los de otras clases de este archivo."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_manual_preset(self):
+        from core import dictation_modes as _dm
+        _dm.set_manual_preset(None)
+        yield
+        _dm.set_manual_preset(None)
+
+    def test_manual_preset_wins_over_exe_mapping(self):
+        """La precedencia del contrato de la unidad 2b: manual > automático.
+        Un exe mapeado a 'email' no le gana a un preset armado a mano."""
+        from core import dictation_modes as _dm
+        mode_map = {"outlook.exe": "email"}
+        _dm.set_manual_preset("lista")
+        assert _dm.resolve_preset("outlook.exe", mode_map) == "lista"
+
+    def test_no_manual_preset_falls_back_to_exe_mapping(self):
+        from core import dictation_modes as _dm
+        mode_map = {"outlook.exe": "email"}
+        assert _dm.get_manual_preset() is None
+        assert _dm.resolve_preset("outlook.exe", mode_map) == "email"
+
+    def test_manual_preset_wins_even_with_no_exe_match(self):
+        """El preset manual no depende de que haya un mapeo automático: es
+        justo el caso de uso que originó la unidad ('dictar una lista
+        estando en CUALQUIER app', incluida una sin mapear)."""
+        from core import dictation_modes as _dm
+        _dm.set_manual_preset("lista")
+        assert _dm.resolve_preset("notepad.exe", {}) == "lista"
+        _dm.set_manual_preset("lista")
+        assert _dm.resolve_preset(None, {}) == "lista"
+
+
+class TestManualPresetSingleUse:
+    """Decisión de diseño [un solo uso, NO pegajoso] de la unidad 2b: se
+    consume tras UN `resolve_preset`. Ver el docstring de
+    `consume_manual_preset` en core/dictation_modes.py para el porqué."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_manual_preset(self):
+        from core import dictation_modes as _dm
+        _dm.set_manual_preset(None)
+        yield
+        _dm.set_manual_preset(None)
+
+    def test_manual_preset_is_consumed_after_one_resolve_then_reverts(self):
+        from core import dictation_modes as _dm
+        mode_map = {"outlook.exe": "email"}
+        _dm.set_manual_preset("lista")
+        first_dictation = _dm.resolve_preset("outlook.exe", mode_map)
+        second_dictation = _dm.resolve_preset("outlook.exe", mode_map)
+        assert first_dictation == "lista"
+        assert second_dictation == "email", (
+            "el preset manual NO debe seguir vivo para el segundo dictado: "
+            "es un uso único ('el siguiente dictado'), no un modo pegajoso "
+            "que el usuario tendría que acordarse de apagar."
+        )
+
+    def test_get_manual_preset_is_read_only_does_not_consume(self):
+        """Pintar el estado (tooltip/menú) con `get_manual_preset()` no
+        puede gastar el uso único — a diferencia de `resolve_preset`."""
+        from core import dictation_modes as _dm
+        _dm.set_manual_preset("notas")
+        assert _dm.get_manual_preset() == "notas"
+        assert _dm.get_manual_preset() == "notas"  # segunda lectura, sigue armado
+        assert _dm.resolve_preset(None) == "notas"  # aquí sí se gasta
+        assert _dm.get_manual_preset() is None
+
+    def test_consume_manual_preset_clears_state_even_when_returning_none(self):
+        """Sin nada armado, consumir no debe dejar basura ni lanzar."""
+        from core import dictation_modes as _dm
+        assert _dm.consume_manual_preset() is None
+        assert _dm.get_manual_preset() is None
+
+
+class TestManualPresetBackToAutomatic:
+    """'Cómo se vuelve al automático' tiene que tener una salida explícita,
+    no solo una entrada: `set_manual_preset(None)` es esa salida (la elige
+    el usuario desde el ítem 'Automático (según la app en foco)' del menú)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_manual_preset(self):
+        from core import dictation_modes as _dm
+        _dm.set_manual_preset(None)
+        yield
+        _dm.set_manual_preset(None)
+
+    def test_setting_none_explicitly_clears_an_armed_preset(self):
+        from core import dictation_modes as _dm
+        mode_map = {"outlook.exe": "email"}
+        _dm.set_manual_preset("lista")
+        _dm.set_manual_preset(None)
+        assert _dm.get_manual_preset() is None
+        assert _dm.resolve_preset("outlook.exe", mode_map) == "email"
+
+
+class TestManualPresetInvalidDoesNotBreak:
+    """Un preset manual inválido nunca debería originarse desde el menú (que
+    solo ofrece nombres de `PRESETS`), pero `resolve_preset` se defiende
+    igual: no rompe nada, se descarta y cae al automático."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_manual_preset(self):
+        from core import dictation_modes as _dm
+        _dm.set_manual_preset(None)
+        yield
+        _dm.set_manual_preset(None)
+
+    def test_invalid_manual_preset_falls_back_to_exe_mapping(self):
+        from core import dictation_modes as _dm
+        mode_map = {"outlook.exe": "email"}
+        _dm.set_manual_preset("preset_que_no_existe")
+        assert _dm.resolve_preset("outlook.exe", mode_map) == "email"
+        # También se consumió/descartó: no queda repitiéndose en el próximo dictado.
+        assert _dm.get_manual_preset() is None
+
+    def test_invalid_manual_preset_with_no_automatic_match_returns_none(self):
+        from core import dictation_modes as _dm
+        _dm.set_manual_preset("otro_invalido")
+        assert _dm.resolve_preset("notepad.exe", {}) is None
+
+    def test_reformat_text_never_sees_the_invalid_manual_value(self):
+        """Fin a fin: si `resolve_preset` devolviera el string inválido tal
+        cual (bug), `reformat_text` lo rechazaría igual (`preset not in
+        PRESETS`) — pero no debería llegar a intentarlo."""
+        from core import dictation_modes as _dm
+        _dm.set_manual_preset("preset_que_no_existe")
+        preset = _dm.resolve_preset("notepad.exe", {})
+        assert preset is None
+        assert _dm.reformat_text("hola", preset or "preset_que_no_existe") is None
+
+
+class TestManualPresetRespectsGlobalFlag:
+    """La elección manual NO se salta `DICTATION_MODES_ENABLED`: con el flag
+    global apagado (el default), un preset armado a mano sigue sin
+    reformatear nada. Esto replica el bloque de gates de
+    main.py::_transcribe_final para probar el ALGORITMO sin depender de
+    PyQt6 (mismo patrón que TestRawTextMostRaw más arriba); el guardián de
+    que main.py REALMENTE tiene este cableado es
+    TestCableadoManualPresetEnMainPy, más abajo."""
+
+    def _simulate_dictation_modes_block(
+        self, text, translate, source, modes_on, resolved_preset, reformatted,
+    ):
+        from core import dictation_modes as _dm
+        resolve_mock = MagicMock(return_value=resolved_preset)
+        reformat_mock = MagicMock(return_value=reformatted)
+        with patch.object(_dm, "modes_enabled", return_value=modes_on), \
+             patch.object(_dm, "resolve_preset", resolve_mock), \
+             patch.object(_dm, "reformat_text", reformat_mock):
+            if not translate and source != "system" and _dm.modes_enabled():
+                preset = _dm.resolve_preset("dummy.exe")
+                if preset:
+                    new_text = _dm.reformat_text(text, preset)
+                    if new_text and new_text != text:
+                        text = new_text
+        return text, resolve_mock, reformat_mock
+
+    def test_disabled_flag_skips_resolve_even_with_a_preset_that_would_apply(self):
+        """Con el flag global apagado, `resolve_preset` ni siquiera se
+        llama — así que tampoco se consume el preset manual armado (queda
+        vivo para cuando el usuario encienda el flag en Ajustes)."""
+        text, resolve_mock, reformat_mock = self._simulate_dictation_modes_block(
+            text="leche pan huevos", translate=False, source="mic",
+            modes_on=False, resolved_preset="lista", reformatted="- leche\n- pan\n- huevos",
+        )
+        assert text == "leche pan huevos"
+        resolve_mock.assert_not_called()
+        reformat_mock.assert_not_called()
+
+    def test_enabled_flag_resolves_and_reformats(self):
+        text, resolve_mock, reformat_mock = self._simulate_dictation_modes_block(
+            text="leche pan huevos", translate=False, source="mic",
+            modes_on=True, resolved_preset="lista", reformatted="- leche\n- pan\n- huevos",
+        )
+        assert text == "- leche\n- pan\n- huevos"
+        resolve_mock.assert_called_once()
+        reformat_mock.assert_called_once()
+
+    def test_translate_mode_never_resolves_even_if_enabled(self):
+        text, resolve_mock, reformat_mock = self._simulate_dictation_modes_block(
+            text="hello world", translate=True, source="mic",
+            modes_on=True, resolved_preset="lista", reformatted="should not apply",
+        )
+        assert text == "hello world"
+        resolve_mock.assert_not_called()
+
+    def test_system_audio_source_never_resolves_even_if_enabled(self):
+        text, resolve_mock, reformat_mock = self._simulate_dictation_modes_block(
+            text="algo del video", translate=False, source="system",
+            modes_on=True, resolved_preset="lista", reformatted="should not apply",
+        )
+        assert text == "algo del video"
+        resolve_mock.assert_not_called()
+
+
+class TestTrayTooltipReflectsManualPreset:
+    """'Cómo ve el usuario el preset activo sin abrir el menú': el tooltip
+    de la bandeja (`main._tray_tooltip_text`), reusando la superficie que
+    ya existía en vez de inventar una nueva. Son llamadas REALES a main.py,
+    no una réplica de su lógica — main.py es importable sin levantar
+    QApplication (ver tests/test_chunk_assembly.py, que ya hace `from main
+    import ...`)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_manual_preset(self):
+        from core import dictation_modes as _dm
+        _dm.set_manual_preset(None)
+        yield
+        _dm.set_manual_preset(None)
+
+    def test_tooltip_is_the_base_text_with_no_manual_preset(self):
+        from main import _tray_tooltip_text
+        from config import APP_VERSION
+        assert _tray_tooltip_text() == f"Vflow v{APP_VERSION} - Voice to Text"
+
+    def test_tooltip_shows_the_armed_preset_short_name(self):
+        from main import _tray_tooltip_text
+        from core import dictation_modes as _dm
+        _dm.set_manual_preset("lista")
+        tooltip = _tray_tooltip_text()
+        assert "Próximo dictado: Lista" in tooltip
+
+    def test_tooltip_reverts_to_base_once_the_preset_is_consumed(self):
+        """El tooltip no debe seguir anunciando un preset que ya se usó: tras
+        `resolve_preset` (lo que main.py llama al terminar un dictado), debe
+        volver a verse igual que si nunca se hubiera armado nada."""
+        from main import _tray_tooltip_text
+        from core import dictation_modes as _dm
+        from config import APP_VERSION
+        _dm.set_manual_preset("notas")
+        assert "Próximo dictado" in _tray_tooltip_text()
+        _dm.resolve_preset(None)  # simula el fin del dictado que lo consume
+        assert _tray_tooltip_text() == f"Vflow v{APP_VERSION} - Voice to Text"
+
+    def test_all_five_presets_plus_automatic_have_a_short_name(self):
+        """`_DICTATION_PRESET_SHORT_NAMES` tiene que cubrir los 5 presets de
+        PRESETS más `None` (automático); si un preset nuevo se agrega a
+        `PRESETS` sin agregar su nombre corto, el tooltip mostraría el
+        nombre técnico crudo en vez de uno legible."""
+        from main import _DICTATION_PRESET_SHORT_NAMES
+        from core.dictation_modes import PRESETS
+        assert set(_DICTATION_PRESET_SHORT_NAMES.keys()) == set(PRESETS.keys()) | {None}
+
+
+# ---------------------------------------------------------------------------
+# (l, cont.) Guardián ESTRUCTURAL: main.py de verdad tiene el cableado, no
+# solo el algoritmo de arriba. Mismo patrón que
+# tests/test_smart_commands.py::TestCableadoExisteEnMainPy — un test que
+# solo re-implementa la lógica de main.py no sirve de guardián si el
+# cableado real desaparece (p. ej. alguien revierte main.py a llamar
+# `preset_for_exe` directo, sin pasar por la precedencia manual).
+# ---------------------------------------------------------------------------
+class TestCableadoManualPresetEnMainPy:
+    @staticmethod
+    def _transcribe_final_source() -> str:
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parent.parent
+        source = (repo_root / "main.py").read_text(encoding="utf-8")
+        start = source.index("def _transcribe_final(")
+        next_def = source.index("\n    def ", start)
+        return source[start:next_def]
+
+    @staticmethod
+    def _setup_tray_source() -> str:
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parent.parent
+        source = (repo_root / "main.py").read_text(encoding="utf-8")
+        start = source.index("def _setup_tray(")
+        next_def = source.index("\n# ---", start)
+        return source[start:next_def]
+
+    def test_full_source_declares_the_manual_preset_consumed_signal(self):
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parent.parent
+        source = (repo_root / "main.py").read_text(encoding="utf-8")
+        assert "dictation_manual_preset_consumed = pyqtSignal()" in source, (
+            "VflowApp ya no declara la señal dictation_manual_preset_consumed. "
+            "Sin ella, el tooltip de la bandeja no se entera cuando un "
+            "dictado consume el preset manual armado (unidad 2b)."
+        )
+
+    def test_transcribe_final_calls_resolve_preset_not_preset_for_exe_direct(self):
+        """El cableado tiene que pasar por `resolve_preset` (que aplica la
+        precedencia manual>automático), no por `preset_for_exe` directo —
+        eso saltaría la elección manual por completo."""
+        body = self._transcribe_final_source()
+        assert "dictation_modes.resolve_preset(" in body, (
+            "main.py::_transcribe_final ya NO llama a "
+            "dictation_modes.resolve_preset(...). La precedencia manual>"
+            "automático de la unidad 2b desapareció del dictado real, aunque "
+            "toda tests/test_dictation_modes.py::TestManualPreset* siga en "
+            "verde (esos tests prueban el ALGORITMO en core/dictation_modes.py, "
+            "no que main.py lo ejecute)."
+        )
+        assert "dictation_modes.preset_for_exe(" not in body, (
+            "main.py::_transcribe_final llama a dictation_modes.preset_for_exe(...) "
+            "directo otra vez — eso resuelve SOLO el mapeo automático por .exe y "
+            "se salta por completo el preset manual armado en la bandeja "
+            "(unidad 2b). Debe pasar por dictation_modes.resolve_preset(...), "
+            "que aplica la precedencia manual>automático."
+        )
+
+    def test_manual_preset_state_is_read_before_resolving(self):
+        """`get_manual_preset()` (lectura, sin consumir) tiene que leerse
+        ANTES de `resolve_preset()` (que sí consume): así main.py sabe si
+        hubo un preset manual armado para avisarle a la bandeja, sin
+        depender de adivinar el resultado de resolve_preset después de que
+        ya lo gastó."""
+        body = self._transcribe_final_source()
+        idx_get = body.find("dictation_modes.get_manual_preset()")
+        idx_resolve = body.find("dictation_modes.resolve_preset(")
+        assert idx_get != -1 and idx_resolve != -1, (
+            "No se encontraron ambas llamadas (get_manual_preset y "
+            "resolve_preset) dentro de main.py::_transcribe_final."
+        )
+        assert idx_get < idx_resolve, (
+            "dictation_modes.get_manual_preset() debe leerse ANTES de "
+            "dictation_modes.resolve_preset() en main.py::_transcribe_final: "
+            "resolve_preset() CONSUME el valor, así que leerlo después ya "
+            "vería el estado post-consumo (siempre None)."
+        )
+
+    def test_dictation_manual_preset_consumed_emitted_after_resolving(self):
+        body = self._transcribe_final_source()
+        idx_resolve = body.find("dictation_modes.resolve_preset(")
+        idx_emit = body.find("self.dictation_manual_preset_consumed.emit()")
+        assert idx_resolve != -1 and idx_emit != -1, (
+            "No se encontró la llamada a resolve_preset o la emisión de "
+            "dictation_manual_preset_consumed dentro de "
+            "main.py::_transcribe_final."
+        )
+        assert idx_resolve < idx_emit, (
+            "self.dictation_manual_preset_consumed.emit() aparece ANTES de "
+            "dictation_modes.resolve_preset(...) — la señal debe emitirse "
+            "DESPUÉS de resolver (que es cuando el valor manual, si había "
+            "uno, ya se consumió de verdad)."
+        )
+
+    def test_resolve_preset_block_conserva_los_mismos_gates_que_smart_commands(self):
+        body = self._transcribe_final_source()
+        idx_resolve = body.find("dictation_modes.resolve_preset(")
+        assert idx_resolve != -1
+        idx_if = body.rfind("if (", 0, idx_resolve)
+        assert idx_if != -1, (
+            "No se encontró un 'if (' antes de dictation_modes.resolve_preset(...) "
+            "en main.py. Sin un bloque de gates explícito, no hay forma de "
+            "confirmar que translate/source siguen protegiendo la pasada "
+            "(CLAUDE.md sección 19, Eje 2)."
+        )
+        gate_block = body[idx_if:idx_resolve]
+        for gate in ("translate", 'source != "system"', "modes_enabled()"):
+            assert gate in gate_block, (
+                f"El gate '{gate}' ya no está en el bloque 'if (' que envuelve "
+                "dictation_modes.resolve_preset(...) en main.py::_transcribe_final."
+            )
+
+    def test_tray_menu_ofrece_el_submenu_proximo_dictado(self):
+        body = self._setup_tray_source()
+        assert 'QMenu("Próximo dictado"' in body, (
+            "_setup_tray ya no construye el submenú 'Próximo dictado'. Sin "
+            "él, no hay forma de armar el preset manual desde la bandeja "
+            "(unidad 2b)."
+        )
+        assert "dictation_modes.set_manual_preset(" in body, (
+            "_setup_tray ya no llama a dictation_modes.set_manual_preset(...): "
+            "el submenú puede seguir dibujándose sin que elegir un ítem arme "
+            "de verdad el preset manual."
+        )
+
+    def test_tray_menu_incluye_salida_explicita_a_automatico(self):
+        """'Cómo se vuelve al automático' necesita una salida explícita: la
+        lista de opciones del submenú (`_DICTATION_PRESET_LABELS`, a nivel
+        de módulo, iterada dentro de `_setup_tray`) debe traer una entrada
+        `None` que arme "automático" — no solo los 5 presets concretos."""
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parent.parent
+        full_source = (repo_root / "main.py").read_text(encoding="utf-8")
+        assert "(None, " in full_source and "Automático" in full_source, (
+            "main.py ya no define una entrada (None, \"Automático...\") en "
+            "_DICTATION_PRESET_LABELS. Sin ella, el usuario no tiene una "
+            "salida clara del preset manual, solo entradas."
+        )
+        tray_body = self._setup_tray_source()
+        assert "_DICTATION_PRESET_LABELS" in tray_body, (
+            "_setup_tray ya no itera _DICTATION_PRESET_LABELS: aunque la "
+            "lista siga trayendo la entrada None de vuelta a automático, el "
+            "submenú de la bandeja podría no estar ofreciéndola de verdad."
+        )
+
+
+# ---------------------------------------------------------------------------
 # (j) Panel de settings: roundtrip GET/POST + CSRF
 # ---------------------------------------------------------------------------
 try:
