@@ -267,6 +267,22 @@ el original, no una copia.
 | 1b | Cablear en **`main.py`**, justo antes del bloque de `dictation_modes` (`main.py:897-905`), reusando sus gates (`not translate`, `recorder.source != "system"`) | Media | Sonnet.M | **CORREGIDA por la evaluación del 2026-07-31.** La versión anterior cableaba en `core/transcriber.py`, que comparten reuniones y URL: habría metido puntuación en el habla de terceros dentro de las actas, roto el contrato de una-línea-por-turno del buffer de insights, subestimado el WPM y roto el significado de `raw_text`. En `main.py` los otros flujos quedan intactos POR CONSTRUCCIÓN | 1a | `main.py`, `tests/test_smart_commands.py` | `SCRIPT: pytest` completo | REINTENTO |
 | 1c | Killswitch `SMART_COMMANDS_ENABLED` en `ENV_CATALOG` + `.env.example` + `CLAUDE.md` | Baja | Haiku.L | Mecánico, con un test que ya vigila el catálogo | 1b | `config.py`, `.env.example`, `CLAUDE.md` | `SCRIPT: pytest tests/test_env_catalog.py` | REINTENTO |
 
+**EJECUTADA el 2026-07-31**, tres commits: `3865dc5` (`1a`, @sonnet-5), `058699a` (`1b`, @sonnet-5),
+`7cf53fe` (`1c`, orquestador). Suite 802 → 873 pass, 0 fail. Tres cosas que salieron al ejecutar y
+que el plan no preveía:
+
+- **Se cae `puntuación` como prefijo, queda solo `signo`.** Lo cazó el ejecutor: `puntuación` tiene
+  significado genérico real en español (*"revisemos la puntuación coma por coma"*), así que
+  reintroducía el falso positivo que el prefijo existe para matar. Quitarlo no cuesta ninguna
+  capacidad. Johann, en su decisión, solo había usado `signo`.
+- **La entrada de `ENV_CATALOG` se adelantó de `1c` a `1a`**: el repo tiene un guardián por AST que
+  exige catalogar toda lectura de entorno de producción, así que la secuencia del plan dejaba la
+  suite en rojo durante dos commits.
+- **Los primeros tests de `1b` no eran guardianes.** Replicaban la lógica del bloque dentro del
+  test, así que con la pasada COMPLETAMENTE desactivada la suite seguía verde en 870. Se detectó
+  mutando `main.py` a propósito. Se agregaron tres asserts estructurales (la llamada existe, va
+  antes del reformateo LLM, el bloque conserva sus gates) y se re-probaron con la misma mutación.
+
 **Verificación de la ola:** `NINGUNA: basta correr el código`. El error aquí no es silencioso, se
 ve dictando. El ORDEN respecto a las otras pasadas ya no se decide aquí: lo fija la Ola 0.
 

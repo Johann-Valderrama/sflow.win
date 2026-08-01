@@ -138,11 +138,26 @@
     de backend, así que el código real corre y una pasada colada en `core/transcriber.py` los hace
     fallar. **Probados rompiendo el sistema a propósito:** mutación en `core/transcriber.py` → caen
     esos dos tests y ningún otro, y se revirtió.
+  - **OLA 1 COMPLETA (2026-07-31, 3 commits, suite 802 → 873 pass / 0 fail).** `1a` (`3865dc5`,
+    @sonnet-5): `core/smart_commands.py`, regex puro con prefijo obligatorio, un solo regex
+    combinado por el presupuesto de 5 ms, 56 tests. `1b` (`058699a`, @sonnet-5): cableado en
+    `main.py` bajo los gates de `dictation_modes`, con el ancla comentada donde entran los snippets
+    de la Ola 4. `1c` (`7cf53fe`, orquestador): killswitch documentado y sección 20 de `CLAUDE.md`
+    con el CAMBIO DE COMPORTAMIENTO anunciado (objeción B1). **Dos hallazgos que costaron trabajo
+    extra y valen para las olas siguientes:** se cayó `puntuación` como prefijo (reintroducía el
+    falso positivo que el prefijo mata), y los primeros tests de `1b` NO eran guardianes (replicaban
+    la lógica en el test, así que con la pasada desactivada la suite seguía verde en 870; se detectó
+    mutando `main.py` y se corrigió con asserts estructurales).
   - **Next action:** ventana nueva con `Lee docs/PLAN-DICTADO-2026-07-31.md y ejecuta el Kickoff
-    Ola 1.` Modelo: `Opus.H` o `Fable.H`, indistinto. Después de la 1, sin gate: Ola 4 (depende de
-    `1b`, NO en paralelo con la 1), y Olas 2 y 7 cuando se quiera. Los tests de capa B de `0b`
-    asumen `smart_commands.apply_smart_commands(text)` y `snippets_matcher.expand_snippets(text)`:
-    si `1a`/`4b` usan otro nombre no hay falso verde, pero hay que ajustar el test.
+    Ola 4.` Modelo: `Opus.H` o `Fable.H`, indistinto. La Ola 4 ya está desbloqueada (`4b` dependía de
+    `1b`, que está cerrada) y `main.py` tiene un comentario-ancla que marca el sitio exacto donde va
+    el matcher de snippets y por qué. Olas 2 y 7 disponibles en cualquier momento, independientes.
+    Los tests de capa B de `0b` asumen `snippets_matcher.expand_snippets(text)`: si `4b` usa otro
+    nombre no hay falso verde, pero hay que ajustar el test.
+  - **Lección de método de esta tanda, aplicable a las olas que faltan:** un test que REPLICA la
+    lógica que quiere vigilar no es un guardián. Antes de cerrar una unidad, romper el sistema a
+    propósito y comprobar que el test cae. Pasó dos veces seguidas (`0b` lo hizo bien por
+    instrucción; `1b` no, y la mutación lo destapó).
   - **Gates humanos: CERRADOS (2026-07-31), nada queda bloqueado. El plan tiene SIETE olas.**
     G1 quedó en **G1-A** (Transform previsualiza el resultado antes de aplicarlo; el panel es un
     modo nuevo de `ui/hud_widget.py`, que ya existe). Los disparadores de smart commands llevan
@@ -561,6 +576,20 @@
   - Pendiente manual (Johann): conectar desde Claude Code vía .mcp.json en una sesión nueva y consultar una reunión real.
 
 ## Decisiones (append-only)
+- 2026-07-31 **El prefijo de los smart commands se queda solo en "signo"** (commit 3865dc5, estado:
+  aceptada). El plan ofrecía `signo` / `puntuación`; se cae el segundo porque es una palabra con
+  significado genérico real en español ("revisemos la puntuación coma por coma"), o sea que
+  reintroduce el falso positivo que el prefijo existe para eliminar. Quitarlo NO cuesta ninguna
+  capacidad: todo lo que se decía con "puntuación X" se dice con "signo X". Johann, en su decisión
+  original, solo usó "signo". Queda como test negativo. Detalle: `CLAUDE.md` sección 20.
+  : gatillo Ola 1, hallazgo del ejecutor : @sonnet-5 (hallazgo) + @opus-5 (decisión)
+- 2026-07-31 **Un test que replica la lógica que vigila NO es un guardián** (commit 058699a, estado:
+  aceptada, aplica a todo el plan). Los primeros tests del cableado de `1b` replicaban el bloque
+  dentro del test: con la pasada COMPLETAMENTE desactivada la suite seguía verde en 870. Regla que
+  se adopta para las olas que faltan: antes de cerrar una unidad, romper el sistema a propósito y
+  comprobar que el test cae. Corolario operativo: la mutación NO se revierte con `git checkout` si
+  el archivo tiene trabajo sin commitear (se pierde también ese trabajo, pasó).
+  : gatillo verificación de 1b : @opus-5
 - 2026-07-31 **Contrato del pipeline de texto, tres ejes y no solo el orden** (commits 40ca392 +
   bfba5c3, estado: aceptada). Las 5 pasadas que editan el texto entre el backend y el pegado quedan
   gobernadas por ORDEN + ALCANCE + PRESUPUESTO de latencia. Lo que se decidio y no se re-litiga:
