@@ -170,12 +170,40 @@ la diferencia entre "utilizable" y "no utilizable" para un modelo que hoy nadie 
 coinciden exacto o casi exacto. **En el clip de 60s (que coincide con el orden de magnitud de
 `CHUNK_SECONDS=60` de producción), el texto diverge de forma notable**, y más aún en `float32`
 (hasta 554 caracteres distintos de 746, en `medium`) que en `int8`/`int8_float32` (183
-caracteres distintos). No hay una explicación barata verificada para el porqué (candidatos sin
-confirmar: acumulación de deriva numérica a lo largo de más pasos de decodificación, o
-segmentación de VAD ligeramente distinta entre dispositivos en audio largo); se declara como
-límite, no como explicación. **Consecuencia práctica:** si 7b se construye, conviene medir esta
+caracteres distintos). **La causa de esta divergencia SÍ está confirmada** (ver la sección
+siguiente, "Control de auto-consistencia"): es un efecto real del DISPOSITIVO, no inestabilidad
+del modelo en audio largo. **Consecuencia práctica:** si 7b se construye, conviene medir esta
 divergencia específicamente en clips largos antes de lanzarlo a producción, y preferir
 `compute_type="int8"` (la opción que menos diverge de lo que el usuario ya conoce).
+
+## Control de auto-consistencia: ¿el dispositivo diverge, o el modelo diverge de sí mismo?
+
+La sección anterior atribuía la divergencia de texto a 60s al DISPOSITIVO sin haber medido si
+CPU-vs-CPU ya diverge por cuenta propia sobre audio largo (deriva de VAD/decodificación); sin ese
+control, "diverge por el dispositivo" y "el modelo es inestable en audio largo" son
+indistinguibles, y llevan a decisiones distintas para 7b. Control añadido con el flag
+`--self-consistency` (`tests/bench_local_backend.py`, modelo `small`): cada config
+(`cpu_int8`, `cuda_int8`) se carga desde cero DOS VECES (dos procesos de modelo independientes,
+no la misma instancia) y se transcribe el MISMO clip; se compara el texto de esas dos corridas
+consigo mismo, con la misma métrica de `SequenceMatcher` ya usada arriba.
+
+| Clip | CPU vs CPU (self) | CUDA vs CUDA (self) | CPU vs CUDA (cross-device, de la tabla arriba) |
+|---|---:|---:|---:|
+| 30s | ratio 1.0 (IDÉNTICO) | ratio 1.0 (IDÉNTICO) | ratio 0.9978 |
+| 60s | ratio 1.0 (IDÉNTICO) | ratio 1.0 (IDÉNTICO) | ratio 0.82 |
+
+**Conclusión de atribución, `[Verificado]`:** CPU es perfectamente reproducible consigo misma (2
+cargas independientes, texto IDÉNTICO) y CUDA también lo es (2 cargas independientes, texto
+IDÉNTICO); ninguno de los dos dispositivos es internamente inestable en audio largo. Como ambos
+son 100% auto-consistentes y solo divergen entre sí (0.82 a 60s, prácticamente sin divergencia a
+30s), **la divergencia de 60s es un efecto REAL del dispositivo** (CPU y GPU calculan la
+mel-spectrograma/atención con caminos numéricos distintos: no asociatividad de punto flotante,
+distinto orden de operaciones en las GEMM, y esa diferencia se acumula lo suficiente en ~60s de
+audio como para hacer que el decodificador tome una rama distinta en algún punto de la secuencia),
+no inestabilidad del modelo consigo mismo. **Esto no cambia el veredicto de 7b** (CUDA sigue
+ganando en latencia de forma decisiva), pero sí confirma que la elección de `compute_type` en 7b
+importa para la fidelidad del texto en chunks largos, y que ese riesgo es real, no un fantasma
+estadístico.
 
 ## VRAM y contexto de la máquina durante la medición
 

@@ -42,6 +42,17 @@ docs/benchmarks/local-backend-gpu-2026-08-01.md):
   solo el promedio.
 - Comparacion de TEXTO entre CPU-int8 y cada config CUDA: coincidencia
   exacta o diff de caracteres (ahora si es significativa: hay habla real).
+
+CORRECCION 2026-08-01 (control de auto-consistencia, `--self-consistency`):
+la seccion de coincidencia de texto reportaba divergencia CPU-vs-CUDA a 60s
+(ratio ~0.8) atribuyendola implicitamente al DISPOSITIVO, sin haber medido
+si CPU-vs-CPU (dos cargas independientes, mismo audio) ya diverge parecido
+por cuenta propia (deriva de VAD/decodificacion en audio largo, no del
+dispositivo). El flag `--self-consistency` corre cada config (cpu_int8,
+cuda_int8) DOS VECES con el modelo recargado desde cero sobre los clips de
+30s y 60s, y compara el texto de esas dos corridas consigo mismo. Sin este
+control, "CPU vs CUDA diverge" y "el modelo diverge de si mismo en audio
+largo" son indistinguibles, y son dos conclusiones distintas para 7b.
 """
 import argparse
 import io
@@ -290,6 +301,46 @@ def text_agreement(a: str, b: str) -> dict:
 
 
 # ---------------------------------------------------------------------
+# Control de auto-consistencia: ¿el dispositivo diverge, o el modelo diverge
+# de si mismo en audio largo? (ver correccion 2026-08-01 en el docstring)
+# ---------------------------------------------------------------------
+
+SELF_CONSISTENCY_DURS = [30, 60]
+SELF_CONSISTENCY_CONFIGS = ["cpu_int8", "cuda_int8"]
+
+
+def run_self_consistency(model_size: str, models_dir: str, clips: dict[int, str]) -> dict:
+    """Corre cada config de SELF_CONSISTENCY_CONFIGS DOS VECES (modelo
+    recargado desde cero entre las dos, no la misma instancia) sobre cada
+    clip de SELF_CONSISTENCY_DURS, y compara el texto de esa config CONSIGO
+    MISMA. Es el control que faltaba: sin esto, "CPU vs CUDA diverge a 60s"
+    no distingue si la causa es el dispositivo o la inestabilidad propia del
+    modelo en audio largo (deriva de VAD/decodificacion), y las dos causas
+    llevan a decisiones distintas para la unidad 7b.
+    """
+    cfg_by_name = dict(CONFIGS)
+    out = {}
+    print("=== Control de auto-consistencia (misma config, 2 cargas independientes) ===")
+    for name in SELF_CONSISTENCY_CONFIGS:
+        cfg = cfg_by_name[name]
+        out[name] = {}
+        for dur in SELF_CONSISTENCY_DURS:
+            path = clips[dur]
+            texts = []
+            for _run_i in range(2):
+                model, _load_s = load_model(model_size, models_dir, cfg)
+                text, _dt = transcribe_timed(model, path)
+                texts.append(text)
+                del model
+            agr = text_agreement(texts[0], texts[1])
+            out[name][dur] = {"agreement": agr, "texts": texts}
+            flag = "IDENTICO" if agr["identico"] else f"ratio={agr['ratio']} chars_distintos={agr['chars_distintos']}"
+            print(f"  {name} clip {dur:>2}s (corrida A vs corrida B, mismo dispositivo): {flag}")
+    print()
+    return out
+
+
+# ---------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------
 
@@ -297,6 +348,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default="small", choices=["small", "medium"])
     ap.add_argument("--video", default=DEFAULT_VIDEO, help="Video/audio con habla real en espanol")
+    ap.add_argument("--self-consistency", action="store_true",
+                     help="Corre el control de auto-consistencia (cpu_int8/cuda_int8 x2, clips 30/60s)")
     args = ap.parse_args()
 
     models_dir = _get_models_dir()
@@ -415,6 +468,28 @@ def main() -> int:
             print(f"  {name:>20} vs cpu_int8, clip {dur:>2}s: {flag}")
     print()
 
+    self_consistency = None
+    if args.self_consistency:
+        self_consistency = run_self_consistency(args.model, models_dir, clips)
+        print("=== Conclusion de atribucion (self-consistency vs cross-device) ===")
+        for dur in SELF_CONSISTENCY_DURS:
+            cross = agreement.get("cuda_int8", {}).get(dur, {})
+            cross_ratio = cross.get("ratio", 1.0 if cross.get("identico") else None)
+            cpu_self = self_consistency.get("cpu_int8", {}).get(dur, {}).get("agreement", {})
+            cuda_self = self_consistency.get("cuda_int8", {}).get(dur, {}).get("agreement", {})
+            cpu_self_ratio = cpu_self.get("ratio", 1.0 if cpu_self.get("identico") else None)
+            cuda_self_ratio = cuda_self.get("ratio", 1.0 if cuda_self.get("identico") else None)
+            print(f"  clip {dur}s: cross-device (cpu_int8 vs cuda_int8) ratio={cross_ratio}  |  "
+                  f"cpu_int8 self ratio={cpu_self_ratio}  |  cuda_int8 self ratio={cuda_self_ratio}")
+            if cpu_self_ratio is not None and cross_ratio is not None:
+                if cpu_self_ratio <= cross_ratio + 0.05:
+                    print(f"    -> clip {dur}s: CPU-vs-CPU ya diverge tanto como CPU-vs-CUDA: "
+                          "la inestabilidad es del MODELO en audio largo, no del dispositivo.")
+                else:
+                    print(f"    -> clip {dur}s: CPU-vs-CPU es mas estable que CPU-vs-CUDA: "
+                          "SI hay un efecto real del DISPOSITIVO.")
+        print()
+
     print(f"Estado GPU al terminar: {nvidia_smi_snapshot()}")
     print()
 
@@ -441,7 +516,8 @@ def main() -> int:
     dump_path = os.path.join(workdir, "resultados.json")
     with open(dump_path, "w", encoding="utf-8") as f:
         json.dump({"results": results, "agreement": agreement, "texts": texts, "model": args.model,
-                   "cpu_threads": CPU_THREADS}, f, indent=2, ensure_ascii=False)
+                   "cpu_threads": CPU_THREADS, "self_consistency": self_consistency},
+                  f, indent=2, ensure_ascii=False)
     print(f"\nJSON crudo (temporal, para pegar en el reporte): {dump_path}")
 
     return 0
