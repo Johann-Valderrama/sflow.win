@@ -9,7 +9,7 @@
 |---|---|---|---|---|
 | Ejecutar una ola suelta | Cuando quieras avanzar una sola pieza | `Lee docs/PLAN-DICTADO-2026-07-31.md y ejecuta el Kickoff Ola <N>. Sigue sus instrucciones al pie de la letra, incluido el auto-check de modelo.` | el director en cuota | H |
 | Ejecutar todo seguido | Cuando tengas una tarde | `Lee docs/PLAN-DICTADO-2026-07-31.md y actúa como ORQUESTADOR AUTÓNOMO según su sección "Kickoff Orquestador".` | el director en cuota | H |
-| ✅ Gates humanos | Respondidos (2026-07-31) | **G1-A** previsualizar antes de aplicar · **G2-D** PWA (reemplazó a G2-A tras la evaluación) · disparadores con prefijo `signo`. Ninguna ola queda bloqueada por un humano | - | - |
+| ✅ Gates humanos | Cerrados (2026-07-31) | **G1-A** previsualizar antes de aplicar · **G2-C** el dashboard se queda en el navegador, la Ola 6 se ELIMINÓ · disparadores con prefijo `signo`. Nada bloqueado por un humano | - | - |
 
 **Ruteo por régimen (regla, no modelo fijo):** dirige el mejor modelo en cuota de la suscripción.
 Ejecutores baratos (Sonnet/Haiku) para lo mecánico; el modelo fuerte del régimen solo donde la
@@ -34,7 +34,6 @@ upstream: va de menor a mayor riesgo, y lo que ya está medio construido va ante
 | 3 | Transform sobre selección | Acotado por G1-A: el resultado se previsualiza, no se aplica solo | Ola 0 |
 | 4 | Snippets | Ninguno | - |
 | 5 | Command Mode (voz + selección) | El mismo de la Ola 3, con la misma previsualización | Ola 3 |
-| 6 | Que se sienta una app (PWA) | Ninguno; 6c abre superficie de red y queda con gate | - |
 | 7 | GPU para el backend local | Ninguno; se decide con un número | - |
 
 **Dependencias reales, corregidas tras el debate adversarial (objeción A3):**
@@ -144,13 +143,13 @@ actual, así que es la unidad `3z` y se diseña antes de escribir código.
 
 </details>
 
-## GATE G2: REABIERTO Y RESUELTO (2026-07-31) → **G2-D, PWA**
+## GATE G2: CERRADO (2026-07-31) → **G2-C, se queda en el navegador**
 
-**La Ola 6 queda DESBLOQUEADA, con otra solución.** Johann eligió primero G2-A (Hub nativo en Qt)
-y la evaluación posterior trajo tres datos que no tenía y una CUARTA opción que no estaba en el
-menú: convertir el dashboard en PWA. Da la ventana propia sin barra de direcciones que buscaba,
-conserva la interfaz que ya existe, no mete Chromium en el `.exe` y sirve el paso 2 de su propio
-roadmap. El detalle y la evidencia están en la Ola 6.
+**La Ola 6 se ELIMINÓ.** Pasó por tres posiciones en un día: Hub nativo en Qt, luego PWA tras la
+evaluación, y finalmente ninguna de las dos, cuando Johann trajo el dato que faltaba (quiere una
+app en App Store y Play Store, y una PWA no graba con la pantalla apagada). Eso dejó ver que
+PyQt6 tampoco publica en tiendas, o sea que la disputa nunca fue sobre el móvil. Decidida por
+mérito de escritorio, gana el navegador. El detalle está en la sección que reemplazó a la Ola 6.
 
 <details>
 <summary>Opciones que se evaluaron y la corrección de premisa (registro, ya decidido)</summary>
@@ -352,38 +351,39 @@ existe. Una sola unidad, `Sonnet.M`, con la misma verificación de dos lentes de
 
 ---
 
-## Ola 6: que se sienta una app (G2-D: PWA, reemplaza al Hub nativo)
+## La Ola 6 SE ELIMINÓ (G2-C: el dashboard se queda en el navegador)
 
-**G2 se REABRIÓ y se resolvió distinto tras la evaluación del 2026-07-31.** Estaba en G2-A (Hub
-nativo en Qt) y pasa a **G2-D: convertir el dashboard actual en PWA**. La opción no existía cuando
-se decidió; salió de consultar el cerebro, que sí tenía investigación al respecto
-(`pwa-distribucion-movil`, biblioteca de investigación, fuentes F112/F115): si la web se ve bien
-en el navegador del teléfono, **ya tienes el 70-80% de la app móvil**, y se instala con tres clics
-sin reescribir nada en un framework nativo.
+**Decisión final de Johann, 2026-07-31.** Este plan tiene siete olas, no ocho. No hay ola de
+interfaz.
 
-Una PWA instalada en Windows **abre en su propia ventana, sin pestañas ni barra de direcciones**.
-O sea que da la sensación de app de verdad que se buscaba con el Hub, conservando el 100% de la
-interfaz que ya existe y sin meter Chromium en el `.exe`.
+**Cómo se llegó aquí, en tres movimientos, porque la conclusión sola engaña.** Primero eligió el
+Hub nativo en Qt. La evaluación lo reabrió con tres datos que no tenía y propuso PWA. Y entonces
+él trajo el dato que faltaba y que tumba a las dos: **quiere una app de verdad en App Store y
+Play Store**, y una PWA no puede grabar con la pantalla apagada (en iOS la ejecución se suspende
+al bloquear; en Android tampoco tiene el servicio en primer plano que necesita un grabador).
 
-Los tres datos medidos que hundieron a G2-A:
+Lo que eso deja al descubierto: **PyQt6 tampoco publica en las tiendas.** O sea que la disputa
+entre Hub nativo y PWA nunca fue una decisión sobre el móvil. Las dos eran decisiones sobre cómo
+se siente la app en Windows, y se habían encuadrado mal como si una fuera el puente al teléfono.
 
-- **Contradice el roadmap propio.** La decisión D1:B (`PROGRESS.md:96-102`, 2026-07-12) puso "app
-  móvil" como paso 2, y esa fue la justificación escrita para reorganizar el frontend web hace tres
-  semanas. Un Hub en PyQt6 es Windows y punto.
-- **El tamaño real no eran 1.118 líneas.** La interfaz a reescribir son **3.916** de plantillas más
-  1.405 de blueprints; el ejemplo del upstream cubre una app de solo dictado, sin panel de reunión
-  en vivo ni métricas.
-- **Su mejor argumento estaba sin verificar.** El `.exe` "más liviano" se compara contra un binario
-  que **nunca se ha construido** y que ya pesaría ~900 MB (`docs/PENDIENTES.md:5-19`).
+Decidida solo por su mérito de escritorio, gana el navegador: funciona hoy, cuesta cero, y el
+esfuerzo se va entero a las siete olas que sirven la meta de este plan.
 
-Y un riesgo que nadie había nombrado: reescribir en Qt toca el orden de imports marcado
-**"no mover"** por un crash nativo de OpenMP (`docs/PENDIENTES.md:95`).
+**Lo que queda anotado, sin fecha y sin ola:**
 
-| Unidad | Qué | Dificultad | Ejecutar con | Por qué | Depende de | Escribe | Verifica | Si falla |
-|---|---|---|---|---|---|---|---|---|
-| 6a | Manifest + iconos + service worker mínimo, servidos por Flask; instalable desde Chrome/Edge | Baja | Sonnet.M | Es el patrón documentado en el cerebro; el trabajo real es el manifest y los iconos, no la app | - | `web/static/`, `web/blueprints/pages.py`, `web/templates/` | `JUICIO: ¿el navegador ofrece "Instalar" y la ventana abre sin barra de direcciones?` | REINTENTO |
-| 6b | Pasada mobile-first del dashboard a ~375px (hoy solo hay 2 breakpoints) | Media | Sonnet.M | Es la mitad que decide si el 70-80% del cerebro se cumple o no; regla `html-smartphone-ready-por-defecto` de OPS | 6a | `web/templates/dashboard.html`, `reunion.html` | `JUICIO: ¿se usa de verdad en 375px, sin scroll horizontal?` | REINTENTO |
-| 6c | **SIN DISEÑAR**: llegar al teléfono exige cambiar el bind de `127.0.0.1` (`web/server.py:95`) y apoyarse en el token de sesión ya construido. Merece su propia decisión, no se improvisa | - | - | Abrir el servidor más allá de loopback es superficie de red nueva, aunque el token ya exista | 6b | - | - | GATE |
+- **Ventana propia en el escritorio.** Si algún día importa la sensación de app, la PWA sigue
+  siendo el camino barato (manifest más iconos, medio día, ventana sin barra de direcciones en
+  Windows). Es mejora de escritorio, **no estrategia móvil**, y esa distinción es justo la que
+  se pagó por aprender aquí.
+- **La app de tienda es otro producto, no una ola.** El activo que de verdad transiciona no es la
+  interfaz, es la **API**: cualquier app de tienda le habla a un servidor, y de eso ya hay
+  blueprints de Flask y un servidor MCP. Antes del framework hay una pregunta de arquitectura que
+  lo decide todo: **contra qué servidor habla ese teléfono**, si hoy Vflow es un servidor local en
+  loopback y una app publicada no puede depender de que el portátil esté encendido.
+- **No tenemos investigación de ese camino.** El cerebro solo tiene `pwa-distribucion-movil`, que
+  explícitamente evita los frameworks nativos. Sobre React Native, Flutter, Capacitor, publicar en
+  las dos tiendas o cómo se captura audio en segundo plano en cada plataforma: cero. Queda como
+  fila SIN DISEÑAR en el carril A4 del plan macro de OPS.
 
 **La ventana nativa NO se descarta, se saca de aquí.** Si algún día se quiere, merece su propia
 sesión de diseño con el roadmap del móvil encima. Referencia leíble para ese día:
@@ -439,9 +439,9 @@ orquestación que corresponda a tu modelo.
 
 Ejecuta las olas EJECUTABLES en orden de dependencias. La Ola 0 va SIEMPRE PRIMERO: sin
 ella las Olas 1 y 4 se pisan. Después, sin gate: Ola 1, luego Ola 4 (la 4 depende de 1b,
-NO las lances en paralelo), y las Olas 2 y 7 en cualquier momento. Los gates YA están respondidos (G1-A previsualizar, G2-D PWA, disparadores con prefijo),
-así que no queda ninguna ola bloqueada por un humano. Excepción: la unidad 6c (abrir el bind
-más allá de loopback) tiene gate propio y NO se ejecuta sin respuesta.
+NO las lances en paralelo), y las Olas 2 y 7 en cualquier momento. Los gates YA están cerrados (G1-A previsualizar, G2-C navegador, disparadores con prefijo),
+así que no queda nada bloqueado por un humano. El plan tiene SIETE olas: la 6 se elimino, no
+existe ninguna ola de interfaz.
 
 Reglas: 1 unidad = 1 commit local, sin push. Máx 2 reintentos por unidad; al tercero, gate.
 Las unidades que tocan core/transcriber.py van EN SERIE (hotspot compartido de las Olas 1 y
@@ -480,3 +480,25 @@ descartada antes con motivo escrito; el plan cumple al pie de la letra la condic
 le puso a Transform; respeta la invariante del filtro de alucinaciones antes del diccionario; y su
 meta declarada corrige una deriva real, porque las últimas catorce olas fueron casi todas de
 reuniones.
+
+### Nota que SUPERSEDE el hallazgo E5 (mismo día, después de la evaluación)
+
+E5 se registró arriba con su desenlace de ese momento: G2-A caía y ganaba G2-D (PWA). **Ese
+desenlace ya no es el vigente**, y la línea de arriba se conserva sin reescribir porque es un
+registro fechado.
+
+Lo que pasó después: Johann trajo el dato que ni el atacante ni la evaluación tenían, y es un dato
+sobre el PRODUCTO, no sobre el código. **Quiere una app publicada en App Store y Play Store**, y
+una PWA no puede grabar con la pantalla apagada (en iOS la ejecución se suspende al bloquear; en
+Android falta el servicio en primer plano de un grabador). Al mirarlo con eso encima apareció que
+**PyQt6 tampoco publica en tiendas**, así que la disputa entre las dos opciones nunca decidió nada
+del móvil: las dos eran decisiones sobre Windows.
+
+**Desenlace vigente: G2-C, y la Ola 6 se elimina.** Ver la sección que la reemplazó.
+
+**La lección de método, que vale más que la decisión:** la evaluación hizo bien en reabrir con
+datos medidos, pero se quedó a mitad de camino porque **midió el CÓMO y no preguntó el PARA QUÉ**.
+Tres pasadas (plan, ataque, evaluación) discutieron la implementación de una ventana sin que
+nadie preguntara qué tenía que hacer esa ventana en un teléfono. El dato que resolvió todo no
+estaba en el código ni en la historia del repo: estaba en la cabeza de Johann, y bastaba
+preguntarle antes de traerle tres opciones técnicas.

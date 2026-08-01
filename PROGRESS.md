@@ -132,12 +132,18 @@
     Ola 0.` La Ola 0 va primero siempre (fija el orden canónico de las pasadas de texto; sin ella
     las Olas 1 y 4 se pisan). Modelo: `Fable.H` u `Opus.H`, indistinto. Después de la 0, ejecutables
     sin gate: Ola 1, luego Ola 4 (depende de `1b`, NO en paralelo), y Olas 2 y 7 cuando se quiera.
-  - **Gates humanos: RESPONDIDOS (2026-07-31), ninguna ola queda bloqueada.** G1 quedó en
-    **G1-A** (Transform previsualiza el resultado antes de aplicarlo; el panel es un modo nuevo
-    de `ui/hud_widget.py`, que ya existe). G2 se **reabrió** tras la evaluación y quedó en
-    **G2-D: PWA**, no en el Hub nativo de Qt. Y por decisión de Johann los disparadores de smart
-    commands llevan prefijo (`"signo coma"`, no `"coma"`). Única excepción con gate propio: la
-    unidad `6c`, abrir el bind del servidor más allá de loopback.
+  - **Gates humanos: CERRADOS (2026-07-31), nada queda bloqueado. El plan tiene SIETE olas.**
+    G1 quedó en **G1-A** (Transform previsualiza el resultado antes de aplicarlo; el panel es un
+    modo nuevo de `ui/hud_widget.py`, que ya existe). Los disparadores de smart commands llevan
+    **prefijo** (`"signo coma"`, no `"coma"`), decisión de Johann.
+  - **G2 pasó por tres posiciones el mismo día y terminó en G2-C: el dashboard se queda en el
+    navegador y la Ola 6 se ELIMINÓ.** Primero Hub nativo en Qt; la evaluación lo reabrió con tres
+    datos medidos y propuso PWA; y entonces Johann trajo el dato que faltaba: **quiere una app en
+    App Store y Play Store**, y una PWA no graba con la pantalla apagada. Eso dejó ver que **PyQt6
+    tampoco publica en tiendas**, o sea que esa disputa nunca decidió nada del móvil. Decidida por
+    mérito de escritorio, gana el navegador. La app de tienda es otro producto, no una ola: su
+    activo de transición es la API, no la interfaz, y antes del framework hay que resolver contra
+    qué servidor habla el teléfono. Investigación encolada en el carril A4 del plan macro de OPS.
   - **Segunda evaluación aplicada (2026-07-31)**, con dos exploradores read-only de focos
     ortogonales al del ataque adversarial. Encontró un defecto GRAVE que ninguna pasada anterior
     podía ver: la unidad `1b` cableaba en `core/transcriber.py`, que comparten reuniones y
