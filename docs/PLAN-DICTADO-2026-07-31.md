@@ -594,6 +594,34 @@ que el plan no preveía:
   `paste_text` respetaba uno explícito) pero ninguno afirmaba que el pegado las USARA. Un test de las
   piezas no vigila que alguien las conecte, y eso se ve mutando, nunca leyendo.
 
+### Lo que costó el PRIMER USO REAL, y por qué vale más que la ola entera
+
+Johann probó AltGr+X el mismo día en Chrome, con texto seleccionado, y le salió *"No hay texto
+seleccionado"*. Cuatro commits de arreglo después (`323a951`, `23bc8e8`, `341e046` y el registro de
+esto), el saldo son tres lecciones que ninguna verificación previa había podido dar:
+
+1. **La causa se MIDIÓ, no se dedujo** (banco con Notepad y selección real): con los modificadores
+   libres la captura devuelve `ok`; con AltGr presionado devuelve `empty`. El repo ya tenía la
+   explicación escrita hacía meses en `core/hotkey.py` (*"En Windows, AltGr genera internamente
+   Ctrl+Alt"*), así que el atajo dispara en el PRESS y el Ctrl+C sintético llega como Ctrl+Alt+C.
+2. **El primer arreglo era peor que el bug, y lo dijeron DOS auditores de lentes opuestos
+   convergiendo en el mismo punto.** Soltaba los modificadores a la fuerza; esos releases los ve el
+   propio listener de Vflow, dejaba `_alt_gr_held` en False con el usuario aún sosteniendo la tecla,
+   y así la SEGUNDA pulsación del atajo no emitía nada (sin mensaje siquiera) y un dictado en curso
+   se podía terminar solo. Se retiró entero: hoy solo se ESPERA y, si el usuario no suelta, se
+   aborta diciéndoselo. **Tocar el estado del teclado de todo el sistema para arreglar un problema
+   de una feature es subir el blast radius muchísimo más de lo que vale.**
+3. **El segundo par de auditores encontró cuatro cosas más**, la peor medida con el
+   `HotkeyListener` real: el Ctrl+V del pegado mata en silencio un dictado con Ctrl+Alt en curso.
+   Más dos hilos de captura compitiendo por el estado global, y el prompt elegido viviendo en un
+   atributo compartido.
+
+**Y la lección de método, que es la que se repite:** en esta ola pasó TRES veces que algo parecía un
+guardián y no lo era. Un test de las dos piezas que no comprueba que alguien las conecte; un test
+que parcheaba la clase cuando el objeto ya había atado sus métodos; y un script de mutación que
+murió entre escribir y revertir, dejando el código mutado sin que nadie lo notara (hoy la reversión
+va en un `finally`). **La única cosa que las cazó a las tres fue MUTAR y mirar si el test cae.**
+
 **Verificación de la ola:** aquí SÍ hay error silencioso, así que verificador independiente
 read-only con este lente exacto: *"¿existe algún camino por el que la salida del LLM llegue a la
 ventana del usuario sin pasar por el control de G1?"*, más un segundo lente ortogonal barato:
