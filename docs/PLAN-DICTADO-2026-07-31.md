@@ -395,6 +395,31 @@ un prefijo opcional es una columna y una línea de matcher.
 | 4b | Matcher de disparador en **`main.py`**, junto a smart commands y bajo los mismos gates | Media | Sonnet.M | **CORREGIDA por la evaluación del 2026-07-31**, mismo motivo que `1b`: un disparador pronunciado por OTRA persona en una reunión no puede expandirse solo. Comparte punto con la Ola 1, así que el orden entre las dos se fija con un test | 4a, 1b | `core/snippets_matcher.py`, `main.py` | `SCRIPT: pytest` completo | REINTENTO |
 | 4c | Panel de gestión en el dashboard | Baja | Sonnet.L | Copia del panel de Diccionario que ya existe | 4b | `web/blueprints/`, `web/templates/dashboard.html` | `SCRIPT: pytest` completo | REINTENTO |
 
+**EJECUTADA el 2026-08-01**, tres commits: `e8a7162` (`4a`), `58ebcc7` (`4b`), `e284720` (`4c`),
+los tres @sonnet-5. Suite 873 → 970 pass, 0 fail.
+
+**Con `4b` se activaron los 5 tests de capa B que la Ola 0 escribió antes de que existieran sus
+pasadas, así que el contrato del pipeline de texto quedó COMPLETAMENTE ejecutable**, incluido el
+orden 3-antes-de-4 y el presupuesto de latencia del Eje 3.
+
+Decisiones tomadas al ejecutar:
+
+- **Los snippets NO llevan killswitch de entorno**, con razón: una tabla vacía ya es el apagado
+  natural y cada fila tiene su propio `enabled`. Es la diferencia real con la Ola 1, cuyas reglas son
+  fijas y no las elige el usuario. Una opción que no aporta un estado nuevo es superficie de balde.
+- **Entre disparadores donde uno es prefijo del otro gana el más largo**, y el determinismo no
+  depende del orden en que la base devuelva las filas.
+- **La normalización es COMPARTIDA** entre la tabla y el matcher (`normalize_trigger`, pública en
+  `db/database.py`). Con dos criterios distintos, la tabla aceptaría disparadores que el matcher
+  nunca encontraría, y ese fallo no se ve hasta que un usuario se pregunta por qué no dispara.
+- **El panel deja fuera `created_at`**: por sí solo no habilita ninguna decisión.
+
+**Límite declarado de la verificación de `4c`:** la captura de píxeles falló en los dos intentos (el
+del ejecutor y el del orquestador) porque el panel del navegador no está desplegado y no compone
+frames. Se sustituyó por medición de estado computado desde dos procesos independientes, que cubre
+la clase de bug que el repo ya pagó (una regla CSS por `#id` ganándole a `.hidden`), pero no es lo
+mismo que haberlo visto. Queda como la única pieza de esta ola sin ojo humano encima.
+
 **Verificación de la ola:** `NINGUNA: basta correr el código`, salvo el orden respecto a smart
 commands y diccionario, que lo fija el test de 4b.
 

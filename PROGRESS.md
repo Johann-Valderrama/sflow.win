@@ -148,12 +148,21 @@
     falso positivo que el prefijo mata), y los primeros tests de `1b` NO eran guardianes (replicaban
     la lógica en el test, así que con la pasada desactivada la suite seguía verde en 870; se detectó
     mutando `main.py` y se corrigió con asserts estructurales).
+  - **OLA 4 COMPLETA (2026-08-01, 3 commits, suite 873 → 970 pass / 0 fail).** `4a` (`e8a7162`):
+    tabla `snippets` con unicidad resuelta en el ESQUEMA (índice único sobre disparador normalizado)
+    y `normalize_trigger` pública, compartida con el matcher. `4b` (`58ebcc7`):
+    `core/snippets_matcher.py` cableado en el ancla que dejó `1b`, sin killswitch de entorno (una
+    tabla vacía ya es el apagado, y cada fila tiene su `enabled`), 2,65 ms medianos contra un
+    presupuesto de 15 ms. `4c` (`e284720`): panel en el dashboard copiando el de Diccionario, con el
+    aviso de cómo elegir el disparador en el formulario. **Con `4b` se activaron los 5 tests de capa
+    B de la Ola 0: el contrato del pipeline de texto quedó completamente ejecutable.** Límite
+    declarado: la captura de píxeles de `4c` falló en dos intentos (el panel del navegador no compone
+    frames en este entorno); se midió por estado computado desde dos procesos independientes.
   - **Next action:** ventana nueva con `Lee docs/PLAN-DICTADO-2026-07-31.md y ejecuta el Kickoff
-    Ola 4.` Modelo: `Opus.H` o `Fable.H`, indistinto. La Ola 4 ya está desbloqueada (`4b` dependía de
-    `1b`, que está cerrada) y `main.py` tiene un comentario-ancla que marca el sitio exacto donde va
-    el matcher de snippets y por qué. Olas 2 y 7 disponibles en cualquier momento, independientes.
-    Los tests de capa B de `0b` asumen `snippets_matcher.expand_snippets(text)`: si `4b` usa otro
-    nombre no hay falso verde, pero hay que ajustar el test.
+    Ola 2.` (presets a la carta: el preset de lista, elegirlo a mano y hacerlo descubrible sin
+    cambiar el default). Modelo: `Opus.H` o `Fable.H`, indistinto. Alternativa igual de válida: la
+    **Ola 7** (medir GPU), independiente y la única del plan que se decide con un número. Quedan
+    esas dos, más la Ola 3 y la Ola 5, que son las de Transform y Command Mode.
   - **Lección de método de esta tanda, aplicable a las olas que faltan:** un test que REPLICA la
     lógica que quiere vigilar no es un guardián. Antes de cerrar una unidad, romper el sistema a
     propósito y comprobar que el test cae. Pasó dos veces seguidas (`0b` lo hizo bien por
@@ -576,6 +585,14 @@
   - Pendiente manual (Johann): conectar desde Claude Code vía .mcp.json en una sesión nueva y consultar una reunión real.
 
 ## Decisiones (append-only)
+- 2026-08-01 **Un snippet NO es una entrada de diccionario con texto largo** (commit d290ebe, estado:
+  aceptada). Responde el hallazgo E8. Razón decisiva, de ALCANCE: el diccionario corre en
+  `core/transcriber.py` para los TRES flujos, y un snippet no puede expandirse cuando el disparador
+  lo pronuncia otra persona en una reunión. Más: corregir no es expandir, y un snippet de un párrafo
+  quemaría el presupuesto de ~480 caracteres del prompt de vocabulario de Whisper. **Y la decisión
+  hermana, marcada REVISABLE por Johann: los snippets no llevan prefijo obligatorio**, porque la
+  frase la elige el usuario y un falso positivo se ve y se corrige en el acto; a cambio, el panel
+  avisa cómo elegirla. Detalle: plan, sección Ola 4. : gatillo Ola 4 : @opus-5
 - 2026-07-31 **El prefijo de los smart commands se queda solo en "signo"** (commit 3865dc5, estado:
   aceptada). El plan ofrecía `signo` / `puntuación`; se cae el segundo porque es una palabra con
   significado genérico real en español ("revisemos la puntuación coma por coma"), o sea que
