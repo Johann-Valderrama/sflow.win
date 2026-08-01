@@ -56,7 +56,9 @@ from core.recorder import AudioRecorder
 from core.transcriber import Transcriber
 from core.hotkey import HotkeyListener
 from core.meeting import MEETING
-from core.clipboard import paste_text, copy_text, save_frontmost_app, get_saved_exe
+from core.clipboard import (
+    paste_text, copy_text, save_frontmost_app, get_saved_exe, capture_selection,
+)
 from core import dictation_modes
 from core import smart_commands
 from core import snippets_matcher
@@ -627,6 +629,7 @@ class VflowApp(QObject):
     chunk_loss_warning = pyqtSignal(int)                 # generación; un chunk se perdió tras la gracia (unidad 0.2)
     transcription_fallback_notice = pyqtSignal(str)      # unidad 5.5: aviso de fallback de red Groq -> local
     dictation_manual_preset_consumed = pyqtSignal()       # unidad 2b: el preset manual armado se acaba de gastar
+    transform_ready = pyqtSignal(dict)                    # unidad 3c: resultado de core.transform.transform_text
 
     def __init__(self):
         """Inicializa componentes (recorder, transcriber, DB, hotkey, pill) y conecta señales."""
@@ -753,6 +756,12 @@ class VflowApp(QObject):
         self.hud.feedback_requested.connect(self._on_hud_feedback)
         self.hud.lost_requested.connect(self._on_lost_pressed)
         self.hud.ask_requested.connect(self._on_hud_ask)
+
+        # Modo Transform (unidad 3c). El pegado cuelga de transform_accepted y de
+        # nada más: es el control de G1-A hecho cableado.
+        self.hud.transform_accepted.connect(self._on_transform_accepted)
+        self.hud.transform_copy_original_requested.connect(self._on_transform_copy_original)
+        self.transform_ready.connect(self._on_transform_ready, Qt.ConnectionType.QueuedConnection)
 
     def start(self):
         """Inicia el listener de hotkeys y muestra la pill en estado idle."""
@@ -1371,6 +1380,87 @@ class VflowApp(QObject):
             logger.error("HUD: error en pregunta libre: %s", exc)
             res = {"ok": False, "error": str(exc)}
         self.lost_answer_ready.emit(res)
+
+    # ------------------------------------------------------------------
+    # Transform sobre selección (Ola 3 de PLAN-DICTADO, unidad 3c)
+    #
+    # G1-A: el resultado del modelo JAMÁS se pega solo. La única ruta es
+    #   capturar selección → HUD en modo Transform → el usuario acepta con Enter
+    #   → el HUD emite el texto → se pega.
+    # Por eso ``_transform_worker`` no llama a ``paste_text`` ni a ``copy_text``:
+    # el único que puede aplicar es ``_on_transform_accepted``, que solo corre
+    # cuando el panel emitió la señal, y el panel solo la emite si el usuario
+    # aceptó lo que estaba viendo. El resultado ni siquiera se guarda en este
+    # objeto: lo tiene el panel hasta que el usuario decide.
+    # ------------------------------------------------------------------
+
+    def start_transform(self, prompt_key: str):
+        """Dispara un Transform sobre lo que el usuario tenga seleccionado."""
+        from core import transform as _transform  # noqa: PLC0415 — perezoso
+
+        meta = _transform.PROMPTS.get(prompt_key)
+        if meta is None:
+            logger.warning("transform: prompt desconocido '%s'", prompt_key)
+            return
+
+        text, status = capture_selection()
+        if status != "ok":
+            self._notify_transform_capture_problem(status)
+            return
+
+        if not self._hud_visible:
+            self.hud.ensure_initial_geometry()
+            self.hud.show()
+            self._hud_visible = True
+        self.hud.enter_transform_mode(text, meta["label"])
+        threading.Thread(
+            target=self._transform_worker, args=(text, prompt_key), daemon=True
+        ).start()
+
+    def _notify_transform_capture_problem(self, status: str):
+        mensajes = {
+            "empty": "No hay texto seleccionado. Selecciona algo y vuelve a intentar.",
+            "too_long": "La selección es demasiado grande para transformarla.",
+            "failed": "No se pudo leer la selección de la aplicación en foco.",
+        }
+        if self.tray:
+            self.tray.showMessage(
+                "Vflow · Transform",
+                mensajes.get(status, "No se pudo capturar la selección."),
+                QSystemTrayIcon.MessageIcon.Warning,
+                3500,
+            )
+
+    def _transform_worker(self, text: str, prompt_key: str):
+        """Hilo daemon: la llamada al modelo es bloqueante (hasta
+        TRANSFORM_TIMEOUT_SECONDS). El resultado vuelve al hilo Qt por señal."""
+        from core import transform as _transform  # noqa: PLC0415
+
+        try:
+            res = _transform.transform_text(text, prompt_key)
+        except Exception as exc:  # noqa: BLE001 — transform_text no debería lanzar
+            logger.error("transform: fallo inesperado: %s", exc)
+            res = {"ok": False, "error": str(exc), "error_kind": "backend"}
+        self.transform_ready.emit(res)
+
+    @pyqtSlot(dict)
+    def _on_transform_ready(self, res: dict):
+        """Único destino del resultado del modelo: el panel. No pega nada."""
+        if res.get("ok"):
+            self.hud.show_transform_result(res.get("text") or "")
+        else:
+            self.hud.show_transform_error(str(res.get("error") or "Error desconocido."))
+
+    @pyqtSlot(str)
+    def _on_transform_accepted(self, text: str):
+        """El usuario aceptó lo que vio: recién ahora el texto toca su ventana."""
+        threading.Thread(target=self._paste_worker, args=(text,), daemon=True).start()
+
+    @pyqtSlot(str)
+    def _on_transform_copy_original(self, original: str):
+        """Tercera capa de reversión (unidad 3z): devolver el texto de antes al
+        portapapeles, para cuando la app destino no tenga un deshacer decente."""
+        copy_text(original)
 
     def _meeting_stop_worker(self):
         """Detiene la reunión en background (bloquea) y emite el resultado al hilo Qt."""

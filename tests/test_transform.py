@@ -458,3 +458,192 @@ class TestNoLogueaContenidoTransform:
         transform_mod.transform_text("CONFIDENCIAL-TRANSFORM-5521", "corregir")
         registrado = "\n".join(r.getMessage() for r in caplog.records)
         assert "CONFIDENCIAL-TRANSFORM-5521" not in registrado
+
+
+# ===========================================================================
+# Unidad 3c: el panel de previsualización (modo Transform del HUD)
+#
+# El lente de la ola es "¿existe algún camino por el que la salida del LLM
+# llegue a la ventana del usuario sin pasar por el panel?", así que estos tests
+# atacan por dos lados distintos: el COMPORTAMIENTO del panel con un widget Qt
+# real, y la ESTRUCTURA del cableado de main.py (que es donde un camino
+# alternativo podría aparecer sin que ningún test de comportamiento lo note).
+# ===========================================================================
+import inspect   # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    yield app
+
+
+@pytest.fixture
+def hud(qapp):
+    from ui.hud_widget import HudWidget
+
+    w = HudWidget()
+    yield w
+    w.deleteLater()
+
+
+class TestPanelPrevisualizacion:
+    def test_al_entrar_no_hay_nada_que_aplicar(self, hud):
+        hud.enter_transform_mode("texto original", "Corregir")
+        assert hud.is_transform_mode() is True
+        assert hud.transform_apply_btn.isEnabled() is False, (
+            "poder aplicar antes de que exista resultado dejaría aplicar a ciegas"
+        )
+
+    def test_aplicar_emite_el_texto_que_el_usuario_vio(self, hud):
+        emitido = []
+        hud.transform_accepted.connect(emitido.append)
+        hud.enter_transform_mode("original", "Corregir")
+        hud.show_transform_result("RESULTADO DEL MODELO")
+        hud._on_transform_apply()
+        assert emitido == ["RESULTADO DEL MODELO"]
+
+    def test_descartar_no_emite_nada_aplicable(self, hud):
+        aceptado, descartado = [], []
+        hud.transform_accepted.connect(aceptado.append)
+        hud.transform_discarded.connect(lambda: descartado.append(1))
+        hud.enter_transform_mode("original", "Corregir")
+        hud.show_transform_result("RESULTADO")
+        hud._on_transform_discard()
+        assert aceptado == []
+        assert descartado == [1]
+
+    def test_enter_aplica_y_esc_descarta(self, hud):
+        from PyQt6.QtCore import Qt as _Qt
+        from PyQt6.QtGui import QKeyEvent
+
+        emitido = []
+        hud.transform_accepted.connect(emitido.append)
+        hud.enter_transform_mode("original", "Corregir")
+        hud.show_transform_result("RESULTADO")
+        hud.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, _Qt.Key.Key_Return, _Qt.KeyboardModifier.NoModifier))
+        assert emitido == ["RESULTADO"]
+
+        descartado = []
+        hud.transform_discarded.connect(lambda: descartado.append(1))
+        hud.enter_transform_mode("original", "Corregir")
+        hud.show_transform_result("OTRO")
+        hud.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, _Qt.Key.Key_Escape, _Qt.KeyboardModifier.NoModifier))
+        assert descartado == [1] and emitido == ["RESULTADO"]
+
+    def test_un_error_del_modelo_no_deja_aplicar_nada(self, hud):
+        emitido = []
+        hud.transform_accepted.connect(emitido.append)
+        hud.enter_transform_mode("original", "Corregir")
+        hud.show_transform_error("el modelo falló")
+        assert hud.transform_apply_btn.isEnabled() is False
+        hud._on_transform_apply()
+        assert emitido == []
+
+    def test_aplicar_dos_veces_solo_aplica_una(self, hud):
+        emitido = []
+        hud.transform_accepted.connect(emitido.append)
+        hud.enter_transform_mode("original", "Corregir")
+        hud.show_transform_result("RESULTADO")
+        hud._on_transform_apply()
+        hud._on_transform_apply()
+        assert emitido == ["RESULTADO"], "el resultado se consume al aplicarlo"
+
+    def test_un_resultado_tardio_no_entra_si_ya_se_salio_del_modo(self, hud):
+        """El usuario descarta y el modelo responde después: ese texto no puede
+        aparecer en un panel que ya no está en modo Transform."""
+        hud.enter_transform_mode("original", "Corregir")
+        hud._on_transform_discard()
+        hud.show_transform_result("RESULTADO TARDÍO")
+        assert hud.transform_text_label.text() == ""
+
+    def test_salir_del_modo_borra_el_texto_de_la_memoria(self, hud):
+        """Unidad 3z: el crudo de un Transform vive en RAM y muere con el panel."""
+        hud.enter_transform_mode("TEXTO ORIGINAL DEL USUARIO", "Corregir")
+        hud.show_transform_result("RESULTADO")
+        hud.exit_transform_mode()
+        assert hud._transform_original is None
+        assert hud._transform_result is None
+        assert hud.transform_text_label.text() == ""
+
+    def test_copiar_original_devuelve_el_texto_de_antes(self, hud):
+        copiado = []
+        hud.transform_copy_original_requested.connect(copiado.append)
+        hud.enter_transform_mode("TEXTO ORIGINAL", "Corregir")
+        hud.show_transform_result("RESULTADO")
+        hud._on_transform_copy_original()
+        assert copiado == ["TEXTO ORIGINAL"]
+
+    def test_el_modo_oculta_el_panel_de_reunion_y_lo_devuelve(self, hud):
+        hud.enter_transform_mode("original", "Corregir")
+        assert hud._transform_section.isVisibleTo(hud) is True
+        assert hud._registro_section.isVisibleTo(hud) is False
+        hud.exit_transform_mode()
+        assert hud._transform_section.isVisibleTo(hud) is False
+        assert hud._registro_section.isVisibleTo(hud) is True
+
+    def test_no_se_tocan_los_flags_de_ventana_en_caliente(self, hud):
+        """Invariante pagada del HUD (cabecera de ui/hud_widget.py): jamás togglear
+        WindowDoesNotAcceptFocus. El modo Transform activa la ventana, no la
+        reconfigura."""
+        antes = hud.windowFlags()
+        hud.enter_transform_mode("original", "Corregir")
+        hud.show_transform_result("RESULTADO")
+        hud.exit_transform_mode()
+        assert hud.windowFlags() == antes
+
+
+class TestNoHayCaminoAlternativo:
+    """Guardianes ESTRUCTURALES sobre main.py: un test de comportamiento no puede
+    ver un camino que nadie escribió todavía, y el fallo de esta ola sería
+    exactamente ese (alguien pega el resultado sin pasar por el panel)."""
+
+    def _src(self, nombre):
+        import main
+
+        return inspect.getsource(getattr(main.VflowApp, nombre))
+
+    def test_el_worker_del_modelo_no_pega_ni_copia(self):
+        src = self._src("_transform_worker")
+        assert "paste_text" not in src
+        assert "copy_text" not in src
+
+    def test_el_slot_del_resultado_no_pega_ni_copia(self):
+        src = self._src("_on_transform_ready")
+        assert "paste_text" not in src
+        assert "copy_text" not in src
+        assert "show_transform_result" in src
+
+    def test_el_unico_que_pega_es_el_slot_de_aceptado(self):
+        src = self._src("_on_transform_accepted")
+        assert "_paste_worker" in src
+
+    def test_el_slot_de_aceptado_esta_conectado_a_la_senal_del_panel(self):
+        import main
+
+        src = inspect.getsource(main.VflowApp.__init__)
+        assert "self.hud.transform_accepted.connect(self._on_transform_accepted)" in src
+
+    def test_start_transform_abre_el_panel_antes_de_llamar_al_modelo(self):
+        src = self._src("start_transform")
+        assert src.index("enter_transform_mode") < src.index("_transform_worker")
+
+    def test_el_panel_solo_emite_aceptado_desde_el_boton_aplicar(self):
+        """En ui/hud_widget.py, transform_accepted.emit aparece UNA sola vez y es
+        dentro de _on_transform_apply, que exige un resultado ya mostrado."""
+        import ui.hud_widget as hw
+
+        fuente = inspect.getsource(hw)
+        assert fuente.count("transform_accepted.emit") == 1
+        apply_src = inspect.getsource(hw.HudWidget._on_transform_apply)
+        assert "transform_accepted.emit" in apply_src
+        assert "self._transform_result" in apply_src
+
+    def test_el_resultado_solo_lo_guarda_el_panel(self):
+        """main.py no se queda una copia del resultado en el objeto de la app: si
+        la tuviera, aparecería un segundo dueño del texto y con él un segundo
+        camino posible hacia el pegado."""
+        src = self._src("_on_transform_ready")
+        assert "self._transform" not in src
