@@ -128,10 +128,21 @@
 - [ ] **Plan nuevo y paralelo al PLAN-MEJORAS**: `docs/PLAN-DICTADO-2026-07-31.md` (commit 9bc8c99).
   8 olas, nacidas de auditar el upstream `daniel-carreon/sflow` desde OPS. Debate adversarial ya
   hecho y reconciliado dentro del propio documento (APROBAR CON CAMBIOS, 4 objeciones ALTAS).
+  - **OLA 0 COMPLETA (2026-07-31, 2 commits, suite 794 → 802 pass / 0 fail).** `0a` (`40ca392`,
+    @opus-5): el contrato de las 5 pasadas de texto vive ahora en `CLAUDE.md` sección 19, con sus
+    TRES ejes (orden, alcance, presupuesto de latencia) y no solo el orden, que era medio contrato.
+    Fija además qué guarda `raw_text` con el tradeoff escrito, para que `1b` y `4b` no inventen cada
+    uno el suyo. `0b` (`bfba5c3`, @sonnet-5 ejecutó, orquestador verificó aparte):
+    `tests/test_pipeline_texto.py`, 13 tests en dos capas (8 corren hoy, 5 se activan solos con
+    `find_spec` cuando lleguen las Olas 1 y 4). Los dos guardianes de alcance mockean SOLO la capa
+    de backend, así que el código real corre y una pasada colada en `core/transcriber.py` los hace
+    fallar. **Probados rompiendo el sistema a propósito:** mutación en `core/transcriber.py` → caen
+    esos dos tests y ningún otro, y se revirtió.
   - **Next action:** ventana nueva con `Lee docs/PLAN-DICTADO-2026-07-31.md y ejecuta el Kickoff
-    Ola 0.` La Ola 0 va primero siempre (fija el orden canónico de las pasadas de texto; sin ella
-    las Olas 1 y 4 se pisan). Modelo: `Fable.H` u `Opus.H`, indistinto. Después de la 0, ejecutables
-    sin gate: Ola 1, luego Ola 4 (depende de `1b`, NO en paralelo), y Olas 2 y 7 cuando se quiera.
+    Ola 1.` Modelo: `Opus.H` o `Fable.H`, indistinto. Después de la 1, sin gate: Ola 4 (depende de
+    `1b`, NO en paralelo con la 1), y Olas 2 y 7 cuando se quiera. Los tests de capa B de `0b`
+    asumen `smart_commands.apply_smart_commands(text)` y `snippets_matcher.expand_snippets(text)`:
+    si `1a`/`4b` usan otro nombre no hay falso verde, pero hay que ajustar el test.
   - **Gates humanos: CERRADOS (2026-07-31), nada queda bloqueado. El plan tiene SIETE olas.**
     G1 quedó en **G1-A** (Transform previsualiza el resultado antes de aplicarlo; el panel es un
     modo nuevo de `ui/hud_widget.py`, que ya existe). Los disparadores de smart commands llevan
