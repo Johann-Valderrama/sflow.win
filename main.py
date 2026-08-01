@@ -52,6 +52,7 @@ from PyQt6.QtGui import QIcon, QPixmap, QAction, QActionGroup
 from dotenv import set_key, unset_key
 from ui.pill_widget import PillWidget
 from ui.hud_widget import HudWidget
+from ui.transform_panel import TransformPanel
 from core.recorder import AudioRecorder
 from core.transcriber import Transcriber
 from core.hotkey import HotkeyListener
@@ -671,6 +672,7 @@ class VflowApp(QObject):
         self.hotkey = HotkeyListener()
         self.pill = PillWidget()
         self.hud = HudWidget()
+        self.transform_panel = TransformPanel()
         # Indicador de captura en vivo del HUD (¿me está escuchando?): el HUD lee
         # los niveles por canal lock-free con su propio timer. get_levels() no toca
         # el lock de MEETING (floats atómicos), así que el VU no genera contención.
@@ -769,9 +771,9 @@ class VflowApp(QObject):
 
         # Modo Transform (unidad 3c). El pegado cuelga de transform_accepted y de
         # nada más: es el control de G1-A hecho cableado.
-        self.hud.transform_accepted.connect(self._on_transform_accepted)
-        self.hud.transform_copy_original_requested.connect(self._on_transform_copy_original)
-        self.hud.transform_prompt_chosen.connect(self._on_transform_prompt_chosen)
+        self.transform_panel.accepted.connect(self._on_transform_accepted)
+        self.transform_panel.copy_original_requested.connect(self._on_transform_copy_original)
+        self.transform_panel.prompt_chosen.connect(self._on_transform_prompt_chosen)
         self.transform_ready.connect(self._on_transform_ready, Qt.ConnectionType.QueuedConnection)
         self.transform_capture_ready.connect(
             self._on_transform_capture_ready, Qt.ConnectionType.QueuedConnection
@@ -1489,8 +1491,7 @@ class VflowApp(QObject):
         if prompt_key is not None:
             self._start_transform(text, prompt_key)
             return
-        self._ensure_hud_visible()
-        self.hud.enter_transform_picker(
+        self.transform_panel.open_picker(
             text,
             [{"key": p["key"], "label": p["label"], "cuando": p["cuando"]}
              for p in _transform.list_prompts()],
@@ -1501,7 +1502,7 @@ class VflowApp(QObject):
         """El usuario eligió un prompt en el panel: arranca la transformación con
         el texto que el propio panel capturó (no se vuelve a leer la selección:
         el foco ya no está en su aplicación)."""
-        original = self.hud._transform_original
+        original = self.transform_panel._original
         if not original:
             return
         self._start_transform(original, prompt_key)
@@ -1547,8 +1548,7 @@ class VflowApp(QObject):
         if meta is None:
             logger.warning("transform: prompt desconocido '%s'", prompt_key)
             return
-        self._ensure_hud_visible()
-        self.hud.enter_transform_mode(text, meta["label"])
+        self.transform_panel.open_waiting(meta["label"])
         threading.Thread(
             target=self._transform_worker,
             args=(text, prompt_key, self._transform_gen),
@@ -1592,9 +1592,9 @@ class VflowApp(QObject):
             logger.info("transform: resultado de una solicitud vieja, descartado")
             return
         if res.get("ok"):
-            self.hud.show_transform_result(res.get("text") or "")
+            self.transform_panel.show_result(res.get("text") or "")
         else:
-            self.hud.show_transform_error(str(res.get("error") or "Error desconocido."))
+            self.transform_panel.show_error(str(res.get("error") or "Error desconocido."))
 
     @pyqtSlot(str)
     def _on_transform_accepted(self, text: str):

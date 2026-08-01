@@ -532,169 +532,119 @@ def qapp():
 
 
 @pytest.fixture
-def hud(qapp):
-    from ui.hud_widget import HudWidget
+def panel(qapp):
+    from ui.transform_panel import TransformPanel
 
-    w = HudWidget()
+    w = TransformPanel()
     yield w
+    w.close_panel()
     w.deleteLater()
 
 
 class TestPanelPrevisualizacion:
-    def test_al_entrar_no_hay_nada_que_aplicar(self, hud):
-        hud.enter_transform_mode("texto original", "Corregir")
-        assert hud.is_transform_mode() is True
-        assert hud.transform_apply_btn.isEnabled() is False, (
+    def test_al_entrar_no_hay_nada_que_aplicar(self, panel):
+        panel.open_waiting("Corregir", original="texto original")
+        assert panel.is_open() is True
+        assert panel.apply_btn.isEnabled() is False, (
             "poder aplicar antes de que exista resultado dejaría aplicar a ciegas"
         )
 
-    def test_aplicar_emite_el_texto_que_el_usuario_vio(self, hud):
+    def test_aplicar_emite_el_texto_que_el_usuario_vio(self, panel):
         emitido = []
-        hud.transform_accepted.connect(emitido.append)
-        hud.enter_transform_mode("original", "Corregir")
-        hud.show_transform_result("RESULTADO DEL MODELO")
-        hud._on_transform_apply()
+        panel.accepted.connect(emitido.append)
+        panel.open_waiting("Corregir", original="original")
+        panel.show_result("RESULTADO DEL MODELO")
+        panel._on_apply()
         assert emitido == ["RESULTADO DEL MODELO"]
 
-    def test_descartar_no_emite_nada_aplicable(self, hud):
+    def test_descartar_no_emite_nada_aplicable(self, panel):
         aceptado, descartado = [], []
-        hud.transform_accepted.connect(aceptado.append)
-        hud.transform_discarded.connect(lambda: descartado.append(1))
-        hud.enter_transform_mode("original", "Corregir")
-        hud.show_transform_result("RESULTADO")
-        hud._on_transform_discard()
+        panel.accepted.connect(aceptado.append)
+        panel.discarded.connect(lambda: descartado.append(1))
+        panel.open_waiting("Corregir", original="original")
+        panel.show_result("RESULTADO")
+        panel._on_discard()
         assert aceptado == []
         assert descartado == [1]
 
-    def test_enter_aplica_y_esc_descarta(self, hud):
+    def test_enter_aplica_y_esc_descarta(self, panel):
         from PyQt6.QtCore import Qt as _Qt
         from PyQt6.QtGui import QKeyEvent
 
         emitido = []
-        hud.transform_accepted.connect(emitido.append)
-        hud.enter_transform_mode("original", "Corregir")
-        hud.show_transform_result("RESULTADO")
-        hud.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, _Qt.Key.Key_Return, _Qt.KeyboardModifier.NoModifier))
+        panel.accepted.connect(emitido.append)
+        panel.open_waiting("Corregir", original="original")
+        panel.show_result("RESULTADO")
+        panel.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, _Qt.Key.Key_Return, _Qt.KeyboardModifier.NoModifier))
         assert emitido == ["RESULTADO"]
 
         descartado = []
-        hud.transform_discarded.connect(lambda: descartado.append(1))
-        hud.enter_transform_mode("original", "Corregir")
-        hud.show_transform_result("OTRO")
-        hud.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, _Qt.Key.Key_Escape, _Qt.KeyboardModifier.NoModifier))
+        panel.discarded.connect(lambda: descartado.append(1))
+        panel.open_waiting("Corregir", original="original")
+        panel.show_result("OTRO")
+        panel.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, _Qt.Key.Key_Escape, _Qt.KeyboardModifier.NoModifier))
         assert descartado == [1] and emitido == ["RESULTADO"]
 
-    def test_un_error_del_modelo_no_deja_aplicar_nada(self, hud):
+    def test_un_error_del_modelo_no_deja_aplicar_nada(self, panel):
         emitido = []
-        hud.transform_accepted.connect(emitido.append)
-        hud.enter_transform_mode("original", "Corregir")
-        hud.show_transform_error("el modelo falló")
-        assert hud.transform_apply_btn.isEnabled() is False
-        hud._on_transform_apply()
+        panel.accepted.connect(emitido.append)
+        panel.open_waiting("Corregir", original="original")
+        panel.show_error("el modelo falló")
+        assert panel.apply_btn.isEnabled() is False
+        panel._on_apply()
         assert emitido == []
 
-    def test_aplicar_dos_veces_solo_aplica_una(self, hud):
+    def test_aplicar_dos_veces_solo_aplica_una(self, panel):
         emitido = []
-        hud.transform_accepted.connect(emitido.append)
-        hud.enter_transform_mode("original", "Corregir")
-        hud.show_transform_result("RESULTADO")
-        hud._on_transform_apply()
-        hud._on_transform_apply()
+        panel.accepted.connect(emitido.append)
+        panel.open_waiting("Corregir", original="original")
+        panel.show_result("RESULTADO")
+        panel._on_apply()
+        panel._on_apply()
         assert emitido == ["RESULTADO"], "el resultado se consume al aplicarlo"
 
-    def test_un_resultado_tardio_no_entra_si_ya_se_salio_del_modo(self, hud):
+    def test_un_resultado_tardio_no_entra_si_ya_se_salio_del_modo(self, panel):
         """El usuario descarta y el modelo responde después: ese texto no puede
         aparecer en un panel que ya no está en modo Transform."""
-        hud.enter_transform_mode("original", "Corregir")
-        hud._on_transform_discard()
-        hud.show_transform_result("RESULTADO TARDÍO")
-        assert hud.transform_text_label.text() == ""
+        panel.open_waiting("Corregir", original="original")
+        panel._on_discard()
+        panel.show_result("RESULTADO TARDÍO")
+        assert panel.body.text() == ""
 
-    def test_salir_del_modo_borra_el_texto_de_la_memoria(self, hud):
+    def test_salir_del_modo_borra_el_texto_de_la_memoria(self, panel):
         """Unidad 3z: el crudo de un Transform vive en RAM y muere con el panel."""
-        hud.enter_transform_mode("TEXTO ORIGINAL DEL USUARIO", "Corregir")
-        hud.show_transform_result("RESULTADO")
-        hud.exit_transform_mode()
-        assert hud._transform_original is None
-        assert hud._transform_result is None
-        assert hud.transform_text_label.text() == ""
+        panel.open_waiting("Corregir", original="TEXTO ORIGINAL DEL USUARIO")
+        panel.show_result("RESULTADO")
+        panel.close_panel()
+        assert panel._original is None
+        assert panel._result is None
+        assert panel.body.text() == ""
 
-    def test_copiar_original_devuelve_el_texto_de_antes(self, hud):
+    def test_copiar_original_devuelve_el_texto_de_antes(self, panel):
         copiado = []
-        hud.transform_copy_original_requested.connect(copiado.append)
-        hud.enter_transform_mode("TEXTO ORIGINAL", "Corregir")
-        hud.show_transform_result("RESULTADO")
-        hud._on_transform_copy_original()
+        panel.copy_original_requested.connect(copiado.append)
+        panel.open_waiting("Corregir", original="TEXTO ORIGINAL")
+        panel.show_result("RESULTADO")
+        panel._on_copy_original()
         assert copiado == ["TEXTO ORIGINAL"]
 
-    def test_el_modo_oculta_el_panel_de_reunion_y_lo_devuelve(self, hud):
-        hud.enter_transform_mode("original", "Corregir")
-        assert hud._transform_section.isVisibleTo(hud) is True
-        assert hud._registro_section.isVisibleTo(hud) is False
-        hud.exit_transform_mode()
-        assert hud._transform_section.isVisibleTo(hud) is False
-        assert hud._registro_section.isVisibleTo(hud) is True
-
-    def test_el_selector_elige_prompt_con_el_numero(self, hud):
+    def test_el_panel_PUEDE_recibir_el_teclado(self, panel):
+        """El invariante que enseñó el primer uso real: si la ventana lleva
+        `WindowDoesNotAcceptFocus`, las teclas se van a la aplicación del usuario,
+        que TODAVÍA tiene el texto seleccionado, y pulsar "7" se lo REEMPLAZA. Por
+        eso este panel no puede ser el HUD (que lleva ese flag de forma permanente
+        y tiene prohibido quitárselo en caliente)."""
         from PyQt6.QtCore import Qt as _Qt
-        from PyQt6.QtGui import QKeyEvent
 
-        elegido = []
-        hud.transform_prompt_chosen.connect(elegido.append)
-        hud.enter_transform_picker("original", [
-            {"key": "corregir", "label": "Corregir", "cuando": "arregla la ortografía"},
-            {"key": "resumir", "label": "Resumir", "cuando": "más corto"},
-        ])
-        hud.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, _Qt.Key.Key_2, _Qt.KeyboardModifier.NoModifier))
-        assert elegido == ["resumir"]
+        assert not (panel.windowFlags() & _Qt.WindowType.WindowDoesNotAcceptFocus)
+        assert panel.focusPolicy() != _Qt.FocusPolicy.NoFocus
 
-    def test_un_numero_fuera_de_la_lista_no_elige_nada(self, hud):
-        from PyQt6.QtCore import Qt as _Qt
-        from PyQt6.QtGui import QKeyEvent
-
-        elegido = []
-        hud.transform_prompt_chosen.connect(elegido.append)
-        hud.enter_transform_picker("original", [
-            {"key": "corregir", "label": "Corregir", "cuando": "arregla la ortografía"},
-        ])
-        hud.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, _Qt.Key.Key_7, _Qt.KeyboardModifier.NoModifier))
-        assert elegido == []
-
-    def test_en_el_selector_enter_no_aplica_nada(self, hud):
-        """No hay resultado que aplicar todavía: un Enter perdido no puede
-        convertirse en una elección que el usuario no hizo."""
-        from PyQt6.QtCore import Qt as _Qt
-        from PyQt6.QtGui import QKeyEvent
-
-        eventos = []
-        hud.transform_prompt_chosen.connect(eventos.append)
-        hud.transform_accepted.connect(eventos.append)
-        hud.enter_transform_picker("original", [
-            {"key": "corregir", "label": "Corregir", "cuando": "arregla la ortografía"},
-        ])
-        hud.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, _Qt.Key.Key_Return, _Qt.KeyboardModifier.NoModifier))
-        assert eventos == []
-
-    def test_esc_cancela_el_selector_y_borra_el_original(self, hud):
-        from PyQt6.QtCore import Qt as _Qt
-        from PyQt6.QtGui import QKeyEvent
-
-        hud.enter_transform_picker("TEXTO ORIGINAL", [
-            {"key": "corregir", "label": "Corregir", "cuando": "arregla la ortografía"},
-        ])
-        hud.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, _Qt.Key.Key_Escape, _Qt.KeyboardModifier.NoModifier))
-        assert hud.is_transform_mode() is False
-        assert hud._transform_original is None
-
-    def test_no_se_tocan_los_flags_de_ventana_en_caliente(self, hud):
-        """Invariante pagada del HUD (cabecera de ui/hud_widget.py): jamás togglear
-        WindowDoesNotAcceptFocus. El modo Transform activa la ventana, no la
-        reconfigura."""
-        antes = hud.windowFlags()
-        hud.enter_transform_mode("original", "Corregir")
-        hud.show_transform_result("RESULTADO")
-        hud.exit_transform_mode()
-        assert hud.windowFlags() == antes
+    def test_los_flags_no_cambian_en_caliente(self, panel):
+        antes = panel.windowFlags()
+        panel.open_waiting("Corregir", original="original")
+        panel.show_result("RESULTADO")
+        panel.close_panel()
+        assert panel.windowFlags() == antes
 
 
 class TestNoHayCaminoAlternativo:
@@ -716,7 +666,7 @@ class TestNoHayCaminoAlternativo:
         src = self._src("_on_transform_ready")
         assert "paste_text" not in src
         assert "copy_text" not in src
-        assert "show_transform_result" in src
+        assert "show_result" in src
 
     def test_el_unico_que_pega_es_el_slot_de_aceptado(self):
         src = self._src("_on_transform_accepted")
@@ -726,7 +676,7 @@ class TestNoHayCaminoAlternativo:
         import main
 
         src = inspect.getsource(main.VflowApp.__init__)
-        assert "self.hud.transform_accepted.connect(self._on_transform_accepted)" in src
+        assert "self.transform_panel.accepted.connect(self._on_transform_accepted)" in src
 
     def test_la_captura_no_corre_en_el_hilo_de_qt(self):
         """3a-fix2: `capture_selection` espera a que el usuario suelte el atajo, y esa
@@ -750,7 +700,7 @@ class TestNoHayCaminoAlternativo:
 
     def test_el_panel_se_abre_antes_de_llamar_al_modelo(self):
         src = self._src("_start_transform")
-        assert src.index("enter_transform_mode") < src.index("_transform_worker")
+        assert src.index("open_waiting") < src.index("_transform_worker")
 
     def test_ninguna_otra_entrada_lanza_el_worker_por_su_cuenta(self):
         """Las dos puertas de entrada (atajo AltGr+X y bandeja) tienen que pasar por
@@ -762,13 +712,13 @@ class TestNoHayCaminoAlternativo:
     def test_el_panel_solo_emite_aceptado_desde_el_boton_aplicar(self):
         """En ui/hud_widget.py, transform_accepted.emit aparece UNA sola vez y es
         dentro de _on_transform_apply, que exige un resultado ya mostrado."""
-        import ui.hud_widget as hw
+        import ui.transform_panel as hw
 
         fuente = inspect.getsource(hw)
-        assert fuente.count("transform_accepted.emit") == 1
-        apply_src = inspect.getsource(hw.HudWidget._on_transform_apply)
-        assert "transform_accepted.emit" in apply_src
-        assert "self._transform_result" in apply_src
+        assert fuente.count("accepted.emit") == 1
+        apply_src = inspect.getsource(hw.TransformPanel._on_apply)
+        assert "accepted.emit" in apply_src
+        assert "self._result" in apply_src
 
     def test_ninguna_ruta_de_transform_escribe_en_el_historial(self):
         """Unidad 3z, decisión 1: un Transform NO crea fila en `transcriptions`, y eso
@@ -903,14 +853,14 @@ class TestReentrada:
             self._new_transform_generation = main.VflowApp._new_transform_generation.__get__(self)
             app = self
 
-            class _Hud:
-                def show_transform_result(self, text):
+            class _Panel:
+                def show_result(self, text):
                     app.pintado.append(text)
 
-                def show_transform_error(self, msg):
+                def show_error(self, msg):
                     app.errores.append(msg)
 
-            self.hud = _Hud()
+            self.transform_panel = _Panel()
 
     def _app(self, monkeypatch):
         import core.clipboard

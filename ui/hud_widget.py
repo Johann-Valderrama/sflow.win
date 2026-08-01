@@ -430,15 +430,6 @@ class HudWidget(QWidget):
     lost_requested = pyqtSignal()                         # botón "Me perdí"
     ask_requested = pyqtSignal(str)                        # texto de la pregunta libre
 
-    # Modo Transform (unidad 3c). ``transform_accepted`` LLEVA el texto: el panel es
-    # el único que tiene el resultado del modelo, así que no hay forma de que main.py
-    # pegue algo que el usuario no haya visto y aceptado. Es el control de G1-A
-    # expresado en la forma del código, no en la disciplina de quien lo llame.
-    transform_accepted = pyqtSignal(str)
-    transform_discarded = pyqtSignal()
-    transform_copy_original_requested = pyqtSignal(str)
-    transform_prompt_chosen = pyqtSignal(str)   # clave del prompt elegido (unidad 3d)
-
     def __init__(self):
         super().__init__()
         self.setWindowFlags(
@@ -487,7 +478,6 @@ class HudWidget(QWidget):
             "border: none; background: transparent;"
         )
         header_row.addWidget(title_lbl, 1)
-        self._title_lbl = title_lbl  # el modo Transform (3c) le cambia el texto
 
         self.timer_label = QLabel("00:00")
         self.timer_label.setStyleSheet(
@@ -525,7 +515,6 @@ class HudWidget(QWidget):
         self.listening = _ListeningStrip(silent_limit=int(4000 / _LEVEL_INTERVAL_MS))
         listen_layout.addWidget(self.listening)
         root.addWidget(listen_wrap)
-        self._listen_wrap = listen_wrap
 
         # Provider de niveles (inyectado por main.py: MEETING.get_levels) + timer
         # propio del HUD: lee los floats lock-free ~cada 80ms para un VU fluido sin
@@ -570,7 +559,6 @@ class HudWidget(QWidget):
         self._highlight_timer.timeout.connect(lambda: self.highlight_label.setVisible(False))
 
         root.addWidget(now_section, 0)
-        self._now_section = now_section
 
         # ------------------------------------------------------------
         # (3) ZONA "REGISTRO" (flex: ocupa el resto)
@@ -609,7 +597,6 @@ class HudWidget(QWidget):
 
         registro_layout.addWidget(self.registro_scroll, 1)
         root.addWidget(registro_section, 1)
-        self._registro_section = registro_section
 
         # ------------------------------------------------------------
         # (4) BOTTOM
@@ -670,113 +657,6 @@ class HudWidget(QWidget):
         bottom_layout.addWidget(self.ask_input)
 
         root.addWidget(bottom_section, 0)
-        self._bottom_section = bottom_section
-
-        # ------------------------------------------------------------
-        # (5) MODO TRANSFORM (unidad 3c) — la previsualización de G1-A.
-        #
-        # Es un MODO de este panel, no un widget nuevo: el HUD ya es una ventana
-        # flotante que no roba el foco, con Enter/Esc y con el cableado hecho en
-        # main.py, así que construir otro habría duplicado todo eso, incluida la
-        # corrección pagada de jamás togglear WindowDoesNotAcceptFocus en caliente.
-        # Oculto mientras no haya una transformación en curso.
-        # ------------------------------------------------------------
-        transform_section = QFrame()
-        transform_section.setObjectName("HudTransform")
-        transform_layout = QVBoxLayout(transform_section)
-        transform_layout.setContentsMargins(12, 12, 12, 12)
-        transform_layout.setSpacing(8)
-
-        self.transform_prompt_label = QLabel("")
-        self.transform_prompt_label.setStyleSheet(
-            "color: rgba(255,255,255,0.45); font-size: 11px; font-weight: 600; "
-            "border: none; background: transparent;"
-        )
-        transform_layout.addWidget(self.transform_prompt_label)
-
-        self.transform_scroll = QScrollArea()
-        self.transform_scroll.setWidgetResizable(True)
-        self.transform_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.transform_scroll.setStyleSheet(
-            "QScrollArea { background: transparent; border: none; }"
-            "QScrollArea > QWidget > QWidget { background: transparent; }"
-            "QScrollBar:vertical { background: transparent; width: 6px; margin: 0; }"
-            "QScrollBar::handle:vertical { background: rgba(255,255,255,70); border-radius: 3px; min-height: 20px; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-        )
-        self.transform_text_label = QLabel("")
-        self.transform_text_label.setWordWrap(True)
-        self.transform_text_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        self.transform_text_label.setAlignment(
-            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
-        )
-        self.transform_text_label.setStyleSheet(
-            "color: rgba(255,255,255,235); font-size: 12.5px; padding: 4px; background: transparent;"
-        )
-        self.transform_scroll.setWidget(self.transform_text_label)
-        transform_layout.addWidget(self.transform_scroll, 1)
-
-        actions_row = QHBoxLayout()
-        actions_row.setSpacing(6)
-        self.transform_apply_btn = QPushButton("Aplicar · Enter")
-        self.transform_apply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.transform_apply_btn.setFixedHeight(30)
-        self.transform_apply_btn.setStyleSheet(
-            "QPushButton { background-color: rgba(16,185,129,0.18); color: #a7f3d0; "
-            "border: 1px solid rgba(16,185,129,0.45); border-radius: 8px; "
-            "font-size: 12px; font-weight: 600; padding: 0px; }"
-            "QPushButton:hover { background-color: rgba(16,185,129,0.3); }"
-        )
-        self.transform_apply_btn.clicked.connect(self._on_transform_apply)
-        actions_row.addWidget(self.transform_apply_btn, 1)
-
-        self.transform_discard_btn = QPushButton("Descartar · Esc")
-        self.transform_discard_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.transform_discard_btn.setFixedHeight(30)
-        self.transform_discard_btn.setStyleSheet(
-            "QPushButton { background: transparent; color: rgba(255,255,255,0.55); "
-            "border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; "
-            "font-size: 12px; font-weight: 600; padding: 0px; }"
-            "QPushButton:hover { color: rgba(255,255,255,0.9); }"
-        )
-        self.transform_discard_btn.clicked.connect(self._on_transform_discard)
-        actions_row.addWidget(self.transform_discard_btn, 1)
-        transform_layout.addLayout(actions_row)
-
-        # "Copiar original": la tercera capa de reversión de la unidad 3z. Existe
-        # porque el Deshacer del historial (6.2) NO cubre Transform — el texto que
-        # habría que restaurar no está en la base de datos, está en el documento
-        # del usuario. Vive en RAM y muere con el panel: nada de esto se persiste.
-        self.transform_copy_btn = QPushButton("Copiar el texto original")
-        self.transform_copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.transform_copy_btn.setFixedHeight(26)
-        self.transform_copy_btn.setStyleSheet(
-            "QPushButton { background: transparent; color: rgba(255,255,255,0.4); "
-            "border: none; font-size: 11px; padding: 0px; text-align: center; }"
-            "QPushButton:hover { color: rgba(255,255,255,0.75); }"
-        )
-        self.transform_copy_btn.clicked.connect(self._on_transform_copy_original)
-        transform_layout.addWidget(self.transform_copy_btn)
-
-        self.transform_status_label = QLabel("")
-        self.transform_status_label.setWordWrap(True)
-        self.transform_status_label.setStyleSheet(
-            "color: #fbbf24; font-size: 11.5px; border: none; background: transparent;"
-        )
-        self.transform_status_label.setVisible(False)
-        transform_layout.addWidget(self.transform_status_label)
-
-        transform_section.setVisible(False)
-        root.addWidget(transform_section, 1)
-        self._transform_section = transform_section
-
-        # Estado del modo, SOLO en memoria (unidad 3z: un Transform no se persiste).
-        self._transform_mode = False
-        self._transform_picker = []       # opciones cuando el panel está eligiendo prompt
-        self._transform_original = None   # texto seleccionado por el usuario
-        self._transform_result = None     # salida del modelo pendiente de aceptar
 
         # ------------------------------------------------------------
         # QSizeGrip (redimensionable) — esquina inferior derecha, funciona en
@@ -871,175 +751,6 @@ class HudWidget(QWidget):
         self.lost_answer_label.setText(text)
         self.lost_scroll.setVisible(True)
 
-    # ------------------------------------------------------------------
-    # Modo Transform (unidad 3c) — la previsualización de G1-A
-    # ------------------------------------------------------------------
-
-    def _set_meeting_sections_visible(self, visible: bool):
-        for section in (self._listen_wrap, self._now_section,
-                        self._registro_section, self._bottom_section):
-            section.setVisible(visible)
-
-    def enter_transform_picker(self, original: str, opciones: list):
-        """Paso previo al modo Transform: elegir cuál de los 8 prompts aplicar.
-
-        Existe para que UN solo atajo (AltGr+X) cubra los ocho sin tocar el mouse,
-        que es la meta declarada del plan. ``opciones`` es una lista de dicts
-        ``{key, label, cuando}`` que entrega main.py desde ``core.transform``: el
-        HUD no importa core/ (misma frontera que ``set_level_provider``).
-        """
-        self._transform_mode = True
-        self._transform_picker = [o for o in (opciones or [])][:9]
-        self._transform_original = original
-        self._transform_result = None
-        self._title_lbl.setText("Transform · elige qué hacer")
-        self.transform_prompt_label.setText("Pulsa el número · Esc cancela")
-        lineas = [
-            f"<b>{i + 1}</b> · {o['label']} <span style='color:rgba(255,255,255,0.45)'>{o['cuando']}</span>"
-            for i, o in enumerate(self._transform_picker)
-        ]
-        self.transform_text_label.setText("<br>".join(lineas))
-        self.transform_status_label.setVisible(False)
-        self.transform_apply_btn.setEnabled(False)
-        self.transform_discard_btn.setEnabled(True)
-        self.transform_copy_btn.setEnabled(False)
-        self._set_meeting_sections_visible(False)
-        self._transform_section.setVisible(True)
-        self._activate_for_transform()
-
-    def is_transform_picker(self) -> bool:
-        return bool(self._transform_picker)
-
-    def enter_transform_mode(self, original: str, prompt_label: str):
-        """Entra al modo previsualización y muestra el spinner (aún no hay resultado).
-
-        ``original`` se guarda EN MEMORIA para el botón "copiar el texto original"
-        y se borra al salir del modo. No se escribe en ninguna parte.
-        """
-        self._transform_mode = True
-        self._transform_picker = []
-        self._transform_original = original
-        self._transform_result = None
-        self._title_lbl.setText(f"Transform · {prompt_label}")
-        self.transform_prompt_label.setText("Transformando…")
-        self.transform_text_label.setText("")
-        self.transform_status_label.setVisible(False)
-        self._set_transform_actions_enabled(False)
-        self._set_meeting_sections_visible(False)
-        self._transform_section.setVisible(True)
-
-    def show_transform_result(self, text: str):
-        """Pinta el resultado del modelo y habilita Aplicar/Descartar.
-
-        Este es el ÚNICO camino por el que la salida del modelo entra a la interfaz:
-        el texto se queda aquí hasta que el usuario acepte, y solo entonces viaja en
-        ``transform_accepted``.
-        """
-        if not self._transform_mode:
-            return
-        self._transform_result = text
-        self.transform_prompt_label.setText("Revisa antes de aplicar")
-        self.transform_text_label.setText(text)
-        self._set_transform_actions_enabled(True)
-        self._activate_for_transform()
-
-    def show_transform_error(self, message: str):
-        """Muestra el fallo dentro del propio panel (nunca una notificación muda)."""
-        if not self._transform_mode:
-            return
-        self._transform_result = None
-        self.transform_prompt_label.setText("No se pudo transformar")
-        self.transform_status_label.setText(message)
-        self.transform_status_label.setVisible(True)
-        self._set_transform_actions_enabled(False)
-        self.transform_discard_btn.setEnabled(True)
-        self._activate_for_transform()
-
-    def exit_transform_mode(self):
-        """Sale del modo y BORRA el texto original y el resultado de la memoria."""
-        self._transform_mode = False
-        self._transform_picker = []
-        self._transform_original = None
-        self._transform_result = None
-        self.transform_text_label.setText("")
-        self.transform_status_label.setVisible(False)
-        self._transform_section.setVisible(False)
-        self._title_lbl.setText("Reunión · copiloto")
-        self._set_meeting_sections_visible(True)
-
-    def is_transform_mode(self) -> bool:
-        return self._transform_mode
-
-    def _set_transform_actions_enabled(self, enabled: bool):
-        self.transform_apply_btn.setEnabled(enabled)
-        self.transform_discard_btn.setEnabled(True)   # descartar siempre disponible
-        self.transform_copy_btn.setEnabled(enabled or self._transform_original is not None)
-
-    def _activate_for_transform(self):
-        """Foco deliberado para que Enter y Esc lleguen al panel.
-
-        Mismo patrón que ``_activate_for_input`` y por la misma razón: los flags de
-        ventana NO se tocan en caliente (ver la cabecera del módulo), se activa la
-        ventana. El HWND anterior queda guardado para devolver el foco al salir.
-        """
-        try:
-            self._saved_hwnd = _user32.GetForegroundWindow()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("hud: no se pudo guardar HWND frontal (transform): %s", exc)
-            self._saved_hwnd = None
-        self.activateWindow()
-        self.setFocus()
-
-    def _on_transform_apply(self):
-        text = self._transform_result
-        if not text:
-            return
-        self.exit_transform_mode()
-        self._restore_focus()
-        self.transform_accepted.emit(text)
-
-    def _on_transform_discard(self):
-        self.exit_transform_mode()
-        self._restore_focus()
-        self.transform_discarded.emit()
-
-    def _on_transform_copy_original(self):
-        original = self._transform_original
-        if not original:
-            return
-        self.transform_copy_original_requested.emit(original)
-        self.transform_status_label.setText("Texto original copiado al portapapeles.")
-        self.transform_status_label.setVisible(True)
-
-    def keyPressEvent(self, event):
-        """Enter aplica y Esc descarta, SOLO en modo Transform.
-
-        Fuera del modo se delega al comportamiento normal para no secuestrar teclas
-        del panel de reunión.
-        """
-        if self._transform_mode:
-            key = event.key()
-            if key == Qt.Key.Key_Escape:
-                self._on_transform_discard()
-                event.accept()
-                return
-            if self._transform_picker:
-                # Elegir prompt con 1..N. Enter NO hace nada aquí a propósito: en
-                # este estado no hay un resultado que aplicar, y un Enter perdido
-                # no debe convertirse en una elección que el usuario no hizo.
-                indice = key - Qt.Key.Key_1
-                if 0 <= indice < len(self._transform_picker):
-                    elegido = self._transform_picker[indice]["key"]
-                    self._transform_picker = []
-                    self.transform_prompt_chosen.emit(elegido)
-                    event.accept()
-                    return
-            elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-                self._on_transform_apply()
-                event.accept()
-                return
-        super().keyPressEvent(event)
-
     def reset_geometry(self):
         """Botón "restablecer" del header: mueve el panel al lado derecho de la
         pantalla y restaura el tamaño por defecto (340 x 72% del alto disponible)."""
@@ -1111,11 +822,6 @@ class HudWidget(QWidget):
         super().hideEvent(event)
         self._topmost_timer.stop()
         self._level_timer.stop()
-        # Cerrar el panel BORRA la transformación pendiente (unidad 3z: vive en RAM
-        # y muere con el panel). Además evita que un resultado quede esperando un
-        # Enter que llegaría cuando el usuario ya está en otra cosa.
-        if self._transform_mode:
-            self.exit_transform_mode()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
