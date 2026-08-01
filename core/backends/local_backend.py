@@ -1,14 +1,23 @@
 """Backend de transcripción local basado en faster-whisper.
 
-No requiere conexión a internet: el modelo corre en CPU del equipo.
-Limitación: la traducción solo funciona hacia inglés (tarea nativa de Whisper);
-para otros idiomas de destino se devuelve la transcripción en idioma original.
+No requiere conexión a internet. Corre en GPU (CUDA) cuando está disponible y
+carga bien, o en CPU si no (ver LOCAL_DEVICE abajo; Ola 7 de PLAN-DICTADO,
+docs/benchmarks/local-backend-gpu-2026-08-01.md). Limitación: la traducción
+solo funciona hacia inglés (tarea nativa de Whisper); para otros idiomas de
+destino se devuelve la transcripción en idioma original.
 
 Variables de entorno relevantes:
-    LOCAL_WHISPER_MODEL       — Tamaño del modelo: "small" (default) o "medium".
-    LOCAL_MODEL_IDLE_MINUTES  — Minutos de inactividad antes de liberar el modelo
+    LOCAL_WHISPER_MODEL:       Tamaño del modelo: "small" (default) o "medium".
+    LOCAL_MODEL_IDLE_MINUTES:  Minutos de inactividad antes de liberar el modelo
                                 de la RAM. 0 = nunca liberar (default: 10).
+    LOCAL_DEVICE:              "auto" (default), "cpu" o "cuda". "auto" usa CUDA
+                                si está disponible y carga bien, si no cae a CPU.
+                                Un fallo de CUDA al cargar SIEMPRE cae a CPU, incluso
+                                pedido explícito ("cuda"): un fallo de GPU (driver,
+                                VRAM ocupada, DLL de cuBLAS ausente del PATH) no puede
+                                dejar al usuario sin dictado. Ver _ensure_cuda_on_path().
 """
+import glob
 import io
 import logging
 import os
@@ -83,6 +92,77 @@ def _is_model_downloaded(model_name: str) -> bool:
     return False
 
 
+def _requested_device() -> str:
+    """Lee ``LOCAL_DEVICE`` y lo normaliza a ``"auto"`` | ``"cpu"`` | ``"cuda"``.
+
+    Un valor no reconocido se trata como ``"auto"``: esta variable NO es un
+    control de seguridad (al revés de ``DASHBOARD_AUTH_ENABLED``), así que
+    fallar abierto aquí es lo correcto: un typo en el ``.env`` no debe dejar
+    al usuario sin dictado local.
+    """
+    raw = os.getenv("LOCAL_DEVICE", "auto").strip().lower()
+    return raw if raw in ("auto", "cpu", "cuda") else "auto"
+
+
+def _ensure_cuda_on_path(*, search_bases: list[str] | None = None) -> None:
+    """Blindaje contra PATH viejo (gotcha ya pagado en la skill OPS
+    ``transcribir-video``, ``C:\\OPS\\skills-on-demand\\transcribir-video\\assets\\
+    transcribir_video.py``, función homónima): CUDA 12.x puede estar instalado
+    y con ``cublas64_12.dll`` en disco, pero el proceso actual haber heredado
+    un PATH sin esa carpeta, típico cuando Vflow.exe se lanza desde la
+    bandeja de Windows o el arranque del sistema, en vez de una terminal que
+    ya tenía CUDA en PATH.
+
+    Busca la carpeta con ``cublas64_12.dll`` bajo el Toolkit de NVIDIA y la
+    antepone a ``os.environ["PATH"]`` si hace falta. Nunca falla: si no
+    encuentra nada, el intento de carga en CUDA de ``_load_model()`` fallará
+    más abajo y el fallback a CPU se hace cargo.
+
+    No hardcodea la versión MENOR del Toolkit (hoy v12.9 en la máquina de
+    Johann, ver el banco de la unidad 7a): busca por patrón ``v12.*\\bin``,
+    porque un hardcode que hay que actualizar a mano cada vez que NVIDIA
+    publica una versión nueva es construir lo temporal en vez de la regla
+    durable. El "12" del nombre del DLL SÍ es fijo a propósito: es la versión
+    MAYOR que ctranslate2/faster-whisper requieren hoy (el 13.3 instalado en
+    esta máquina no lo usan), no un detalle de esta corrida.
+
+    ``search_bases`` es un seam de testabilidad (no lo usa producción, que
+    siempre pasa ``None`` y usa las rutas reales del Toolkit): permite a los
+    tests apuntar a un directorio temporal en vez de depender de si ESTA
+    máquina tiene CUDA instalado en el Program Files real.
+    """
+    already = any(
+        os.path.exists(os.path.join(d, "cublas64_12.dll"))
+        for d in os.environ.get("PATH", "").split(os.pathsep) if d
+    )
+    if already:
+        return
+    bases = search_bases if search_bases is not None else [
+        r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA",
+        os.path.expandvars(r"%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA"),
+    ]
+    for base in bases:
+        for bin_dir in sorted(glob.glob(os.path.join(base, "v12.*", "bin"))):
+            if os.path.exists(os.path.join(bin_dir, "cublas64_12.dll")):
+                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+                return
+
+
+def _import_whisper_model():
+    """Import diferido de ``WhisperModel`` (permite que la app arranque aunque
+    faster-whisper no esté instalado). Aislado en su propia función para que
+    los tests puedan monkeypatchear la construcción del modelo sin necesitar
+    GPU real ni el paquete faster-whisper instalado."""
+    try:
+        from faster_whisper import WhisperModel  # noqa: PLC0415
+    except ImportError as exc:
+        raise RuntimeError(
+            "faster-whisper no está instalado. "
+            "Ejecuta: pip install faster-whisper==1.1.1"
+        ) from exc
+    return WhisperModel
+
+
 class LocalBackend(TranscriptionBackend):
     """Backend que transcribe localmente con faster-whisper (sin internet).
 
@@ -106,6 +186,10 @@ class LocalBackend(TranscriptionBackend):
         # Nombre del modelo leído en el constructor; puede cambiar en el entorno.
         self._model_name: str = os.getenv("LOCAL_WHISPER_MODEL", "small").strip().lower()
         self._idle_minutes: int = int(os.getenv("LOCAL_MODEL_IDLE_MINUTES", "10") or "10")
+        # Dispositivo REAL con el que se cargó el modelo ("cpu"/"cuda"), distinto
+        # de LOCAL_DEVICE (lo pedido): None hasta la primera carga. Expuesto vía
+        # get_device() para diagnóstico/tests.
+        self._device_used: str | None = None
 
     # ------------------------------------------------------------------
     # Interfaz pública de TranscriptionBackend
@@ -113,6 +197,11 @@ class LocalBackend(TranscriptionBackend):
 
     def get_model_name(self) -> str:
         return f"faster-whisper-{self._model_name}"
+
+    def get_device(self) -> str | None:
+        """Dispositivo con el que se cargó el modelo actualmente en memoria
+        ("cpu" o "cuda"); ``None`` si el modelo todavía no se ha cargado."""
+        return self._device_used
 
     def is_ready(self) -> bool:
         """Devuelve True si el modelo está descargado en disco (sin cargarlo)."""
@@ -273,32 +362,34 @@ class LocalBackend(TranscriptionBackend):
     def _load_model(self):
         """Carga el modelo faster-whisper en memoria (lazy, thread-safe).
 
-        Usa import diferido para que la app arranque aunque faster-whisper
-        no esté instalado.
+        Resuelve ``LOCAL_DEVICE`` (Ola 7 de PLAN-DICTADO): con "auto" o "cuda"
+        intenta CUDA primero; si la construcción del modelo falla por
+        cualquier motivo (driver, VRAM ocupada, DLL de cuBLAS ausente del
+        PATH), cae a CPU SIEMPRE, incluso si el usuario pidió "cuda"
+        explícito, porque un fallo de GPU no puede dejar al usuario sin
+        dictado (fail-open deliberado, ver docstring del módulo). Con "cpu"
+        nunca se intenta CUDA.
+
+        ``compute_type`` va acoplado al device resuelto, no es una variable
+        de entorno aparte: "int8" en los dos casos (recomendación medida en
+        docs/benchmarks/local-backend-gpu-2026-08-01.md, en esta GPU no hay
+        una segunda opción de compute_type que valga la pena exponer).
+        ``cpu_threads`` solo aplica al camino CPU.
         """
         if self._model is None:
             with self._lock:
                 if self._model is None:
-                    try:
-                        from faster_whisper import WhisperModel  # noqa: PLC0415
-                    except ImportError as exc:
-                        raise RuntimeError(
-                            "faster-whisper no está instalado. "
-                            "Ejecuta: pip install faster-whisper==1.1.1"
-                        ) from exc
+                    WhisperModel = _import_whisper_model()
 
                     models_dir = _get_models_dir()
                     os.makedirs(models_dir, exist_ok=True)
 
-                    # Limitar hilos de CPU para no saturar el equipo
+                    # Limitar hilos de CPU para no saturar el equipo (solo aplica
+                    # si termina cargando en CPU, sea por LOCAL_DEVICE=cpu o por
+                    # fallback tras un fallo de CUDA).
                     cpu_threads = max(4, (os.cpu_count() or 4) // 2)
-                    logger.info(
-                        "LocalBackend: cargando modelo '%s' desde '%s' "
-                        "(device=cpu, compute_type=int8, cpu_threads=%d)",
-                        self._model_name,
-                        models_dir,
-                        cpu_threads,
-                    )
+                    requested = _requested_device()
+
                     # local_files_only=True garantiza que faster-whisper/
                     # huggingface_hub NO contacte huggingface.co para verificar
                     # revisiones del modelo.  El modelo ya está descargado
@@ -306,15 +397,62 @@ class LocalBackend(TranscriptionBackend):
                     # no se necesita acceso a la red.  La descarga explícita
                     # desde el dashboard es el único punto donde se permite
                     # tráfico de red.
-                    self._model = WhisperModel(
-                        self._model_name,
-                        device="cpu",
-                        compute_type="int8",
-                        download_root=models_dir,
-                        cpu_threads=cpu_threads,
-                        local_files_only=True,
+                    model = None
+                    device_used = None
+
+                    if requested in ("auto", "cuda"):
+                        _ensure_cuda_on_path()
+                        try:
+                            logger.info(
+                                "LocalBackend: intentando cargar modelo '%s' en CUDA "
+                                "(compute_type=int8, LOCAL_DEVICE=%s)",
+                                self._model_name, requested,
+                            )
+                            model = WhisperModel(
+                                self._model_name,
+                                device="cuda",
+                                compute_type="int8",
+                                download_root=models_dir,
+                                local_files_only=True,
+                            )
+                            device_used = "cuda"
+                        except Exception as exc:
+                            if requested == "cuda":
+                                logger.warning(
+                                    "LocalBackend: LOCAL_DEVICE=cuda pedido "
+                                    "explícitamente pero CUDA falló al cargar (%s), "
+                                    "cayendo a CPU. Un fallo de GPU no puede dejar "
+                                    "al usuario sin dictado.", exc,
+                                )
+                            else:
+                                logger.warning(
+                                    "LocalBackend: CUDA no disponible o falló al "
+                                    "cargar (%s), usando CPU.", exc,
+                                )
+                            model = None
+
+                    if model is None:
+                        logger.info(
+                            "LocalBackend: cargando modelo '%s' desde '%s' "
+                            "(device=cpu, compute_type=int8, cpu_threads=%d)",
+                            self._model_name, models_dir, cpu_threads,
+                        )
+                        model = WhisperModel(
+                            self._model_name,
+                            device="cpu",
+                            compute_type="int8",
+                            download_root=models_dir,
+                            cpu_threads=cpu_threads,
+                            local_files_only=True,
+                        )
+                        device_used = "cpu"
+
+                    self._model = model
+                    self._device_used = device_used
+                    logger.info(
+                        "LocalBackend: modelo cargado correctamente (device=%s)",
+                        device_used,
                     )
-                    logger.info("LocalBackend: modelo cargado correctamente")
         return self._model
 
     # ------------------------------------------------------------------
@@ -346,6 +484,7 @@ class LocalBackend(TranscriptionBackend):
         if self._model is not None:
             del self._model
             self._model = None
+            self._device_used = None
             logger.info("LocalBackend: modelo '%s' liberado de memoria", self._model_name)
 
     # ------------------------------------------------------------------

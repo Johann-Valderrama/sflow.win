@@ -350,6 +350,14 @@ ENV_CATALOG = {
         "default": "10", "kind": "lazy", "killswitch": False,
         "doc": "Minutos de inactividad antes de liberar el modelo local de RAM; 0 = nunca liberar.",
     },
+    "LOCAL_DEVICE": {
+        "default": "auto", "kind": "lazy", "killswitch": False,
+        "doc": "Dispositivo del backend local: 'auto' (CUDA si carga bien, si no CPU), 'cpu' o "
+               "'cuda' (fuerza; un fallo de CUDA al cargar cae a CPU IGUAL, el fallback nunca "
+               "deja al usuario sin dictado). Valor no reconocido se trata como 'auto' (fail-open: "
+               "no es un control de seguridad, al revés de DASHBOARD_AUTH_ENABLED). Ola 7 de "
+               "PLAN-DICTADO-2026-07-31, medido en docs/benchmarks/local-backend-gpu-2026-08-01.md.",
+    },
     "GROQ_FALLBACK": {
         "default": "false", "kind": "lazy", "killswitch": True,
         "doc": "Si 'true', reintenta con Groq cuando el backend local falla (requiere GROQ_API_KEY). "
@@ -663,7 +671,9 @@ ENV_KNOWN_DIVERGENCES = {
 
 # Variables de entorno del SISTEMA OPERATIVO (Windows) usadas para resolver rutas
 # (APPDATA para %APPDATA%\npm y el cwd neutro de claude-cli; SystemRoot/ProgramFiles*
-# para la blacklist anti-SSRF de PENDING_EXPORT_DIR). NO son configuración de Vflow
-# (el usuario nunca las setea en su .env) y quedan fuera de ENV_CATALOG a propósito;
-# tests/test_env_catalog.py las excluye explícitamente por este motivo.
-ENV_CATALOG_EXCLUDED_SYSTEM_VARS = {"APPDATA", "SystemRoot", "ProgramFiles", "ProgramFiles(x86)"}
+# para la blacklist anti-SSRF de PENDING_EXPORT_DIR; PATH para el blindaje de CUDA
+# de core/backends/local_backend.py._ensure_cuda_on_path(), Ola 7 de PLAN-DICTADO).
+# NO son configuración de Vflow (el usuario nunca las setea en su .env) y quedan
+# fuera de ENV_CATALOG a propósito; tests/test_env_catalog.py las excluye
+# explícitamente por este motivo.
+ENV_CATALOG_EXCLUDED_SYSTEM_VARS = {"APPDATA", "SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "PATH"}

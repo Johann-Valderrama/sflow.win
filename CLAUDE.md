@@ -706,6 +706,58 @@ apps desde la primera actualización. Descubrible y activado por defecto NO son 
 visibilidad se resuelve con interfaz, nunca con el default, mismo patrón que ya sigue el
 proyecto con `WEBHOOK_ENABLED` y `OPS_BRIEFING_PATH`.
 
+### 22. GPU para el backend local: LOCAL_DEVICE con fallback a CPU (Ola 7 de PLAN-DICTADO, unidad 7b, 2026-08-01)
+
+El backend local (`core/backends/local_backend.py`) estaba fijado a `device="cpu"` teniendo la
+máquina de Johann una NVIDIA GTX 1060 6GB con CUDA 12.9 instalado. El banco de la unidad 7a
+(`docs/benchmarks/local-backend-gpu-2026-08-01.md`, medido con habla real) encontró que CUDA
+`int8` transcribe **3.6x-4.9x más rápido** que CPU `int8` con el modelo `small` (default de
+producción), y que con `medium` la GPU es la diferencia entre viable y no-viable: en CPU,
+`medium` corre MÁS LENTO que tiempo real en clips cortos (x0.7-x1.1), y en CUDA corre a x4.5-x7.6.
+Sin penalización de fidelidad detectable (ver el banco: control de auto-consistencia + proxy de
+referencia contra `large-v3-turbo`).
+
+> **CAMBIO DE COMPORTAMIENTO para quien ya usa `TRANSCRIPTION_BACKEND=local`.** Con esta unidad,
+> si la máquina tiene una GPU CUDA que carga bien, el backend local pasa a correr en GPU en vez
+> de CPU (mismo `compute_type="int8"`, mismo texto esperado). Si no quieres esto, pon
+> `LOCAL_DEVICE=cpu`. Se anuncia aquí en vez de colarse, mismo criterio que `SMART_COMMANDS_ENABLED`
+> (sección 20).
+
+- **`LOCAL_DEVICE`** (default `"auto"`): `"auto"` intenta CUDA primero y cae a CPU si la carga
+  falla o si no hay GPU; `"cpu"` fuerza CPU (nunca intenta CUDA); `"cuda"` fuerza el intento de
+  GPU, pero **el fallback a CPU sigue aplicando igual si CUDA falla al cargar**: un valor
+  explícito no cambia esa garantía, solo el orden de preferencia. Un valor no reconocido se trata
+  como `"auto"` (fail-open deliberado: esta variable no es un control de seguridad, al revés de
+  `DASHBOARD_AUTH_ENABLED`, así que un typo en el `.env` no debe dejar a nadie sin dictado).
+- **El fallback es el corazón de la unidad, no un detalle.** Un fallo de CUDA al cargar (driver
+  viejo, VRAM ocupada por otra app, GPU en uso exclusivo, DLL de cuBLAS ausente del PATH) se
+  registra con `logger.warning` (más fuerte si `LOCAL_DEVICE=cuda` era explícito: el usuario pidió
+  GPU y no la tuvo) y `_load_model()` reintenta en CPU con la configuración de siempre, en la MISMA
+  llamada, nunca propaga la excepción hacia `transcribe()`/`translate()`.
+- **`compute_type` va acoplado al device resuelto, no es una variable nueva.** CUDA → `"int8"`,
+  CPU → `"int8"` (sin cambios). El banco midió que en esta GPU Pascal (compute capability 6.1) NI
+  SIQUIERA EXISTEN `float16`/`int8_float16` como `compute_type` de ctranslate2, y que `"int8"` e
+  `"int8_float32"` resuelven al mismo kernel: no hay una segunda opción de precisión que valga la
+  pena exponer como variable de entorno. **No agregar `LOCAL_COMPUTE_TYPE`.**
+- **`cpu_threads` solo aplica al camino CPU** (no significa nada en CUDA); se sigue calculando
+  igual (`max(4, os.cpu_count() // 2)`).
+- **Gotcha de PATH de cuBLAS** (`_ensure_cuda_on_path()`, mismo patrón que la skill OPS
+  `transcribir-video`, `C:\OPS\skills-on-demand\transcribir-video\assets\transcribir_video.py`):
+  el proceso de Vflow.exe (lanzado desde la bandeja o el arranque de Windows, no desde una
+  terminal) puede heredar un PATH sin la carpeta del Toolkit CUDA aunque el DLL exista en disco.
+  Antes de intentar cargar en CUDA, se busca `cublas64_12.dll` bajo `<Program Files>\NVIDIA GPU
+  Computing Toolkit\CUDA\v12.*\bin` (patrón `v12.*`, NUNCA la versión menor exacta como `v12.9`
+  hardcodeada: NVIDIA la actualiza y un hardcode que hay que tocar a mano cada vez es construir lo
+  temporal en vez de la regla durable) y se antepone al `PATH` del proceso si hace falta. El "12"
+  del nombre del DLL sí es fijo a propósito: es la versión MAYOR que ctranslate2 requiere hoy (el
+  13.3 instalado en la máquina de Johann no lo usa).
+- **`get_device()`** en `LocalBackend` expone el dispositivo REAL con el que se cargó el modelo
+  (`"cpu"` / `"cuda"` / `None` si aún no se cargó): no confundir con `LOCAL_DEVICE` (lo pedido).
+- **Tests herméticos** (`tests/test_local_backend_device.py`): `WhisperModel` se sustituye por un
+  doble vía el seam `_import_whisper_model()`, así que la suite corre en cualquier máquina, con o
+  sin GPU real. La resolución del fallback se probó mutando el código a propósito (romper el
+  `except` para que la excepción de CUDA propagara) y confirmando que solo esos 2 tests caían.
+
 ## Security & Privacy
 
 ### 1. API Key Encryption (DPAPI)
