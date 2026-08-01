@@ -771,14 +771,41 @@
                 </div>
             </div>
 
-            <!-- Sección: Modos de dictado por app activa (unidad 6.3) -->
+            <!-- Sección: Modos de dictado por app activa (unidad 6.3; ampliada a 5 presets +
+                 elección manual + descubribilidad en la Ola 2 de docs/PLAN-DICTADO-2026-07-31.md,
+                 unidad 2c). El default DICTATION_MODES_ENABLED se queda apagado a propósito
+                 (objeción A1 del debate adversarial del plan): descubrible y activado por
+                 defecto NO son lo mismo, así que esta sección existe para que se VEA y se
+                 ENTIENDA antes de que nadie encienda el interruptor. -->
             <div class="set-sec collapsed" id="sec-dictation-modes" style="--sec-accent:rgba(52,211,153,.6)">
                 <button type="button" class="set-sec-head" onclick="toggleSetSec('dictation-modes')" aria-expanded="false" aria-controls="sec-dictation-modes-body">
                     <span class="set-sec-title"><svg class="set-sec-chev ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span class="set-dot" style="background:rgba(52,211,153,.85)"></span>Modos de dictado por app</span>
                     <span class="set-sec-toggle"><span class="set-sec-toggle-label">Mostrar</span></span>
                 </button>
                 <div id="sec-dictation-modes-body" class="set-sec-body space-y-3">
-                    <p class="text-xs text-white/55">Reformatea el texto dictado con IA según la app donde vas a pegarlo: <strong>email</strong> (puntuación formal, párrafos), <strong>chat</strong> (casual, conciso) o <strong>código</strong> (términos técnicos intactos). <strong>Apagado por defecto</strong>: sin esto activado, el dictado se pega exactamente igual que hoy.</p>
+                    <p class="text-xs text-white/55">Reformatea el texto que acabas de dictar (una lista de compras, un correo, un mensaje de chat) eligiendo el estilo por la app donde vas a pegarlo, o a mano para un solo dictado. <strong>Apagado por defecto</strong>: sin esto activado, el dictado se pega exactamente igual que hoy, tal cual salió de tu voz.</p>
+
+                    <div class="p-3 rounded-lg bg-amber-500/[0.06] border border-amber-500/20">
+                        <p class="text-xs text-amber-300/80">⚠ Léelo antes de activar: al encender esto, el texto que dictaste se manda a un <strong>modelo de lenguaje (LLM)</strong> para que lo reformatee. Por defecto ese modelo corre <strong>en la nube</strong>, no en tu equipo — usa el mismo backend que elegiste arriba en "Acta + Asistente de reuniones".</p>
+                        <p id="cfg-dictation-modes-cloud-note" class="text-xs mt-1 text-amber-300/80"></p>
+                    </div>
+
+                    <div>
+                        <p class="text-xs text-white/55 mb-1.5">5 presets fijos y curados — no se editan, solo eliges cuál va con cada app (o a mano, ver abajo):</p>
+                        <ul class="text-xs text-white/60 space-y-1 pl-1">
+                            <li><strong class="text-white/80">Email</strong> — prosa formal de correo, y respeta el saludo o el cierre si los dictaste</li>
+                            <li><strong class="text-white/80">Chat</strong> — mensaje casual, se permite minúscula inicial y omitir el punto final</li>
+                            <li><strong class="text-white/80">Código</strong> — deja los términos técnicos e identificadores literales, sin embellecer</li>
+                            <li><strong class="text-white/80">Lista</strong> — convierte lo dictado en viñetas, una por ítem, sin prosa alrededor</li>
+                            <li><strong class="text-white/80">Notas</strong> — prosa limpia y neutra: arregla la puntuación y nada más, sin formalidad de correo ni relajación de chat</li>
+                        </ul>
+                    </div>
+
+                    <div>
+                        <p class="text-xs text-white/55 mb-1.5">Apps que se reformatearían <strong>automáticamente, sin que lo pidas</strong>, si activas esto — según el mapa editable de abajo. Revísala antes de encender el interruptor:</p>
+                        <div id="cfg-dictation-apps-preview" class="flex flex-wrap gap-1.5"></div>
+                    </div>
+
                     <div>
                         <label class="flex items-center gap-2" style="height:32px">
                             <label class="toggle-switch">
@@ -788,11 +815,16 @@
                             <span class="text-xs text-white/55">Activar modos de dictado por app</span>
                         </label>
                     </div>
+
                     <div>
-                        <label for="cfg-dictation-mode-map" class="text-xs text-white/55 block mb-1">Mapa app → preset</label>
-                        <textarea id="cfg-dictation-mode-map" rows="3" spellcheck="false" placeholder="outlook.exe:email,slack.exe:chat,code.exe:codigo"
+                        <label for="cfg-dictation-mode-map" class="text-xs text-white/55 block mb-1">Mapa app → preset (editable)</label>
+                        <textarea id="cfg-dictation-mode-map" rows="3" spellcheck="false" placeholder="outlook.exe:email,slack.exe:chat,code.exe:codigo" oninput="renderDictationAppsPreview()"
                             class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-emerald-500/60 focus:border-white/45 w-full font-mono"></textarea>
-                        <p class="text-xs text-white/40 mt-1">Formato: <code class="text-white/70">exe:preset,exe:preset,...</code>. Presets válidos: <code class="text-white/70">email</code>, <code class="text-white/70">chat</code>, <code class="text-white/70">codigo</code>. App no listada = sin reformateo (se pega tal cual). Usa el backend batch configurado arriba (análisis de reuniones) — si ese backend es "Claude (tu suscripción)", el reformateo se salta automáticamente por latencia.</p>
+                        <p class="text-xs text-white/40 mt-1">Formato: <code class="text-white/70">exe:preset,exe:preset,...</code>. Presets válidos: <code class="text-white/70">email</code>, <code class="text-white/70">chat</code>, <code class="text-white/70">codigo</code>, <code class="text-white/70">lista</code>, <code class="text-white/70">notas</code>. App no listada = sin reformateo (se pega tal cual). Si el backend batch configurado arriba es "Claude (tu suscripción)", el reformateo se salta automáticamente por latencia.</p>
+                    </div>
+
+                    <div class="p-3 rounded-lg bg-white/[0.02] border border-white/[0.06]">
+                        <p class="text-xs text-white/55">También puedes elegir el preset a mano, sin importar la app en foco, para <strong>un solo dictado</strong>: clic derecho en el icono de la bandeja → <strong>"Próximo dictado"</strong>. Esa elección gana sobre el mapa de arriba y se gasta con ese dictado (vuelve solo a "Automático"). Necesita este interruptor encendido; si está apagado, el propio submenú de la bandeja lo avisa ahí mismo.</p>
                     </div>
                 </div>
             </div>
@@ -1773,6 +1805,7 @@
             // Modos de dictado por app activa (unidad 6.3)
             document.getElementById('cfg-dictation-modes-enabled').checked = settings.dictation_modes_enabled === true;
             document.getElementById('cfg-dictation-mode-map').value = settings.dictation_mode_map || '';
+            renderDictationAppsPreview();
             // Copiloto con contexto OPS — briefing v1 (unidad 7.1)
             document.getElementById('cfg-ops-briefing-path').value = settings.ops_briefing_path || '';
             // Identidad del usuario en prompts (unidad 5.2)
@@ -1965,6 +1998,65 @@
             document.getElementById('cfg-insights-openrouter-wrap').classList.toggle('hidden', !anyOpenrouter);
             document.getElementById('cfg-insights-anthropic-wrap').classList.toggle('hidden', !anyAnthropic);
             document.getElementById('cfg-insights-claudecli-wrap').classList.toggle('hidden', !anyClaudeCli);
+            updateDictationModesCloudNote();
+        }
+
+        // --- Modos de dictado por app (Ola 2 de PLAN-DICTADO, unidad 2c) ---
+        // Reusa EXACTAMENTE el backend que `core/dictation_modes.reformat_text` va a
+        // resolver (`core.insights._resolve_backend("batch")` lee el mismo
+        // INSIGHTS_BACKEND_BATCH que el select de "Acta + Asistente de reuniones"),
+        // así que el aviso de nube/local no es una suposición: refleja la config real.
+        const _DICTATION_CLOUD_BACKEND_LABELS = {
+            groq: 'Groq (nube)',
+            openrouter: 'OpenRouter (nube)',
+            anthropic: 'la API oficial de Anthropic (nube)',
+            endpoint: 'tu servidor local (LM Studio) — no sale de este equipo',
+            'claude-cli': 'tu suscripción de Claude — pero con este backend el reformateo se SALTA por latencia (no se llama nada)',
+        };
+        function updateDictationModesCloudNote() {
+            const note = document.getElementById('cfg-dictation-modes-cloud-note');
+            const backendSelect = document.getElementById('cfg-insights-backend-batch');
+            if (!note || !backendSelect) return;
+            const backend = backendSelect.value || 'groq';
+            const label = _DICTATION_CLOUD_BACKEND_LABELS[backend] || backend;
+            note.textContent = 'Hoy, con tu configuración actual, el texto dictado se manda a: ' + label + '.';
+        }
+
+        // Presets válidos para el preview del mapa; espejo de core.dictation_modes.PRESETS
+        // (solo nombres, para no duplicar los prompts en el cliente).
+        const _DICTATION_PRESET_JS_LABELS = {
+            email: 'Email', chat: 'Chat', codigo: 'Código', lista: 'Lista', notas: 'Notas',
+        };
+        function _parseDictationModeMapPreview(raw) {
+            const result = [];
+            if (!raw) return result;
+            const chunks = raw.replace(/\n/g, ',').replace(/\r/g, ',').split(',');
+            for (const rawChunk of chunks) {
+                const chunk = rawChunk.trim();
+                const idx = chunk.indexOf(':');
+                if (!chunk || idx === -1) continue;
+                const exe = chunk.slice(0, idx).trim().toLowerCase();
+                const preset = chunk.slice(idx + 1).trim().toLowerCase();
+                if (!exe || !_DICTATION_PRESET_JS_LABELS[preset]) continue;
+                result.push({exe, preset});
+            }
+            return result;
+        }
+        function renderDictationAppsPreview() {
+            const wrap = document.getElementById('cfg-dictation-apps-preview');
+            const textarea = document.getElementById('cfg-dictation-mode-map');
+            if (!wrap || !textarea) return;
+            const pairs = _parseDictationModeMapPreview(textarea.value);
+            if (pairs.length === 0) {
+                wrap.innerHTML = '<span class="text-xs text-white/40">El mapa está vacío: ninguna app se reformatearía automáticamente.</span>';
+                return;
+            }
+            wrap.innerHTML = pairs.map(p =>
+                '<span class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-white/70">' +
+                '<code class="text-white/85">' + escapeHtml(p.exe) + '</code>' +
+                '<span class="text-white/35">&rarr;</span>' +
+                '<span>' + escapeHtml(_DICTATION_PRESET_JS_LABELS[p.preset]) + '</span></span>'
+            ).join('');
         }
 
         function updateLocalModelSection() {

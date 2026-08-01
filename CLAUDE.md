@@ -392,23 +392,26 @@ dictado de superwhisper/Wispr Flow (ver `docs/PENDIENTES.md`).
   (máx. 3 bloques de diff; reescrituras amplias no sugieren nada). Las sugerencias nacen
   `source='suggested'`, `enabled=0` — nunca se auto-aplican. Bandeja "Sugeridas" en el panel
   Diccionario con Aceptar (→ `manual`, `enabled=1`) / Descartar.
-- **6.3 — Modos de dictado por app activa** (`core/dictation_modes.py`): 3 presets fijos
-  (email formal / chat casual / código), sin builder de modos custom. `DICTATION_MODES_ENABLED`
-  (default `false`) + `DICTATION_MODE_MAP` (mapa configurable `exe:preset`). Captura del `.exe`
-  en foco vía ctypes puro en `save_frontmost_app()` (`core/clipboard.py`:
-  `GetWindowThreadProcessId` + `OpenProcess` + `QueryFullProcessImageNameW`, best-effort).
-  `reformat_text()` llama al backend batch de insights con timeout duro de 8s
-  (`ThreadPoolExecutor`); si el backend batch resuelto es `claude-cli` el reformateo se **salta**
-  (latencia de arranque 5-15s inaceptable en el hot-path del dictado) — el fallback automático de
-  insights (groq/openrouter) sigue disponible si `INSIGHTS_FALLBACK` está activo. Se dispara en
-  el hilo background existente (`_transcribe_final`), nunca en el hot-path síncrono. Excluido en
-  modo traducción y `AUDIO_SOURCE=system`. El `raw_text` conserva el texto MÁS crudo cuando
-  diccionario y reformateo cambian ambos (el Undo de 6.2 revierte todo).
+- **6.3, modos de dictado por app activa** (`core/dictation_modes.py`): reformateo post-dictado
+  por preset, sin builder de modos custom. `DICTATION_MODES_ENABLED` (default `false`) +
+  `DICTATION_MODE_MAP` (mapa configurable `exe:preset`). Captura del `.exe` en foco vía ctypes
+  puro en `save_frontmost_app()` (`core/clipboard.py`: `GetWindowThreadProcessId` +
+  `OpenProcess` + `QueryFullProcessImageNameW`, best-effort). Si el backend batch resuelto es
+  `claude-cli` el reformateo se **salta** (latencia de arranque 5-15s inaceptable en el hot-path
+  del dictado): el fallback automático de insights (groq/openrouter) sigue disponible si
+  `INSIGHTS_FALLBACK` está activo. Se dispara en el hilo background existente
+  (`_transcribe_final`), nunca en el hot-path síncrono. Excluido en modo traducción y
+  `AUDIO_SOURCE=system`. El `raw_text` conserva el texto MÁS crudo cuando diccionario y
+  reformateo cambian ambos (el Undo de 6.2 revierte todo). **Ampliado en la Ola 2 de
+  `docs/PLAN-DICTADO-2026-07-31.md` a 5 presets, elección manual y panel descubrible en
+  Ajustes: ver la sección 21, que es la que manda hoy sobre cuántos presets hay y cómo se
+  eligen.**
 
 **Fuera de v1 (decidido, no pendiente)**: raw_text en `url_transcribe`/traducción (el diccionario
-ya cubre esos flujos); builder visual de modos de dictado custom (3 presets fijos son
-suficientes, evita el error de settings infinitos de superwhisper); pinning de IP al socket del
-webhook (rebinding avanzado, riesgo residual documentado y aceptado).
+ya cubre esos flujos); builder visual de modos de dictado custom (un conjunto FIJO y CURADO de
+presets evita el error de settings infinitos de superwhisper, la invariante nunca fue "exactamente
+3", ver sección 21); pinning de IP al socket del webhook (rebinding avanzado, riesgo residual
+documentado y aceptado).
 
 ### 17. Copiloto con contexto OPS — briefing v1 (Ola 7, jul 2026)
 
@@ -647,6 +650,62 @@ Detalles que importan al tocar esto:
 - **Límite conocido y aceptado:** el prefijo en español y el comando en inglés se pueden mezclar
   (`"signo comma"` dispara). Es inofensivo y bloquearlo no aporta nada.
 
+### 21. Presets a la carta: 5 presets, elección manual y panel descubrible (Ola 2 de PLAN-DICTADO, 2026-08-01)
+
+Completa el motor de reformateo de la unidad 6.3 (sección 16), que existía desde hace meses y
+nunca se veía: apagado por defecto y sin interfaz que lo explicara. Tres unidades del mismo
+plan (`docs/PLAN-DICTADO-2026-07-31.md`, Ola 2): `2a` agrega dos presets, `2b` agrega la
+elección manual, `2c` lo hace descubrible sin tocar el default. **`DICTATION_MODES_ENABLED`
+sigue en `false`**: nada de esto cambia a dónde va el dictado de nadie, solo lo vuelve visible
+y explicado antes de que alguien lo encienda.
+
+**Los 5 presets** (`core/dictation_modes.PRESETS`), cada uno justificado en una línea, que es el
+filtro real de admisión ("¿puedo escribir en UNA línea cuándo se usa este y no el de al lado?"):
+
+| Preset | Cuándo se usa |
+|---|---|
+| `email` | prosa formal de correo, y respeta el saludo o el cierre si los dictaste |
+| `chat` | mensaje casual, se permite minúscula inicial y omitir el punto final |
+| `codigo` | deja los términos técnicos e identificadores literales, sin embellecer |
+| `lista` | convierte lo dictado en viñetas, una por ítem, sin prosa alrededor |
+| `notas` | prosa limpia y neutra: arregla la puntuación y nada más, sin formalidad de correo ni relajación de chat |
+
+Sigue siendo un conjunto FIJO y CURADO, sin builder de modos custom (sección 16): la invariante
+nunca fue "exactamente 3", fue "conjunto fijo, sin que el usuario invente los suyos", y esa
+propiedad se conserva intacta con 5.
+
+- **`2a`, elección automática por app en foco** (ya existía en 6.3, sin cambios de mecanismo):
+  `DICTATION_MODE_MAP` (`exe:preset,exe:preset,...`) mapea el `.exe` capturado en
+  `save_frontmost_app()` a un preset, vía `dictation_modes.preset_for_exe()`.
+- **`2b`, elección MANUAL para el siguiente dictado** (`core/dictation_modes.py`:
+  `set_manual_preset` / `get_manual_preset` / `consume_manual_preset` / `resolve_preset`):
+  submenú "Próximo dictado" en la bandeja (clic derecho en el icono de Vflow), con
+  `Automático` + los 5 presets. **Gana sobre el mapeo automático** cuando hay uno armado
+  (`resolve_preset` implementa la precedencia explícita). Uso ÚNICO, no pegajoso: se consume al
+  terminar ese dictado y vuelve solo a `Automático`, para evitar el mismo riesgo de "settings
+  infinitos" que ya descartó el builder custom. Estado en memoria del proceso, nunca en DB ni
+  archivo: se pierde al reiniciar Vflow, a propósito. El submenú queda visible aunque el flag
+  global esté apagado (elegir un preset solo arma un estado, no manda nada por sí solo), pero
+  avisa ahí mismo que el reformateo está apagado.
+- **`2c`, panel descubrible en el dashboard** (`web/blueprints/settings.py`,
+  `web/templates/dashboard.html`, sección Ajustes → "Modos de dictado por app"): antes de mostrar
+  el interruptor, el panel explica los 5 presets con su línea de la tabla de arriba, avisa **sin
+  eufemismos que activar esto manda el texto dictado a un modelo de lenguaje (LLM)** y que por
+  defecto ese modelo corre en la nube (mismo backend que "Acta + Asistente de reuniones", arriba
+  en el mismo panel; nota dinámica en el propio panel con cuál backend concreto aplica hoy), y
+  renderiza la lista de apps que se reformatearían automáticamente según el mapa (parseado del
+  mismo `DICTATION_MODE_MAP`, editable ahí mismo) **antes** del interruptor, no después de que el
+  usuario ya dictó algo. `GET`/`POST /api/settings` (`dictation_modes_enabled`,
+  `dictation_mode_map`) no cambiaron de contrato: ya los servía 6.3, `2c` solo cambió cómo se ven.
+
+**Por qué el default se queda apagado (objeción A1 del debate adversarial del plan, la más
+grave que encontró):** `DEFAULT_MODE_MAP` ya trae `outlook.exe`, `slack.exe`, `teams.exe`,
+`whatsapp.exe` y `discord.exe` mapeados, y el backend batch por defecto es Groq, en la nube.
+Poner el flag en ON habría mandado a la nube, sin pedirlo, todo lo que alguien dictara en esas
+apps desde la primera actualización. Descubrible y activado por defecto NO son lo mismo: la
+visibilidad se resuelve con interfaz, nunca con el default, mismo patrón que ya sigue el
+proyecto con `WEBHOOK_ENABLED` y `OPS_BRIEFING_PATH`.
+
 ## Security & Privacy
 
 ### 1. API Key Encryption (DPAPI)
@@ -749,8 +808,8 @@ Edit `config.py`:
 - `AUTO_HIGHLIGHTS_ENABLED` (default `true`, unidad 5.1) — Candidatos automáticos a momento destacado como intención adicional del MISMO update_state (cero LLM extra, máx 2/ventana); se persisten en `highlights_json` con `source:"auto"` y JAMÁS entran al acta ni al gate anti-alucinación de `momentos_destacados` (solo los manuales AltGr+H alimentan el acta). Kill-switch en caliente.
 - `TRANSCRIPTION_FALLBACK` (default `false`, unidad 5.5) — Espejo de `GROQ_FALLBACK`: con backend primario groq, un fallo de RED en el DICTADO (nunca reunión/URL) cae al modelo local si ya está descargado (sin auto-descarga; aviso de tray si falta). Breaker con cooldown `TRANSCRIPTION_FALLBACK_COOLDOWN` (default `120`s): dentro del cooldown el dictado va directo a local; un éxito de Groq lo resetea. translate solo con target `en`.
 - `SMART_COMMANDS_ENABLED` (default: `true`, Ola 1 de PLAN-DICTADO): convierte disparadores dictados con prefijo (`"signo coma"`) en su signo. Ver la sección 20. Es el **único killswitch del proyecto que nace encendido**, y a propósito: la pasada es regex local, sin red ni disco ni LLM, así que no hay dato que se escape ni fallo silencioso posible. Por lo mismo falla ABIERTO: solo el literal `false` apaga, cualquier otro valor deja la pasada activa (al revés de `DASHBOARD_AUTH_ENABLED`, donde el lado seguro del fallo es cerrar).
-- `DICTATION_MODES_ENABLED` (default: `false`) — Activa el reformateo post-dictado por app activa (Ola 6).
-- `DICTATION_MODE_MAP` — Mapa `exe:preset` (p. ej. `outlook.exe:email,slack.exe:chat,code.exe:codigo`) que asigna un preset de reformateo por `.exe` en foco; parseo tolerante a espacios/mayúsculas.
+- `DICTATION_MODES_ENABLED` (default: `false`) - Activa el reformateo post-dictado por uno de los 5 presets (email/chat/codigo/lista/notas), elegido por app en foco o a mano desde la bandeja ("Próximo dictado"). Ver la sección 21; panel descubrible en Ajustes.
+- `DICTATION_MODE_MAP` - Mapa `exe:preset` (p. ej. `outlook.exe:email,slack.exe:chat,code.exe:codigo,notepad.exe:lista`) que asigna un preset de reformateo por `.exe` en foco; parseo tolerante a espacios/mayúsculas. Editable desde Ajustes, con la lista de apps afectadas visible antes de activar el flag de arriba.
 - `DASHBOARD_AUTH_ENABLED` (default: `true`) - Exige el token local de sesión (`core/localauth.py`) en el dashboard y su API. Solo el valor `false` lo apaga; cualquier otro valor deja la protección encendida (fail-closed). Ver "Security & Privacy" → "Token local de sesión del dashboard".
 - `OPS_BRIEFING_PATH` (default: `""`) — Ruta a un `.md` curado por el usuario (proyectos activos, compromisos, metas); si está seteado, su contenido se inyecta SOLO en el chat en vivo "Preguntar" (Ola 7, unidad 7.1). Vacío = apagado.
 - `MEETING_RETENTION_DAYS` (default: `0` = conservar siempre) — Si > 0, al ARRANCAR la app se borran definitivamente las reuniones (actas y transcripts) más viejas que N días, incluida su entrada en el índice de búsqueda (`meetings_fts`). Es la única operación destructiva de la unidad 3.2; apagada por defecto. Configurable desde el dashboard (Ajustes → Reuniones), se aplica en el próximo reinicio, no al guardar.
