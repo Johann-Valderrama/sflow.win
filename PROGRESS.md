@@ -168,6 +168,11 @@
     `2c` (`78afd05`): panel de Ajustes con los 5 presets explicados, aviso de que el texto va a un
     LLM leyendo el backend REAL configurado, y la lista de apps que se auto-reformatearían visible
     ANTES de activar. **`DICTATION_MODES_ENABLED` sigue en `false`.**
+  - **VERIFICACIÓN VISUAL CERRADA (Johann, 2026-08-01):** miró en su propia app los dos paneles que
+    el agente no pudo capturar (snippets de `4c` y presets de `2c`) y los dio por buenos. Era el único
+    hueco de verificación que quedaba de las cuatro olas. El límite del entorno sigue vigente para lo
+    que venga: el panel del navegador del agente no compone frames, así que una ola con UI nueva
+    necesita ojo humano o una vía de captura distinta.
   - **PROCEDENCIA de `2c`, anotada a propósito:** ese trabajo apareció sin commitear en el árbol
     hacia las 01:36 del 2026-08-01 y NO lo produjo la ventana que lo commiteó a las 08:30. Se validó
     antes de integrarlo (default intacto, 10 tests nuevos verdes, suite completa verde). Si otra

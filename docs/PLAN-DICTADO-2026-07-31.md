@@ -379,8 +379,9 @@ sin leer la documentación, y queda claro que manda texto a un modelo?"*. Esta o
 justamente porque el motor ya estaba y nadie lo veía. **Resultado: cumple**, con los cuatro tests de
 `tests/test_dictation_modes_ui.py` como forma ejecutable de ese juicio (presets explicados y no solo
 nombrados, aviso del modelo de lenguaje, apps auto-reformateadas visibles antes de activar, default
-sigue apagado). **Límite, el mismo de `4c`:** no se verificó con captura de píxeles, porque el panel
-del navegador de este entorno no compone frames.
+sigue apagado). **El límite de la captura de píxeles quedó CERRADO: Johann miró los dos paneles (este
+y el de snippets de `4c`) en su propia app el 2026-08-01 y los dio por buenos.** Se conserva la nota
+de que el entorno del agente no compone frames, porque sigue siendo cierta para la próxima ola.
 
 ---
 
