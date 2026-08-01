@@ -59,6 +59,7 @@ from core.meeting import MEETING
 from core.clipboard import paste_text, copy_text, save_frontmost_app, get_saved_exe
 from core import dictation_modes
 from core import smart_commands
+from core import snippets_matcher
 from core.secrets import encrypt
 from core import proactive as _proactive
 from core.proactive import PROACTIVE, LullDetector, MonologueWatch
@@ -926,15 +927,34 @@ class VflowApp(QObject):
                             raw_full = text
                         text = with_commands
 
-                # ANCLA para la Ola 4 (unidad 4b, snippets): la expansión de
-                # snippets va JUSTO AQUÍ — después de smart commands y antes del
-                # bloque de dictation_modes de abajo. Motivo (Eje 1 del contrato,
-                # CLAUDE.md sección 19): el texto que expande un snippet es texto
-                # que el usuario ESCRIBIÓ y ya viene puntuado; si los snippets
-                # corrieran antes de smart commands, esta pasada volvería a
-                # escanear ese texto guardado y mutilaría cualquier palabra literal
-                # que contenga (p. ej. un snippet cuyo texto diga "signo coma"). Con
-                # este orden, lo que inserta un snippet no lo vuelve a tocar nadie.
+                # Snippets: disparador -> texto guardado (unidad 4b, Ola 4 de
+                # PLAN-DICTADO-2026-07-31). Corre JUSTO AQUÍ — después de smart
+                # commands y ANTES del bloque de dictation_modes de abajo. Motivo
+                # (Eje 1 del contrato, CLAUDE.md sección 19): el texto que expande
+                # un snippet es texto que el usuario ESCRIBIÓ y ya viene puntuado;
+                # si los snippets corrieran antes de smart commands, esta pasada
+                # volvería a escanear ese texto guardado y mutilaría cualquier
+                # palabra literal que contenga (p. ej. un snippet cuyo texto diga
+                # "signo coma"). Con este orden, lo que inserta un snippet no lo
+                # vuelve a tocar nadie. MISMOS gates que smart commands y
+                # dictation_modes (Eje 2 del contrato): NO en traducción
+                # (translate=True) ni en AUDIO_SOURCE=system, porque en ambos
+                # casos quien "dicta" no es necesariamente el usuario. Cableado
+                # aquí y NUNCA en core/transcriber.py — ver TestAlcanceEstructural
+                # en tests/test_pipeline_texto.py.
+                if not translate and self.recorder.source != "system":
+                    expanded = snippets_matcher.expand_snippets(text)
+                    # Guarda de seguridad: una expansión que devolviera vacío o
+                    # solo espacios NUNCA reemplaza el dictado.
+                    if expanded and expanded.strip() and expanded != text:
+                        # Mismo patrón que smart commands y el reformateo LLM: el
+                        # texto MÁS crudo va a raw_full. Si ya había un raw_full
+                        # (crudo pre-smart-commands o pre-diccionario), ese sigue
+                        # siendo más crudo y se conserva; si no había raw_full
+                        # aún, el texto pre-snippets pasa a serlo.
+                        if raw_full is None:
+                            raw_full = text
+                        text = expanded
 
                 # Modos de dictado por app activa (unidad 6.3) — opt-in, apagado por
                 # defecto. Solo aplica al dictado normal (modo 1/2): NO en traducción
