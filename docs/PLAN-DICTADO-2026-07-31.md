@@ -319,6 +319,31 @@ antes del último commit.
 
 ## Ola 2: presets a la carta (completar lo que ya existe)
 
+**RESPUESTA a la mitad del hallazgo E8 que toca esta ola: pasar de 3 a 5 presets NO rompe la
+invariante, porque la invariante nunca fue el número.** Lo que `CLAUDE.md` declaró fuera de v1 es el
+*builder visual de modos custom*, con esta razón literal: *"3 presets fijos son suficientes, evita el
+error de settings infinitos de superwhisper"*. La propiedad que protege es **conjunto fijo y curado,
+sin que el usuario invente los suyos**, y eso se conserva intacto. El "3 son suficientes" era una
+afirmación, y la falsó el propio caso que originó este plan: dictar una lista no lo cubre ninguno de
+los tres.
+
+**Pero el riesgo que la invariante señalaba es real y se traslada:** cinco opciones entre las que el
+usuario no sabe elegir son peores que tres. Así que el filtro de admisión de un preset nuevo no es
+"¿se me ocurre un caso?", es **"¿puedo escribir en UNA línea cuándo se usa este y no el de al lado?"**.
+Si esa línea no se puede escribir, el preset no entra. Aplicado:
+
+| Preset | La línea que lo justifica |
+|---|---|
+| `email` | prosa formal de correo, y respeta el saludo o el cierre si los dictaste |
+| `chat` | mensaje casual, se permite minúscula inicial y omitir el punto final |
+| `codigo` | deja los términos técnicos e identificadores literales, sin embellecer |
+| **`lista`** | **convierte lo dictado en viñetas, una por ítem, sin prosa alrededor** |
+| **`notas`** | **prosa limpia y neutra: arregla la puntuación y nada más, sin formalidad de correo ni relajación de chat** |
+
+Las cinco líneas son distintas entre sí, así que los dos presets nuevos entran. **Esas mismas líneas
+son las que la unidad `2c` tiene que mostrar en la interfaz**: si el usuario no puede elegir sin leer
+documentación, la ola no cumplió su objetivo aunque el código funcione.
+
 | Unidad | Qué | Dificultad | Ejecutar con | Por qué | Depende de | Escribe | Verifica | Si falla |
 |---|---|---|---|---|---|---|---|---|
 | 2a | Presets `lista` y `notas` en `PRESETS` | Baja | Sonnet.L | Es escribir dos prompts en la estructura que ya existe | - | `core/dictation_modes.py`, `tests/test_dictation_modes.py` | `SCRIPT: pytest tests/test_dictation_modes.py` | REINTENTO |
