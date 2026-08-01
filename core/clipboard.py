@@ -42,6 +42,14 @@ _kernel32.GlobalUnlock.restype = ctypes.wintypes.BOOL
 _kernel32.GlobalFree.argtypes = [ctypes.wintypes.HGLOBAL]
 _kernel32.GlobalFree.restype = ctypes.wintypes.HGLOBAL
 
+# Unidad 3a: detectar si un Ctrl+C copió algo, sin comparar contenidos.
+_user32.GetClipboardSequenceNumber.restype = ctypes.wintypes.DWORD
+
+# Tope DURO de la captura de selección (unidad 3a). No es el presupuesto del
+# modelo (ese vive en core/transform.py con budget_chars): es la guarda de
+# cordura para que un Ctrl+A sobre un documento gigante no entre a memoria.
+CAPTURE_MAX_CHARS = 200_000
+
 # ---------------------------------------------------------------------------
 # Resolución HWND → nombre de proceso (unidad 6.3, modos de dictado por app).
 # Cero dependencias nuevas: ctypes puro sobre user32/kernel32.
@@ -186,6 +194,117 @@ def _get_clipboard_text() -> "str | None":
     except Exception as e:
         logger.warning("Failed to read clipboard text: %s", e)
         return None
+
+
+def _clipboard_sequence() -> int:
+    """Número de secuencia del portapapeles (se incrementa en CADA cambio).
+
+    Es la forma correcta de saber si un Ctrl+C copió algo, incluso cuando lo
+    copiado es IDÉNTICO a lo que ya había: comparar el texto no distingue "no
+    había selección" de "la selección era igual al portapapeles". Devuelve 0 si
+    la API no está disponible (sin acceso a la window station), y el caller trata
+    ese 0 como "detección no disponible" y se pone más estricto, nunca más laxo.
+    """
+    try:
+        return int(_user32.GetClipboardSequenceNumber())
+    except Exception as e:
+        logger.debug("GetClipboardSequenceNumber no disponible: %s", e)
+        return 0
+
+
+def _send_ctrl_c() -> bool:
+    """Simula Ctrl+C sobre la ventana en foco. True si se pudo enviar."""
+    try:
+        ctrl = Controller()
+        with ctrl.pressed(Key.ctrl):
+            ctrl.press('c')
+            ctrl.release('c')
+        return True
+    except Exception as e:
+        logger.warning("capture_selection: fallo al simular Ctrl+C: %s", e)
+        return False
+
+
+def capture_selection(timeout: float = 0.8) -> "tuple[str | None, str]":
+    """Captura el texto SELECCIONADO en la app en foco vía portapapeles (unidad 3a).
+
+    Guarda primero la ventana destino (``save_frontmost_app()``) para que el
+    pegado posterior sepa a dónde volver, manda Ctrl+C, espera a que el
+    portapapeles cambie y devuelve lo copiado.
+
+    Reglas de la unidad 3z (diseño), que son la razón de casi todo lo de abajo:
+
+    - **Jamás cae al contenido PREVIO del portapapeles.** Si el usuario dispara
+      el atajo sin nada seleccionado, esto devuelve ``"empty"`` y aborta. Sin esa
+      guarda, Vflow mandaría a un modelo remoto lo que hubiera copiado desde
+      antes (que puede ser cualquier cosa) y el usuario no tendría cómo notarlo:
+      es el fallo silencioso más caro de esta ola.
+    - **Restaura el portapapeles previo** cuando ese contenido era texto. Ver la
+      enmienda de 3z sobre contenido no textual en el plan: una imagen copiada no
+      se puede restaurar con esta API, y se prefiere dejar la selección (el mismo
+      estado que produciría un Ctrl+C manual del usuario) antes que destruirle la
+      imagen vaciando el portapapeles.
+    - **Tope duro de tamaño** (``CAPTURE_MAX_CHARS``). Es una guarda de cordura
+      contra un Ctrl+A sobre un documento entero, NO el presupuesto del modelo:
+      ese lo aplica ``core/transform.py`` (unidad 3b) con ``budget_chars`` y con
+      aviso visible.
+    - **Nunca loguea el CONTENIDO capturado**, solo su longitud.
+
+    Returns:
+        ``(texto, "ok")``        — hay selección y cabe.
+        ``(None, "empty")``      — no había nada seleccionado (o no se pudo
+                                   confirmar que el Ctrl+C copiara algo nuevo).
+        ``(None, "too_long")``   — la selección supera el tope duro.
+        ``(None, "failed")``     — no se pudo simular Ctrl+C.
+    """
+    save_frontmost_app()
+
+    prev_text = _get_clipboard_text()
+    seq_before = _clipboard_sequence()
+    seq_available = seq_before != 0
+
+    if not _send_ctrl_c():
+        return None, "failed"
+
+    changed = False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        time.sleep(0.02)
+        if seq_available:
+            if _clipboard_sequence() != seq_before:
+                changed = True
+                break
+        else:
+            # Sin número de secuencia solo queda comparar el texto, así que se
+            # exige que sea DISTINTO del previo. Es un falso "empty" cuando la
+            # selección coincidía con el portapapeles, y ese es el lado seguro
+            # del error: aborta con aviso en vez de transformar texto que el
+            # usuario no seleccionó ahora.
+            current = _get_clipboard_text()
+            if current and current != prev_text:
+                changed = True
+                break
+
+    if not changed:
+        return None, "empty"
+
+    try:
+        text = _get_clipboard_text()
+    finally:
+        if prev_text is not None:
+            try:
+                _set_clipboard_text(prev_text)
+            except Exception as e:
+                logger.warning("capture_selection: no se pudo restaurar el portapapeles: %s", e)
+
+    if not text or not text.strip():
+        return None, "empty"
+    if len(text) > CAPTURE_MAX_CHARS:
+        logger.info("capture_selection: selección descartada por tamaño (%d caracteres)", len(text))
+        return None, "too_long"
+
+    logger.debug("capture_selection: %d caracteres capturados", len(text))
+    return text, "ok"
 
 
 def copy_text(text: str) -> bool:

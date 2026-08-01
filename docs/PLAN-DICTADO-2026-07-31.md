@@ -466,6 +466,15 @@ portapapeles del sistema, que es compartido con todo el equipo. Tres reglas obli
 - **Restaurar siempre el contenido anterior del portapapeles tras la captura**, sin mirar
   `RESTORE_CLIPBOARD` (que gobierna el pegado del dictado, no esto). Dejar una selección ajena
   colgada en el portapapeles es una fuga por un canal que el usuario no está mirando.
+  > **ENMIENDA al implementar `3a` (2026-08-01), porque el diseño prometía algo que la API no
+  > da.** "Siempre" solo alcanza al contenido TEXTUAL: `_get_clipboard_text` lee `CF_UNICODETEXT`,
+  > así que un portapapeles con una imagen o un archivo no se puede leer ni reponer. Ahí quedan dos
+  > salidas y ninguna es gratis: vaciar el portapapeles (mata la fuga, pero le destruye al usuario
+  > la imagen que había copiado, en CADA transform) o dejar la selección. **Se deja la selección**,
+  > porque ese es exactamente el estado que produciría un Ctrl+C manual del usuario sobre lo que él
+  > mismo acaba de seleccionar: no es una capacidad nueva de Vflow, y el caso sensible de verdad
+  > (una contraseña copiada, que es texto) sí queda cubierto por la restauración. Test que fija la
+  > decisión: `test_sin_previo_textual_no_vacia_el_portapapeles`.
 - **Nunca caer al contenido previo del portapapeles cuando no hay selección.** Sin esto aparece el
   peor fallo posible de esta ola y es silencioso: el usuario dispara el atajo sin nada seleccionado,
   el Ctrl+C no copia nada, y Vflow manda al modelo lo que hubiera en el portapapeles desde antes, que
