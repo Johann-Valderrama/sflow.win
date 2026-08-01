@@ -25,9 +25,23 @@ sobre CPU `int8` en las dos configuraciones de modelo, y no es una ganancia marg
 
 Recomendación de precisión si se construye 7b: usar `compute_type="int8"` en CUDA (o
 `int8_float32`, que en esta GPU es la misma ruta de cómputo, ver hallazgo abajo), NO `float32`.
-El texto de `float32` diverge más del comportamiento actual de producción (CPU-int8) que el de
-`int8`, ver la sección de coincidencia de texto: usar `int8` en CUDA minimiza el cambio de
-comportamiento percibido por el usuario, además de ser igual o más rápido.
+El texto de `float32` diverge algo más del comportamiento actual de producción (CPU-int8) que
+el de `int8`, ver la sección de coincidencia de texto: usar `int8` en CUDA minimiza el cambio de
+comportamiento percibido por el usuario, además de ser igual o más rápido. Con la corrección de
+métrica de texto (ver más abajo) y el proxy de referencia, la divergencia real entre CPU y CUDA
+es MENOR de lo que una primera medición sugería, y no hay evidencia de que CUDA transcriba peor.
+
+> **Corrección de metodología, `[Verificado]`, importante para leer el resto del reporte:** una
+> primera versión de este documento reportó una divergencia de texto "notable" entre CPU y CUDA a
+> 60s (ratio 0.82 en `small`). Esa cifra estaba INFLADA por un bug de medición: la función de
+> comparación de texto usaba `difflib.SequenceMatcher` con `autojunk=True` (el default de
+> Python), que para prosa >200 caracteres con muchos espacios/vocales repetidos activa una
+> heurística de "elementos populares = basura" y subestima la similitud de forma severa (un caso
+> de este mismo banco: 0.025 en vez de 0.94 comparando dos transcripciones que un humano leería
+> como casi idénticas). Corregido con `autojunk=False` (recomendación estándar de la documentación
+> de Python para comparar texto natural, no código/diffs de archivo). **Todos los números de este
+> reporte están re-verificados con la métrica corregida**; la cifra original queda documentada
+> como parte del aprendizaje, no repetida como si fuera el hallazgo real.
 
 ## Hardware y versiones (medido, no copiado de otro documento)
 
@@ -150,31 +164,37 @@ la diferencia entre "utilizable" y "no utilizable" para un modelo que hoy nadie 
 
 ## Coincidencia de texto (CPU-int8 vs cada config CUDA, sobre habla real)
 
+Números re-verificados con `autojunk=False` (ver corrección de metodología arriba). Recalculados
+directamente sobre los textos ya guardados por las corridas originales (mismos JSON crudos, sin
+volver a correr ningún modelo), así que no hay re-medición de latencia involucrada, solo la
+métrica de texto corregida.
+
 **`small`** (texto base de CPU-int8: 36, 157, 195, 447, 758 caracteres por clip):
 
 | vs cpu_int8 | 5s | 10s | 15s | 30s | 60s |
 |---|---|---|---|---|---|
-| cuda_int8 | ratio 0.9577 (2 dist.) | ratio 0.9684 (9 dist.) | ratio 0.9844 (6 dist.) | ratio 0.9978 (1 dist.) | **ratio 0.82 (145 dist.)** |
+| cuda_int8 | ratio 0.9577 (2 dist.) | ratio 0.9684 (9 dist.) | ratio 0.9844 (6 dist.) | ratio 0.9978 (1 dist.) | ratio 0.9816 (27 dist.) |
 | cuda_int8_float32 | igual a cuda_int8 (misma ruta de cómputo) | | | | |
-| cuda_float32 | ratio 0.9577 (2 dist.) | ratio 0.9714 (8 dist.) | ratio 0.9818 (7 dist.) | **ratio 0.6652 (163 dist.)** | **ratio 0.6071 (435 dist.)** |
+| cuda_float32 | ratio 0.9577 (2 dist.) | ratio 0.9714 (8 dist.) | ratio 0.9818 (7 dist.) | ratio 0.9253 (63 dist.) | ratio 0.9683 (43 dist.) |
 
 **`medium`** (texto base de CPU-int8: 32, 156, 188, 425, 746 caracteres por clip):
 
 | vs cpu_int8 | 5s | 10s | 15s | 30s | 60s |
 |---|---|---|---|---|---|
-| cuda_int8 | IDÉNTICO | ratio 0.9936 (2 dist.) | IDÉNTICO | IDÉNTICO | **ratio 0.7772 (183 dist.)** |
+| cuda_int8 | IDÉNTICO | ratio 0.9936 (2 dist.) | IDÉNTICO | IDÉNTICO | ratio 0.9597 (53 dist.) |
 | cuda_int8_float32 | igual a cuda_int8 | | | | |
-| cuda_float32 | IDÉNTICO | ratio 0.9904 (2 dist.) | ratio 0.9947 (2 dist.) | ratio 0.8578 (62 dist.) | **ratio 0.4369 (554 dist.)** |
+| cuda_float32 | IDÉNTICO | ratio 0.9904 (2 dist.) | ratio 0.9947 (2 dist.) | ratio 0.9894 (8 dist.) | ratio 0.9175 (104 dist.) |
 
-**Patrón consistente en los dos modelos, `[Verificado]`:** a 5-15s, CPU y CUDA casi siempre
-coinciden exacto o casi exacto. **En el clip de 60s (que coincide con el orden de magnitud de
-`CHUNK_SECONDS=60` de producción), el texto diverge de forma notable**, y más aún en `float32`
-(hasta 554 caracteres distintos de 746, en `medium`) que en `int8`/`int8_float32` (183
-caracteres distintos). **La causa de esta divergencia SÍ está confirmada** (ver la sección
-siguiente, "Control de auto-consistencia"): es un efecto real del DISPOSITIVO, no inestabilidad
-del modelo en audio largo. **Consecuencia práctica:** si 7b se construye, conviene medir esta
-divergencia específicamente en clips largos antes de lanzarlo a producción, y preferir
-`compute_type="int8"` (la opción que menos diverge de lo que el usuario ya conoce).
+**Patrón consistente en los dos modelos, `[Verificado]`:** en las 5 duraciones CPU y CUDA
+concuerdan por encima de 0.92, la mayoría por encima de 0.96. Sigue habiendo una caída leve en el
+clip de 60s (coincide con el orden de magnitud de `CHUNK_SECONDS=60` de producción) y `float32`
+sigue divergiendo algo más que `int8`/`int8_float32`, pero la magnitud real (2-8 puntos
+porcentuales) es mucho menor que la que reportaba la métrica con el bug (hasta 56 puntos). **La
+causa de la divergencia residual SÍ está confirmada** (ver "Control de auto-consistencia" abajo):
+es un efecto real, pero MENOR, del DISPOSITIVO, no inestabilidad del modelo en audio largo.
+**Consecuencia práctica:** preferir `compute_type="int8"` en 7b (la opción que menos diverge de
+lo que el usuario ya conoce), aunque con esta evidencia el riesgo de fidelidad ya no es el
+bloqueante que parecía.
 
 ## Control de auto-consistencia: ¿el dispositivo diverge, o el modelo diverge de sí mismo?
 
@@ -187,23 +207,56 @@ indistinguibles, y llevan a decisiones distintas para 7b. Control añadido con e
 no la misma instancia) y se transcribe el MISMO clip; se compara el texto de esas dos corridas
 consigo mismo, con la misma métrica de `SequenceMatcher` ya usada arriba.
 
-| Clip | CPU vs CPU (self) | CUDA vs CUDA (self) | CPU vs CUDA (cross-device, de la tabla arriba) |
+| Clip | CPU vs CPU (self) | CUDA vs CUDA (self) | CPU vs CUDA (cross-device, corregido) |
 |---|---:|---:|---:|
 | 30s | ratio 1.0 (IDÉNTICO) | ratio 1.0 (IDÉNTICO) | ratio 0.9978 |
-| 60s | ratio 1.0 (IDÉNTICO) | ratio 1.0 (IDÉNTICO) | ratio 0.82 |
+| 60s | ratio 1.0 (IDÉNTICO) | ratio 1.0 (IDÉNTICO) | ratio 0.9816 |
 
-**Conclusión de atribución, `[Verificado]`:** CPU es perfectamente reproducible consigo misma (2
-cargas independientes, texto IDÉNTICO) y CUDA también lo es (2 cargas independientes, texto
-IDÉNTICO); ninguno de los dos dispositivos es internamente inestable en audio largo. Como ambos
-son 100% auto-consistentes y solo divergen entre sí (0.82 a 60s, prácticamente sin divergencia a
-30s), **la divergencia de 60s es un efecto REAL del dispositivo** (CPU y GPU calculan la
-mel-spectrograma/atención con caminos numéricos distintos: no asociatividad de punto flotante,
-distinto orden de operaciones en las GEMM, y esa diferencia se acumula lo suficiente en ~60s de
-audio como para hacer que el decodificador tome una rama distinta en algún punto de la secuencia),
-no inestabilidad del modelo consigo mismo. **Esto no cambia el veredicto de 7b** (CUDA sigue
-ganando en latencia de forma decisiva), pero sí confirma que la elección de `compute_type` en 7b
-importa para la fidelidad del texto en chunks largos, y que ese riesgo es real, no un fantasma
-estadístico.
+**Conclusión de atribución, `[Verificado]`, actualizada tras corregir el bug de `autojunk`:** CPU
+es perfectamente reproducible consigo misma (2 cargas independientes, texto IDÉNTICO) y CUDA
+también lo es (2 cargas independientes, texto IDÉNTICO); ninguno de los dos dispositivos es
+internamente inestable en audio largo. Como ambos son 100% auto-consistentes y aun así divergen
+levemente entre sí (0.9816 a 60s, no 1.0), **la causa sigue siendo el DISPOSITIVO** (CPU y GPU
+calculan la mel-spectrograma/atención con caminos numéricos distintos: no asociatividad de punto
+flotante, distinto orden de operaciones en las GEMM), pero la MAGNITUD es pequeña (27 caracteres
+distintos de 758, no 145 como se reportó con la métrica rota) y el proxy de referencia de la
+sección siguiente confirma que ninguno de los dos dispositivos se aleja más que el otro de un
+modelo más fuerte. **Esto no cambia el veredicto de 7b** (CUDA sigue ganando en latencia de forma
+decisiva), y ya no hay una señal de riesgo de fidelidad que condicione el default de
+`compute_type` más allá de la preferencia por `int8` ya razonada arriba.
+
+## Proxy de referencia: ¿CPU o CUDA se acerca MÁS a lo que se dijo?
+
+El control anterior confirma QUE hay una diferencia entre CPU y CUDA a 60s; no dice CUÁL de los
+dos es más fiel a lo que realmente se dijo. "Distinto" no es "peor". No hay transcripción humana
+de referencia disponible (el `.md` que acompaña al video es de una extensión de "captura de
+hablantes" del navegador, texto de mala calidad por diseño, no sirve como referencia). En su
+lugar se usó `large-v3-turbo` (repo `mobiuslabsgmbh/faster-whisper-large-v3-turbo`), un modelo
+bastante más fuerte que `small`, ya cacheado localmente por la skill `transcribir-video` del OPS
+(`C:\Users\OswyDesktop.0\.cache\huggingface\hub\models--mobiuslabsgmbh--faster-whisper-large-v3-turbo`).
+Correrlo NO implicó descargar nada ni mandar audio a ninguna parte: se cargó con
+`local_files_only=True` apuntando a esa caché existente. **Esto NO es transcripción humana de
+referencia, es un PROXY** (un modelo más fuerte usado como vara de comparación): se rotula así en
+cada mención, sin excepción.
+
+Metodología (flag `--reference-model` en `tests/bench_local_backend.py`): se transcriben los
+clips de 30s y 60s con `large-v3-turbo` en CUDA, y se mide la distancia (misma métrica de
+`SequenceMatcher(autojunk=False)`) de ese texto contra CPU-small-int8 y CUDA-small-int8.
+
+| Clip | Referencia vs CPU-small-int8 | Referencia vs CUDA-small-int8 | Diferencia |
+|---|---:|---:|---:|
+| 30s | ratio 0.9409 (46 dist.) | ratio 0.9409 (46 dist.) | 0.0000 |
+| 60s | ratio 0.9439 (72 dist.) | ratio 0.9441 (72 dist.) | 0.0002 |
+
+**Conclusión, `[Verificado]`:** las distancias son prácticamente idénticas en los dos clips
+(diferencia ≤0.0002, dentro del ruido de medición). **No hay evidencia de que CUDA transcriba
+peor que CPU; tampoco de que transcriba mejor.** Ambos se alejan del modelo de referencia casi
+exactamente lo mismo, así que la pequeña divergencia entre CPU y CUDA (confirmada arriba como un
+efecto real del dispositivo) no tiene una dirección clara hacia "cuál es más correcto": es ruido
+de precisión numérica sin sesgo medible hacia ningún lado. Esto cierra la pregunta que quedaba
+abierta para el default de 7b: no hay ninguna razón, por fidelidad de texto, para preferir CPU
+sobre CUDA o viceversa; la decisión de default puede apoyarse enteramente en la ganancia de
+latencia (que sí es grande y consistente).
 
 ## VRAM y contexto de la máquina durante la medición
 
@@ -265,25 +318,34 @@ CUDA.
 3. **GPU compartida con otros procesos** (Vflow, OBS, Chrome, Slack, Zoom, Claude desktop) durante
    la medición: es el escenario realista de la máquina de Johann, no un banco de laboratorio
    aislado.
-4. **La causa de la divergencia de texto a 60s no está confirmada** (ver sección de coincidencia
-   de texto): se reporta el hecho medido, no una explicación sin verificar.
-5. **`nvidia-smi --query-compute-apps` no reporta VRAM por proceso en esta máquina** para la
+4. **`nvidia-smi --query-compute-apps` no reporta VRAM por proceso en esta máquina** para la
    mayoría de procesos ("Insufficient Permissions" o "[N/A]"), así que la lista de "17-18 procesos
    usando GPU" es un conteo, no un desglose fiable de cuánto usa cada uno.
+5. **El proxy de referencia (`large-v3-turbo`) solo se corrió para `small`**, no para `medium`
+   (no lo pidió el control original y hubiera sido una descarga/carga adicional sin necesidad
+   clara); si se quiere el mismo cierre para `medium`, correr `--reference-model --model medium`.
+6. **Bug de metodología ya corregido, declarado por transparencia**: una versión anterior de este
+   reporte usó `SequenceMatcher(autojunk=True)` y reportó divergencias de texto muy infladas
+   (hasta 0.44 de ratio donde el valor correcto es 0.92). Corregido con `autojunk=False`; ver la
+   nota al inicio del veredicto. Cualquier número de texto en este documento ya refleja la
+   métrica corregida.
 
 ## Comando para reproducir
 
 ```
 venv\Scripts\python.exe tests\bench_local_backend.py --model small
 venv\Scripts\python.exe tests\bench_local_backend.py --model medium
+venv\Scripts\python.exe tests\bench_local_backend.py --model small --self-consistency
+venv\Scripts\python.exe tests\bench_local_backend.py --model small --reference-model
 ```
 
-Ambos comandos extraen sus propios clips del video de estudio (path por defecto en
-`DEFAULT_VIDEO`, sustituible con `--video`) a un directorio temporal en cada corrida, verifican
-habla real antes de medir, y no requieren red (excepto la primera vez que se pide `--model medium`
-si aún no está descargado: faster-whisper lo descarga automáticamente desde Hugging Face). Exit
-code 0 si la medición se completó; exit != 0 si el modelo no está descargado o si el guardián de
-verificación no encuentra habla real en ningún candidato.
+Todos extraen sus propios clips del video de estudio (path por defecto en `DEFAULT_VIDEO`,
+sustituible con `--video`) a un directorio temporal en cada corrida, verifican habla real antes
+de medir, y no requieren red (excepto la primera vez que se pide `--model medium` si aún no está
+descargado: faster-whisper lo descarga automáticamente desde Hugging Face; `--reference-model`
+NUNCA descarga, se salta con aviso si `large-v3-turbo` no está ya en la caché local de
+Hugging Face del usuario). Exit code 0 si la medición se completó; exit != 0 si el modelo no está
+descargado o si el guardián de verificación no encuentra habla real en ningún candidato.
 
 ---
 

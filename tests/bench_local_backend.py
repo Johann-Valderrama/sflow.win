@@ -53,6 +53,17 @@ cuda_int8) DOS VECES con el modelo recargado desde cero sobre los clips de
 30s y 60s, y compara el texto de esas dos corridas consigo mismo. Sin este
 control, "CPU vs CUDA diverge" y "el modelo diverge de si mismo en audio
 largo" son indistinguibles, y son dos conclusiones distintas para 7b.
+
+CORRECCION 2026-08-01 (proxy de referencia, `--reference-model`): confirmado
+que la divergencia a 60s es del dispositivo (self-consistency = IDENTICO en
+ambos), queda una pregunta que ese control NO responde: ¿cual de los dos,
+CPU o CUDA, se acerca MAS a lo que realmente se dijo? "Distinto" no es
+"peor". El flag `--reference-model` transcribe los clips de 30s/60s con
+`large-v3-turbo` (modelo bastante mas fuerte, cacheado localmente por la
+skill `transcribir-video` del OPS en el cache de Hugging Face del usuario,
+NUNCA se descarga ni se commitea) y mide la distancia de CPU-small-int8 y
+CUDA-small-int8 contra ese texto de referencia. Es un PROXY, no ground
+truth humano: se rotula asi en el reporte, sin excepcion.
 """
 import argparse
 import io
@@ -65,6 +76,16 @@ import tempfile
 import time
 import wave
 from difflib import SequenceMatcher
+
+# La consola de Windows (cp1252) no imprime bien tildes/simbolos Unicode; con
+# errors="strict" (default) un caracter fuera de cp1252 CRASHEA el proceso a
+# mitad de corrida y se pierde todo lo medido hasta ese punto (ya paso una
+# vez con "Δ" en este script). errors="replace" nunca aborta el bench por un
+# print, mismo patron que test_dual_capture.py en este repo.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # noqa: BLE001 - best-effort, nunca bloquea el bench
+    pass
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
@@ -86,6 +107,14 @@ CLIP_DURATIONS_S = [5, 10, 15, 30, 60]
 SAMPLE_RATE = 16000
 N_REPS = 3
 MIN_RMS = 0.01  # por debajo de esto se trata como silencio/piso de ruido, no habla
+
+# Modelo de REFERENCIA (proxy, no ground truth): lo dejo cacheado la skill
+# `transcribir-video` del OPS en el cache DEFAULT de huggingface_hub del
+# usuario (no en models/ del repo). NUNCA se descarga ni se commitea desde
+# aqui; si no esta en disco, --reference-model se salta con un aviso.
+REFERENCE_MODEL_REPO = "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
+REFERENCE_MODEL_CACHE = r"C:\Users\OswyDesktop.0\.cache\huggingface\hub"
+REFERENCE_DURS = [30, 60]
 
 # Puntos de partida candidatos (segundos), esparcidos en minutos DISTINTOS a
 # lo largo del video (no 5 cortes seguidos del mismo tramo). Si alguno cae en
@@ -288,9 +317,24 @@ def transcribe_timed(model, wav_path: str) -> tuple[str, float]:
 # ---------------------------------------------------------------------
 
 def text_agreement(a: str, b: str) -> dict:
+    """Compara dos textos con SequenceMatcher.
+
+    BUG encontrado y corregido 2026-08-01 (ver docstring del modulo): con
+    `autojunk=True` (el default de difflib), textos de habla natural >200
+    caracteres con muchos espacios/vocales repetidas activan la heuristica
+    "popular elements = junk" y el ratio se DESPLOMA de forma espuria (un
+    caso real de este banco: 0.025 en vez de 0.94 comparando dos
+    transcripciones que un humano leeria como casi identicas). Los pares de
+    <200 caracteres (clips de 5/10/15s) nunca activan la heuristica, asi que
+    no se vieron afectados; los de 30/60s SI, y de forma severa. Ver
+    docs/benchmarks/local-backend-gpu-2026-08-01.md para el numero medido y
+    la re-verificacion completa. `autojunk=False` es la recomendacion
+    estandar de la documentacion de Python para comparar prosa (el heuristico
+    esta pensado para diffs de codigo/archivos, no lenguaje natural).
+    """
     if a == b:
         return {"identico": True, "ratio": 1.0, "chars_distintos": 0}
-    sm = SequenceMatcher(None, a, b)
+    sm = SequenceMatcher(None, a, b, autojunk=False)
     ratio = sm.ratio()
     chars_distintos = sum(
         max(i2 - i1, j2 - j1)
@@ -341,6 +385,89 @@ def run_self_consistency(model_size: str, models_dir: str, clips: dict[int, str]
 
 
 # ---------------------------------------------------------------------
+# Proxy de referencia: ¿CPU o CUDA se acerca MAS a lo que se dijo?
+# (ver correccion 2026-08-01 en el docstring). NO es ground truth humano.
+# ---------------------------------------------------------------------
+
+def is_reference_model_cached() -> bool:
+    """True si large-v3-turbo ya esta en el cache de huggingface_hub del
+    usuario (lo dejo la skill transcribir-video). Nunca dispara descarga."""
+    if not os.path.isdir(REFERENCE_MODEL_CACHE):
+        return False
+    repo_dir = "models--" + REFERENCE_MODEL_REPO.replace("/", "--")
+    snapshots = os.path.join(REFERENCE_MODEL_CACHE, repo_dir, "snapshots")
+    if not os.path.isdir(snapshots):
+        return False
+    for snap in os.listdir(snapshots):
+        snap_path = os.path.join(snapshots, snap)
+        if os.path.isdir(snap_path) and os.listdir(snap_path):
+            return True
+    return False
+
+
+def run_reference_proxy(clips: dict[int, str], texts_small: dict[str, dict[int, str]],
+                         model_label: str) -> dict | None:
+    """Transcribe los clips de REFERENCE_DURS con large-v3-turbo (proxy MAS
+    FUERTE, no ground truth humano) y mide la distancia de CPU-`model_label`
+    y CUDA-`model_label` contra ese texto de referencia, con la misma
+    metrica de ratio ya usada en el resto del reporte. `texts_small` es el
+    dict de texts["cpu_int8"]/texts["cuda_int8"] ya producido por el run
+    normal (el nombre es historico; en la practica es el del `--model`
+    activo, casi siempre `small`).
+    """
+    if not is_reference_model_cached():
+        print("=== Proxy de referencia (--reference-model) OMITIDO ===")
+        print(f"  '{REFERENCE_MODEL_REPO}' no esta en el cache local ({REFERENCE_MODEL_CACHE});")
+        print("  este script NUNCA lo descarga. Sin el, no hay proxy de referencia.")
+        print()
+        return None
+
+    from faster_whisper import WhisperModel  # noqa: PLC0415
+
+    print("=== Proxy de referencia: large-v3-turbo vs CPU-small-int8 y CUDA-small-int8 ===")
+    print("  AVISO: esto es un PROXY (modelo mas fuerte), NO transcripcion humana de referencia.")
+    ref_model, load_s = load_model(
+        REFERENCE_MODEL_REPO, REFERENCE_MODEL_CACHE,
+        dict(device="cuda", compute_type="int8_float32"),
+    )
+    print(f"  large-v3-turbo cargado en CUDA en {load_s:.2f}s")
+
+    out = {}
+    for dur in REFERENCE_DURS:
+        if dur not in clips:
+            continue
+        ref_text, dt = transcribe_timed(ref_model, clips[dur])
+        cpu_text = texts_small.get("cpu_int8", {}).get(dur)
+        cuda_text = texts_small.get("cuda_int8", {}).get(dur)
+        entry = {"ref_text": ref_text, "ref_infer_s": round(dt, 3)}
+        print(f"  clip {dur}s: referencia transcrita en {dt:.2f}s ({len(ref_text)} chars)")
+        if cpu_text is not None:
+            agr_cpu = text_agreement(ref_text, cpu_text)
+            entry["vs_cpu_small"] = agr_cpu
+            f_cpu = "IDENTICO" if agr_cpu["identico"] else f"ratio={agr_cpu['ratio']} chars_distintos={agr_cpu['chars_distintos']}"
+            print(f"    referencia vs cpu_int8 ({model_label}): {f_cpu}")
+        if cuda_text is not None:
+            agr_cuda = text_agreement(ref_text, cuda_text)
+            entry["vs_cuda_small"] = agr_cuda
+            f_cuda = "IDENTICO" if agr_cuda["identico"] else f"ratio={agr_cuda['ratio']} chars_distintos={agr_cuda['chars_distintos']}"
+            print(f"    referencia vs cuda_int8 ({model_label}): {f_cuda}")
+        if cpu_text is not None and cuda_text is not None:
+            r_cpu = entry["vs_cpu_small"]["ratio"]
+            r_cuda = entry["vs_cuda_small"]["ratio"]
+            if abs(r_cpu - r_cuda) <= 0.02:
+                print(f"    -> clip {dur}s: distancias casi iguales (delta={abs(r_cpu-r_cuda):.4f}); "
+                      "NO hay evidencia de que CUDA sea peor (tampoco de que sea mejor).")
+            elif r_cuda > r_cpu:
+                print(f"    -> clip {dur}s: CUDA-small queda MAS CERCA de la referencia que CPU-small.")
+            else:
+                print(f"    -> clip {dur}s: CPU-small queda MAS CERCA de la referencia que CUDA-small.")
+        out[dur] = entry
+    del ref_model
+    print()
+    return out
+
+
+# ---------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------
 
@@ -350,6 +477,8 @@ def main() -> int:
     ap.add_argument("--video", default=DEFAULT_VIDEO, help="Video/audio con habla real en espanol")
     ap.add_argument("--self-consistency", action="store_true",
                      help="Corre el control de auto-consistencia (cpu_int8/cuda_int8 x2, clips 30/60s)")
+    ap.add_argument("--reference-model", action="store_true",
+                     help="Transcribe con large-v3-turbo (cache local) como proxy de referencia, clips 30/60s")
     args = ap.parse_args()
 
     models_dir = _get_models_dir()
@@ -490,6 +619,10 @@ def main() -> int:
                           "SI hay un efecto real del DISPOSITIVO.")
         print()
 
+    reference_proxy = None
+    if args.reference_model:
+        reference_proxy = run_reference_proxy(clips, texts, args.model)
+
     print(f"Estado GPU al terminar: {nvidia_smi_snapshot()}")
     print()
 
@@ -516,7 +649,8 @@ def main() -> int:
     dump_path = os.path.join(workdir, "resultados.json")
     with open(dump_path, "w", encoding="utf-8") as f:
         json.dump({"results": results, "agreement": agreement, "texts": texts, "model": args.model,
-                   "cpu_threads": CPU_THREADS, "self_consistency": self_consistency},
+                   "cpu_threads": CPU_THREADS, "self_consistency": self_consistency,
+                   "reference_proxy": reference_proxy},
                   f, indent=2, ensure_ascii=False)
     print(f"\nJSON crudo (temporal, para pegar en el reporte): {dump_path}")
 
