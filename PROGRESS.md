@@ -132,11 +132,20 @@
     Ola 0.` La Ola 0 va primero siempre (fija el orden canónico de las pasadas de texto; sin ella
     las Olas 1 y 4 se pisan). Modelo: `Fable.H` u `Opus.H`, indistinto. Después de la 0, ejecutables
     sin gate: Ola 1, luego Ola 4 (depende de `1b`, NO en paralelo), y Olas 2 y 7 cuando se quiera.
-  - **Bloqueadas por gate humano:** Olas 3 y 5 esperan **G1** (cómo se copia Transform sobre
-    selección: previsualizar, lista negra, o no hacerlo). Ola 6 espera **G2** (Hub nativo Qt vs
-    `QWebEngineView` vs dejarlo en el navegador). Los dos gates están escritos con opciones dentro
-    del plan; ninguno bloquea las otras cinco olas.
-  - Los 3 commits de este frente (`f3faf67`, `0eb1264`, `9bc8c99`) están LOCALES, **sin push**.
+  - **Gates humanos: RESPONDIDOS (2026-07-31), ninguna ola queda bloqueada.** G1 quedó en
+    **G1-A** (Transform previsualiza el resultado antes de aplicarlo; el panel es un modo nuevo
+    de `ui/hud_widget.py`, que ya existe). G2 se **reabrió** tras la evaluación y quedó en
+    **G2-D: PWA**, no en el Hub nativo de Qt. Y por decisión de Johann los disparadores de smart
+    commands llevan prefijo (`"signo coma"`, no `"coma"`). Única excepción con gate propio: la
+    unidad `6c`, abrir el bind del servidor más allá de loopback.
+  - **Segunda evaluación aplicada (2026-07-31)**, con dos exploradores read-only de focos
+    ortogonales al del ataque adversarial. Encontró un defecto GRAVE que ninguna pasada anterior
+    podía ver: la unidad `1b` cableaba en `core/transcriber.py`, que comparten reuniones y
+    YouTube, y las reglas atrapan habla normal en español, así que habría metido puntuación en lo
+    que dicen OTRAS personas dentro de las actas, sin romper ningún test. Corregido: `1b` y `4b`
+    van en `main.py`. Registro completo con los 9 hallazgos al final del plan.
+  - Commits del frente: `f3faf67`, `0eb1264`, `9bc8c99`, `5b86b09`, `065c69e`, `c15e1ad`,
+    **pusheados** a `origin/windows-variant`.
 
 ## En curso (PLAN-MEJORAS)
 - [ ] Ola 6 — FASE3 heredada (D5: ambas → 6.1 mute al dictar + 6.2 hotkeys configurables).
