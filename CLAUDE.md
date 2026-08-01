@@ -155,6 +155,11 @@ Hotkey Release (pynput thread)
     → [QueuedConnection] → paste_text() + db.insert() + pill.set_state(DONE)
 ```
 
+> Las transformaciones de TEXTO que corren entre la respuesta del backend y el pegado (filtro de
+> alucinaciones, diccionario, smart commands, snippets, reformateo LLM) tienen un contrato propio
+> con tres ejes de obligado cumplimiento: **sección 19, "Contrato del pipeline de texto"**. Antes
+> de agregar o mover una pasada de texto, léelo.
+
 ## Critical Implementation Details
 
 ### 1. Qt Signal Threading (MUST use QueuedConnection)
@@ -469,6 +474,122 @@ adversarial previo (reconciliación en `PROGRESS.md`, sección Decisiones PLAN-M
 
 Fuera de este run (pregunta opt-in a Johann en PROGRESS.md): 5.6 notas híbridas estilo Granola
 y 5.7 panel de privacidad verificable.
+
+### 19. Contrato del pipeline de texto (Ola 0 de PLAN-DICTADO, 2026-07-31)
+
+Entre "el backend devuelve texto" y "el texto se pega" corren varias pasadas que EDITAN ese texto.
+Hasta ahora eran dos y su interacción nunca se escribió; el plan de dictado agrega dos más y vuelve
+descubrible una quinta. Este contrato tiene **tres ejes** y ninguno es opcional: **orden**, **alcance**
+y **presupuesto de latencia**. Escribir solo el orden fue lo que dejó pasar un defecto grave
+(ver "Por qué el eje de ALCANCE existe" abajo).
+
+Fuente de la decisión: `docs/PLAN-DICTADO-2026-07-31.md`, Ola 0, unidad `0a`. Test que lo hace
+ejecutable: `tests/test_pipeline_texto.py` (unidad `0b`).
+
+#### Eje 1: ORDEN canónico de las pasadas
+
+| # | Pasada | Dónde vive | Naturaleza |
+|---|---|---|---|
+| 1 | Filtro de alucinaciones | `core/transcriber.py:316` (`_is_hallucination`) | local, por chunk |
+| 2 | Diccionario personal | `core/transcriber.py:318` (`dictionary.apply_replacements`) | local, por chunk |
+| · | *(frontera)* **ensamblado de chunks** | `main.py:882` | de aquí en adelante el texto es UNO |
+| 3 | Smart commands (voz → puntuación) | `main.py`, antes del bloque de `dictation_modes` | local, sobre texto completo |
+| 4 | Snippets (disparador → texto guardado) | `main.py`, justo DESPUÉS de smart commands | local, sobre texto completo |
+| 5 | Reformateo LLM por preset (opt-in) | `main.py:909` (`dictation_modes.reformat_text`) | remoto, con timeout |
+
+Reglas duras del orden:
+
+- **1 antes que 2** (invariante preexistente): el filtro decide sobre el texto tal cual lo devolvió
+  el backend; si el diccionario corriera primero podría convertir una alucinación conocida en una
+  cadena que el filtro ya no reconoce.
+- **Las pasadas 3, 4 y 5 corren DESPUÉS del ensamblado**, nunca por chunk. Motivo medido: con
+  `CHUNK_SECONDS=60` una frase-comando dicha en el borde del minuto queda partida entre dos chunks
+  y no coincidiría con ninguna regla. Sobre el texto ensamblado el problema no existe.
+- **3 antes que 4.** El texto que expande un snippet es texto que el usuario ESCRIBIÓ y ya viene
+  puntuado; si los snippets corrieran primero, la pasada 3 volvería a escanear ese texto guardado y
+  mutilaría cualquier palabra literal que contenga (por ejemplo un snippet que diga "signo coma").
+  Con este orden, lo que inserta un snippet no lo vuelve a tocar nadie.
+- **El reformateo LLM (5) RESPETA los saltos de línea explícitos** que vengan de la pasada 3. Un
+  `\n` que el usuario pidió con la voz no es un accidente de formato que el preset pueda re-fluir.
+  Esto se implementa en los PROMPTS de los presets, así que es obligación de la Ola 2 al tocarlos y
+  aplica también a los tres presets que ya existen (`email`, `chat`, `codigo`).
+- **Ninguna pasada nueva se cuela entre 1 y 2**, ni dentro de `Transcriber`. Ver eje 2.
+
+**Qué guarda `raw_text` (decisión, no re-litigar).** `raw_text` es **el texto tal como lo devolvió el
+backend de transcripción, antes de TODA pasada local**, y sigue siendo `NULL` cuando ninguna pasada
+lo cambió. Las pasadas 3 y 4 se suman al patrón que ya usa el reformateo en `main.py:918`: si
+cambian el texto y `raw_full` todavía es `None`, guardan ahí el texto pre-cambio. **Tradeoff
+aceptado, escrito para que nadie lo descubra con sorpresa:** eso significa que "Deshacer edición IA"
+también revierte la puntuación que el usuario pidió por voz, y esa etiqueta se queda corta. Se
+prefiere que `raw_text` tenga UN solo significado ("lo que dijo el backend") antes que preservar la
+precisión de un rótulo de botón; la alternativa obligaba a aplicar smart commands también sobre
+`raw_full` cada vez que el diccionario ya había cambiado algo, que es más código y más formas de
+fallar. Lo que revisaría esta decisión: que aparezcan falsos positivos reales de smart commands en
+uso diario, porque entonces el Undo sí sería la vía de escape natural.
+
+#### Eje 2: ALCANCE (qué llamadores ejecutan cada pasada)
+
+`Transcriber.transcribe`/`translate` tienen **tres consumidores vivos**, medidos 2026-07-31:
+
+| Flujo | Call site |
+|---|---|
+| Dictado | `main.py:777` (worker de chunk), `main.py:854` (tramo final), `main.py:846` (traducción) |
+| Reunión | `core/meeting.py:961` |
+| URL (YouTube/TikTok/Instagram) | `core/url_transcribe.py:549` y `:553` (reintento) |
+
+| Pasada | Dictado | Traducción | Reunión | URL |
+|---|---|---|---|---|
+| 1. Filtro de alucinaciones | sí | sí | sí | sí |
+| 2. Diccionario personal | sí | sí | sí | sí |
+| 3. Smart commands | **sí** | **no** | **no** | **no** |
+| 4. Snippets | **sí** | **no** | **no** | **no** |
+| 5. Reformateo LLM | sí (opt-in) | no | no | no |
+
+**La regla durable, que es lo que hay que recordar cuando nazca un cuarto flujo y esta tabla
+envejezca:** una pasada que edita el texto según lo que el hablante QUISO ESCRIBIR solo puede correr
+donde el hablante es el usuario y el destino es la ventana en foco. Reunión y URL contienen habla de
+OTRAS personas, que nadie autorizó a reinterpretar.
+
+Consecuencia mecánica y no negociable: **las pasadas 3 y 4 se cablean en `main.py`, bajo los mismos
+gates que ya usa `dictation_modes` (`not translate` y `recorder.source != "system"`), y NUNCA en
+`core/transcriber.py`.** Ahí las heredarían los otros dos flujos por construcción.
+
+**Por qué el eje de ALCANCE existe** (la primera redacción de esta ola solo tenía el orden, y por eso
+casi entra el defecto): cablear smart commands en `core/transcriber.py` habría (a) metido puntuación
+inventada en el habla de terceros dentro de las actas, (b) roto el contrato de una-línea-por-turno
+del buffer de insights (`core/meeting.py:976`), (c) subestimado el WPM de las métricas de conversación,
+porque el numerador encoge mientras el denominador sale del VAD del audio original, y (d) roto el
+significado de `raw_text`. Tres de esos cuatro daños **no dependen de que ningún disparador coincida**:
+ocurren igual con un usuario que nunca diga "signo coma".
+
+#### Eje 3: PRESUPUESTO de latencia del hot-path
+
+El hot-path es **soltar el atajo → texto pegado en la ventana**. Aquí ya hay historia pagada: el
+"timeout duro de 8 s" del reformateo fue ilusorio durante un tiempo porque `ThreadPoolExecutor`
+bloqueaba en su `__exit__`, y con la red colgada el pegado tardaba decenas de segundos
+(`AUDITORIA-FABLE-2026-07-06.md`, hallazgo F11; **ya corregido** con un hilo daemon propio, ver el
+docstring de `core/dictation_modes.py:106`). Sin un número escrito, nadie gobierna esto.
+
+Topes vigentes, medidos en el código 2026-07-31 (cada fila con su archivo al lado; si se re-lee este
+contrato dentro de meses, se re-comprueban, no se copian):
+
+| Tramo | Tope | Dónde está el número |
+|---|---|---|
+| Transcripción del tramo final (Groq) | 10 s | `core/backends/groq_backend.py:183` |
+| Gracia de join de chunks en vuelo | 12 s | `main.py:165` (`_CHUNK_JOIN_GRACE_SECONDS`); solo dictados largos con un chunk lento |
+| Reformateo LLM por preset (opt-in) | 8 s | `core/dictation_modes.py:106` |
+| **Smart commands (Ola 1)** | **5 ms** | presupuesto NUEVO, lo afirma `tests/test_pipeline_texto.py` |
+| **Snippets (Ola 4)** | **15 ms** | presupuesto NUEVO, lo afirma `tests/test_pipeline_texto.py` |
+
+- **Techo de las pasadas locales nuevas: 50 ms** para 3+4 juntas, en el peor caso de un dictado
+  largo (~5.000 caracteres). Con el peor caso actual del hot-path en ~30 s (10 + 12 + 8), esto es
+  menos del 0,2%: el presupuesto no está para optimizar, está para que una pasada local no se
+  convierta nunca en una llamada cara sin que nadie lo note.
+- **Ninguna pasada local del hot-path llama a la red ni a un LLM.** Si algún día hiciera falta, va
+  detrás de un flag opt-in apagado por defecto y con timeout duro, como `dictation_modes`, no
+  añadida al camino que corre siempre.
+- **Los snippets leen su tabla desde caché en memoria** (patrón de `core/dictionary.py`: caché con
+  swap atómico e invalidación perezosa), nunca una consulta SQLite por dictado dentro del hot-path.
 
 ## Security & Privacy
 
