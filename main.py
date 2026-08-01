@@ -58,7 +58,7 @@ from core.hotkey import HotkeyListener
 from core.meeting import MEETING
 from core.clipboard import (
     paste_text, copy_text, save_frontmost_app, get_saved_exe, capture_selection,
-    get_saved_hwnd,
+    get_saved_hwnd, wait_modifiers_released,
 )
 from core import dictation_modes
 from core import smart_commands
@@ -631,7 +631,7 @@ class VflowApp(QObject):
     transcription_fallback_notice = pyqtSignal(str)      # unidad 5.5: aviso de fallback de red Groq -> local
     dictation_manual_preset_consumed = pyqtSignal()       # unidad 2b: el preset manual armado se acaba de gastar
     transform_ready = pyqtSignal(dict)                    # unidad 3c: resultado de core.transform.transform_text
-    transform_capture_ready = pyqtSignal(object, str)     # 3a-fix2: (texto, estado) de la captura en hilo
+    transform_capture_ready = pyqtSignal(dict)            # 3a-fix2: resultado de la captura en hilo
 
     def __init__(self):
         """Inicializa componentes (recorder, transcriber, DB, hotkey, pill) y conecta señales."""
@@ -689,7 +689,7 @@ class VflowApp(QObject):
         # destino de ESA solicitud. Ver _new_transform_generation.
         self._transform_gen = 0
         self._transform_hwnd = None
-        self._transform_pending_prompt = None  # 3a-fix2: prompt en espera de la captura
+        self._capture_lock = threading.Lock()  # 3a-fix3: una sola captura a la vez
 
         # Contador de generación y guard anti-duplicado
         self._generation = 0
@@ -1190,6 +1190,17 @@ class VflowApp(QObject):
         """
         if hwnd is None and self.recorder.source == "system":
             status = "copied_system" if copy_text(text) else "failed"
+        elif hwnd is not None and wait_modifiers_released():
+            # Camino de Transform (3a-fix3). Un auditor lo MIDIÓ con el
+            # HotkeyListener real: el Ctrl+V sintético limpia `_ctrl_held` mientras
+            # el Alt físico sigue abajo, y eso TERMINA EN SILENCIO un dictado en
+            # curso con Ctrl+Alt (o rompe una secuencia de triple-tap de Shift).
+            # A diferencia del dictado, cuyo pegado ocurre justo tras soltar el
+            # atajo, un Transform se aplica cuando el usuario pulsa Enter, que
+            # puede ser en cualquier momento, incluso mientras dicta. Si hay
+            # modificadores abajo NO se inyecta nada: el texto queda copiado y se
+            # avisa, que es un fallo visible en vez de uno silencioso.
+            status = "copied_system" if copy_text(text) else "failed"
         else:
             status = paste_text(text, hwnd=hwnd)
         self.paste_finished.emit(status)
@@ -1428,31 +1439,56 @@ class VflowApp(QObject):
         HUD y el resto de la interfaz hasta un segundo y medio. Lo encontró un
         auditor independiente, no los tests.
         """
+        if self._recording_active:
+            # Defensa en profundidad (3a-fix3): hoy la espera de modificadores ya
+            # impediría capturar en medio de un dictado con Ctrl+Alt, pero eso deja
+            # el invariante en UNA sola capa y en la que menos contexto tiene. Aquí
+            # sí se sabe que hay una grabación viva.
+            logger.info("transform: hay un dictado en curso, se ignora AltGr+X")
+            return
         self._start_capture_worker(None)
 
     def _start_capture_worker(self, prompt_key):
-        """Lanza la captura en background. ``prompt_key`` None = abrir el selector."""
-        self._transform_pending_prompt = prompt_key
-        threading.Thread(target=self._capture_worker, daemon=True).start()
+        """Lanza la captura en background. ``prompt_key`` None = abrir el selector.
 
-    def _capture_worker(self):
-        text, status = capture_selection()
-        self.transform_capture_ready.emit(text, status)
+        UNA captura a la vez (``_capture_lock``, sin bloquear): dos pulsaciones
+        seguidas del atajo lanzaban dos hilos que competían por el mismo estado
+        global de `core/clipboard.py`, y el segundo en terminar decidía en qué
+        ventana se iba a pegar. Lo encontró un auditor. Con el candado, la segunda
+        pulsación mientras hay una captura viva simplemente no hace nada.
+        """
+        if not self._capture_lock.acquire(blocking=False):
+            logger.info("transform: ya hay una captura en curso, se ignora la pulsación")
+            return
+        threading.Thread(target=self._capture_worker, args=(prompt_key,), daemon=True).start()
 
-    @pyqtSlot(object, str)
-    def _on_transform_capture_ready(self, text, status: str):
+    def _capture_worker(self, prompt_key):
+        """El prompt y la ventana destino VIAJAN con el resultado, no en atributos
+        del objeto: con dos solicitudes solapadas, un atributo compartido podía
+        aplicarle a un texto el prompt que el usuario eligió para el otro."""
+        try:
+            text, status = capture_selection()
+            hwnd = get_saved_hwnd()
+        finally:
+            self._capture_lock.release()
+        self.transform_capture_ready.emit(
+            {"text": text, "status": status, "prompt": prompt_key, "hwnd": hwnd}
+        )
+
+    @pyqtSlot(dict)
+    def _on_transform_capture_ready(self, captura: dict):
         from core import transform as _transform  # noqa: PLC0415
 
+        status = captura.get("status")
         if status != "ok":
             self._notify_transform_capture_problem(status)
             return
-        prompt_key = self._transform_pending_prompt
-        self._transform_pending_prompt = None
+        text = captura.get("text")
+        prompt_key = captura.get("prompt")
+        self._new_transform_generation(captura.get("hwnd"))
         if prompt_key is not None:
-            self._new_transform_generation()
             self._start_transform(text, prompt_key)
             return
-        self._new_transform_generation()
         self._ensure_hud_visible()
         self.hud.enter_transform_picker(
             text,
@@ -1476,7 +1512,7 @@ class VflowApp(QObject):
             self.hud.show()
             self._hud_visible = True
 
-    def _new_transform_generation(self):
+    def _new_transform_generation(self, hwnd=None):
         """Abre una solicitud de Transform nueva e invalida las que estén en vuelo.
 
         Mismo patrón que ``self._generation`` del dictado, y por el mismo motivo
@@ -1490,7 +1526,9 @@ class VflowApp(QObject):
         ``clipboard.get_saved_hwnd``).
         """
         self._transform_gen += 1
-        self._transform_hwnd = get_saved_hwnd()
+        # El hwnd llega de la captura que lo midió (no se re-lee la global aquí: con
+        # dos solicitudes cerca, la global ya podría ser de la otra).
+        self._transform_hwnd = hwnd if hwnd is not None else get_saved_hwnd()
         return self._transform_gen
 
     def start_transform(self, prompt_key: str):

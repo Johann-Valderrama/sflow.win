@@ -184,7 +184,7 @@ class TestModificadoresFisicos:
 
     def test_espera_a_que_suelten_los_modificadores_antes_del_ctrl_c(self, fake, monkeypatch):
         orden = []
-        monkeypatch.setattr(clipboard, "_wait_modifiers_released",
+        monkeypatch.setattr(clipboard, "wait_modifiers_released",
                             lambda timeout=clipboard.MODIFIER_WAIT_SECONDS: (orden.append("espera"), [])[1])
         original = fake.send_ctrl_c
 
@@ -200,7 +200,7 @@ class TestModificadoresFisicos:
     def test_si_no_los_sueltan_aborta_diciendolo(self, fake, monkeypatch):
         """Aborta con SU PROPIO estado, no con "no hay selección": mentirle al
         usuario sobre la causa fue el bug original."""
-        monkeypatch.setattr(clipboard, "_wait_modifiers_released",
+        monkeypatch.setattr(clipboard, "wait_modifiers_released",
                             lambda timeout=clipboard.MODIFIER_WAIT_SECONDS: ["ctrl", "alt"])
         fake.selection_is("la selección")
         texto, status = clipboard.capture_selection()
@@ -987,6 +987,154 @@ class TestReentrada:
         monkeypatch.setattr(core.clipboard, "_saved_hwnd", None)
         # ...y el Transform pendiente conserva la suya.
         assert app._transform_hwnd == 4242
+
+
+class TestCapturaConcurrente:
+    """Lo que encontraron los auditores del segundo par (todo MEDIDO por ellos con
+    el HotkeyListener real o leído sobre el código, no deducido por mí)."""
+
+    class _AppFalsa:
+        def __init__(self):
+            import threading as _th
+
+            import main
+
+            self._capture_lock = _th.Lock()
+            self._recording_active = False
+            self._transform_gen = 0
+            self._transform_hwnd = None
+            self.emitido = []
+            self.hilos = []
+            self.pegados = []
+
+            class _Sig:
+                def __init__(self, destino):
+                    self._destino = destino
+
+                def emit(self, payload):
+                    self._destino.append(payload)
+
+            self.transform_capture_ready = _Sig(self.emitido)
+            for nombre in ("_start_capture_worker", "_capture_worker",
+                           "_new_transform_generation", "_on_transform_hotkey",
+                           "_paste_worker"):
+                setattr(self, nombre, getattr(main.VflowApp, nombre).__get__(self))
+
+    def test_una_sola_captura_a_la_vez(self, monkeypatch):
+        """Dos pulsaciones seguidas lanzaban dos hilos que competían por el estado
+        global de clipboard, y el segundo en terminar decidía dónde se pegaba."""
+        import main
+
+        app = self._AppFalsa()
+        lanzados = []
+
+        class _HiloQueNoArranca:
+            def __init__(self, target=None, args=(), daemon=False):
+                lanzados.append(args)
+
+            def start(self):
+                pass          # el worker nunca corre: el candado sigue tomado
+
+        monkeypatch.setattr(main.threading, "Thread", _HiloQueNoArranca)
+        app._start_capture_worker(None)
+        app._start_capture_worker("resumir")
+        assert len(lanzados) == 1, "la segunda pulsación no puede abrir otra captura"
+
+    def test_el_candado_se_libera_aunque_la_captura_falle(self, monkeypatch):
+        import main
+
+        def _explota():
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(main, "capture_selection", _explota)
+        app = self._AppFalsa()
+        app._capture_lock.acquire()          # lo toma _start_capture_worker en producción
+        with pytest.raises(RuntimeError, match="boom"):
+            app._capture_worker(None)
+        assert app._capture_lock.acquire(blocking=False), "el candado quedó tomado para siempre"
+
+    def test_el_prompt_y_la_ventana_viajan_con_el_resultado(self, monkeypatch):
+        """Sin esto, dos solicitudes solapadas podían aplicarle a un texto el prompt
+        que el usuario eligió para el otro."""
+        import main
+
+        monkeypatch.setattr(main, "capture_selection", lambda: ("TEXTO", "ok"))
+        monkeypatch.setattr(main, "get_saved_hwnd", lambda: 777)
+        app = self._AppFalsa()
+        app._capture_lock.acquire()          # lo toma _start_capture_worker en producción
+        app._capture_worker("formal")
+        assert app.emitido == [{"text": "TEXTO", "status": "ok", "prompt": "formal", "hwnd": 777}]
+
+    def test_no_captura_en_medio_de_un_dictado(self):
+        """El doble se pone en la INSTANCIA, no en la clase: el objeto falso ata sus
+        métodos al construirse, así que un parche de clase posterior no se usaría y
+        el test pasaría siempre (además de lanzar una captura real). Lo destapó una
+        mutación que no tumbó nada."""
+        app = self._AppFalsa()
+        app._recording_active = True
+        lanzados = []
+        app._start_capture_worker = lambda k: lanzados.append(k)
+        app._on_transform_hotkey()
+        assert lanzados == []
+
+    def test_sin_dictado_en_curso_si_captura(self):
+        app = self._AppFalsa()
+        app._recording_active = False
+        lanzados = []
+        app._start_capture_worker = lambda k: lanzados.append(k)
+        app._on_transform_hotkey()
+        assert lanzados == [None]
+
+
+class TestPegadoNoMataUnDictado:
+    """Un auditor lo MIDIÓ con el HotkeyListener real: el Ctrl+V sintético limpia
+    `_ctrl_held` mientras el Alt físico sigue abajo, y eso termina en silencio un
+    dictado con Ctrl+Alt en curso. En el dictado el pegado va justo tras soltar el
+    atajo, pero un Transform se aplica cuando el usuario pulsa Enter, que puede ser
+    en cualquier momento."""
+
+    def _app(self):
+        import main
+
+        class _App:
+            recorder = type("R", (), {"source": "mic"})()
+            paste_finished = type("S", (), {"emit": staticmethod(lambda s: None)})()
+
+        app = _App()
+        app._paste_worker = main.VflowApp._paste_worker.__get__(app)
+        return app
+
+    def test_con_modificadores_abajo_no_inyecta_nada(self, monkeypatch):
+        import main
+
+        pegados, copiados = [], []
+        monkeypatch.setattr(main, "wait_modifiers_released", lambda: ["ctrl", "alt"])
+        monkeypatch.setattr(main, "paste_text", lambda t, hwnd=None: pegados.append(t) or "pasted")
+        monkeypatch.setattr(main, "copy_text", lambda t: copiados.append(t) or True)
+        self._app()._paste_worker("RESULTADO", 4242)
+        assert pegados == [], "el Ctrl+V habría matado el dictado en curso"
+        assert copiados == ["RESULTADO"], "el texto no se pierde: queda copiado y se avisa"
+
+    def test_con_el_teclado_libre_pega_normal(self, monkeypatch):
+        import main
+
+        pegados = []
+        monkeypatch.setattr(main, "wait_modifiers_released", lambda: [])
+        monkeypatch.setattr(main, "paste_text", lambda t, hwnd=None: pegados.append((t, hwnd)) or "pasted")
+        self._app()._paste_worker("RESULTADO", 4242)
+        assert pegados == [("RESULTADO", 4242)]
+
+    def test_el_dictado_no_paga_la_espera(self, monkeypatch):
+        """El camino del dictado (hwnd None) no consulta modificadores: su pegado
+        ocurre justo tras soltar el atajo y meterle una espera sería regresión."""
+        import main
+
+        consultas = []
+        monkeypatch.setattr(main, "wait_modifiers_released",
+                            lambda: consultas.append(1) or [])
+        monkeypatch.setattr(main, "paste_text", lambda t, hwnd=None: "pasted")
+        self._app()._paste_worker("dictado")
+        assert consultas == []
 
 
 class TestPasteTextConVentanaExplicita:

@@ -266,7 +266,7 @@ def _modifiers_down() -> list:
 MODIFIER_WAIT_SECONDS = 1.5
 
 
-def _wait_modifiers_released(timeout: float = MODIFIER_WAIT_SECONDS) -> list:
+def wait_modifiers_released(timeout: float = MODIFIER_WAIT_SECONDS) -> list:
     """Espera a que el usuario suelte los modificadores. Devuelve los que sigan abajo.
 
     **Esto es lo que hace que la captura funcione con un atajo que usa AltGr**, y la
@@ -348,8 +348,8 @@ def capture_selection(timeout: float = 0.8) -> "tuple[str | None, str]":
     save_frontmost_app()
 
     # ANTES de nada: el Ctrl+C no sirve mientras el usuario tenga abajo el
-    # modificador de su propio atajo (ver _wait_modifiers_released, con la medición).
-    pendientes = _wait_modifiers_released()
+    # modificador de su propio atajo (ver wait_modifiers_released, con la medición).
+    pendientes = wait_modifiers_released()
     if pendientes:
         logger.info("capture_selection: modificadores aún presionados (%s), se aborta",
                     ", ".join(pendientes))
