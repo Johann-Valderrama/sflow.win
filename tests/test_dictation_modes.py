@@ -11,6 +11,10 @@ Cubre:
 (h) raw_text conserva el MAS crudo cuando diccionario Y reformateo cambian
 (i) pipeline semi-real save_exe -> map -> prompt -> paste (con LLM mockeado)
 (j) panel de settings: roundtrip GET/POST + CSRF
+(k) Ola 2 (unidad 2a, docs/PLAN-DICTADO-2026-07-31.md): los 5 presets existen y
+    son válidos, `parse_mode_map` acepta `lista`/`notas`, los 5 prompts traen la
+    regla de respetar saltos de línea explícitos, y `reformat_text` funciona con
+    los 2 presets nuevos.
 """
 import os
 import time
@@ -380,6 +384,88 @@ class TestFullPipelineSemiReal:
         dictated_text = "buenas tardes equipo quedo atento"
         reformatted = _dm.reformat_text(dictated_text, preset)
         assert reformatted == "Buenas tardes equipo, quedo atento."
+
+
+# ---------------------------------------------------------------------------
+# (k) Ola 2 (unidad 2a): 5 presets, parseo de los 2 nuevos, y la regla de
+# respetar saltos de línea explícitos presente en los 5 prompts.
+# ---------------------------------------------------------------------------
+class TestOla2CincoPresets:
+    """Ola 2 (unidad 2a) de docs/PLAN-DICTADO-2026-07-31.md: añade `lista` y
+    `notas` a los 3 presets existentes (`email`/`chat`/`codigo`), y mete en
+    los 5 prompts la regla de respetar los saltos de línea explícitos que
+    puso smart commands (CLAUDE.md sección 19, Eje 1)."""
+
+    def test_five_presets_exist_and_are_valid(self):
+        from core.dictation_modes import PRESETS, _VALID_PRESETS
+        assert set(PRESETS.keys()) == {"email", "chat", "codigo", "lista", "notas"}
+        # _VALID_PRESETS se deriva de PRESETS.keys(); si algún día se
+        # desincronizan (alguien la hardcodea aparte), esto lo cazaría.
+        assert _VALID_PRESETS == frozenset(PRESETS.keys())
+
+    def test_parse_mode_map_accepts_lista_and_notas(self):
+        """`parse_mode_map` hoy rechaza cualquier preset desconocido (ver
+        test_malformed_entries_ignored más arriba): si `lista`/`notas` no
+        quedaran cableados en `PRESETS`, este roundtrip fallaría en silencio
+        (la entrada se descartaría como 'preset inválido')."""
+        from core.dictation_modes import parse_mode_map
+        result = parse_mode_map("notas.exe:lista, obsidian.exe:notas")
+        assert result == {"notas.exe": "lista", "obsidian.exe": "notas"}
+
+    def test_preset_for_exe_resolves_lista_and_notas(self):
+        from core.dictation_modes import preset_for_exe
+        mode_map = {"a.exe": "lista", "b.exe": "notas"}
+        assert preset_for_exe("a.exe", mode_map) == "lista"
+        assert preset_for_exe("b.exe", mode_map) == "notas"
+
+    def test_all_five_prompts_contain_explicit_linebreak_rule(self):
+        """Recorre `PRESETS` (no una lista escrita a mano con los 5 nombres):
+        si mañana alguien agrega un sexto preset sin la regla de respetar los
+        saltos de línea explícitos, este test tiene que fallar señalando ESE
+        preset nuevo, no quedarse verde porque ya cubrió los 5 de hoy."""
+        from core.dictation_modes import PRESETS
+        assert len(PRESETS) >= 5, "se esperaban al menos los 5 presets de la Ola 2"
+        for name, prompt in PRESETS.items():
+            lowered = prompt.lower()
+            assert "salto" in lowered and "línea" in lowered, (
+                f"el preset '{name}' no menciona los saltos de línea en su "
+                "prompt (CLAUDE.md sección 19, Eje 1: el reformateo LLM debe "
+                "respetar los saltos de línea explícitos que puso smart "
+                "commands, p. ej. tras 'nueva línea' o 'punto y aparte')."
+            )
+            assert "consérv" in lowered, (
+                f"el preset '{name}' menciona 'salto'/'línea' pero no trae "
+                "la instrucción de CONSERVARLOS (con tilde: 'consérv...'); "
+                "puede ser una mención incidental y no la regla completa "
+                "del Eje 1."
+            )
+
+
+# ---------------------------------------------------------------------------
+# (k, cont.) reformat_text sigue funcionando con los presets nuevos
+# ---------------------------------------------------------------------------
+class TestReformatTextNewPresets:
+    def test_reformat_text_lista_success(self, monkeypatch):
+        from core import dictation_modes, insights as _insights
+        monkeypatch.setattr(_insights, "_resolve_backend", lambda task: "groq")
+        monkeypatch.setattr(_insights, "_chat", lambda *a, **k: "- leche\n- pan\n- huevos")
+        result = dictation_modes.reformat_text("leche pan y huevos", "lista")
+        assert result == "- leche\n- pan\n- huevos"
+
+    def test_reformat_text_notas_success(self, monkeypatch):
+        from core import dictation_modes, insights as _insights
+        monkeypatch.setattr(_insights, "_resolve_backend", lambda task: "groq")
+        monkeypatch.setattr(_insights, "_chat", lambda *a, **k: "Hoy revisamos el presupuesto.")
+        result = dictation_modes.reformat_text("hoy revisamos el presupuesto", "notas")
+        assert result == "Hoy revisamos el presupuesto."
+
+    def test_reformat_text_still_none_for_unknown_preset(self):
+        """Repite el caso de TestReformatTextFailureModes a propósito: con 5
+        presets válidos ahora en la tabla, un nombre inexistente sigue sin
+        colar por accidente (p. ej. por un match parcial de string)."""
+        from core.dictation_modes import reformat_text
+        assert reformat_text("hola", "listaaa") is None
+        assert reformat_text("hola", "notas_invalido") is None
 
 
 # ---------------------------------------------------------------------------
