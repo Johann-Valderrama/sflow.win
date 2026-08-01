@@ -26,23 +26,67 @@
   - **B**: solo una (di cuál).
   - **C**: ninguna por ahora → quedan en backlog, nada se pierde.
   Responde "5.6/5.7: A/B(cuál)/C".
-- **G2 Ola 5 — Prueba física de las 5 features nuevas** (10 min, con la app reiniciada tras
-  estos commits): (1) Ajustes → Identidad: pon tu nombre, cierra una reunión corta con un
-  compromiso tuyo → el pendiente del acta debería decir tu nombre, no "Yo". (2) Ajustes →
-  carpeta de pendientes = `C:\OPS\_inbox-vflow\` → cierra una reunión CON pendientes → aparece
-  `vflow-pendientes-...md` (YAML arriba, checklist abajo); una reunión SIN pendientes no debe
-  crear archivo. (3) En una reunión real, NO pulses AltGr+H: al abrirla luego en /reunion,
-  la sección "⭐ Momentos" puede traer entradas con badge "auto" — juzga si te parecen momentos
-  reales (si molestan: Ajustes/env `AUTO_HIGHLIGHTS_ENABLED=false`); el acta (momentos
-  destacados) debe seguir mostrando SOLO los tuyos manuales. (4) /reunion → historial →
-  selecciona 2-3 reuniones → "Chatear con N reuniones" → prueba el chip "Email de seguimiento"
-  → Copiar y "Exportar a OPS" (debe caer en `_inbox-vflow\entregables\`). (5) Con backend groq:
-  Ajustes → activa "Respaldo local sin internet" (requiere modelo local descargado), corta el
-  wifi y dicta → debería pegar texto igual (aviso "transcribiendo con el modelo local") y al
-  volver el wifi, el siguiente dictado (tras ~2 min) vuelve solo a Groq. G3 visual: mirada
-  rápida a la sección Identidad, "⭐ Momentos" y el overlay del chat multi (los screenshots de
-  la verificación automática no estuvieron disponibles en este entorno; el estado computado sí
-  se verificó).
+### 🙋 PRUEBAS FÍSICAS PENDIENTES, todas juntas en una sentada (~20 min, consolidado 2026-08-01)
+
+> Estaban dispersas en cinco bloques `G2` de olas distintas, escritas cada una el día que se cerró su
+> ola, así que hacerlas obligaba a recorrer el documento entero. Aquí van agrupadas **por lo que haces
+> con la app**, no por la ola de la que salieron. Ninguna bloquea trabajo: todo tiene tests
+> automáticos verdes, esto es tu ojo confirmando lo que una suite no puede ver. Marca ✓ lo que pases y
+> reporta solo lo que se vea raro.
+>
+> Antes de empezar: **reinicia Vflow**, porque varias olas cambiaron config que se lee al arrancar.
+
+**Bloque A, sin grabar nada (~3 min).** Abre el dashboard.
+1. Todo se ve y funciona **exactamente igual que antes** del reorden de la web. La UI servida es
+   byte-idéntica por diseño, así que CUALQUIER diferencia visual que notes es un bug: repórtala.
+2. Lo mismo en `/reunion`.
+3. Cambia un ajuste (p. ej. fuente de audio) → debe aplicar **sin reiniciar**.
+4. Ajustes → Identidad: pon tu nombre (lo vas a usar en el bloque B).
+5. Ajustes → carpeta de pendientes: `C:\OPS\_inbox-vflow\`.
+
+**Bloque B, una reunión real (~10 min).** Inicia con `AltGr+R` y déjala correr un rato con `/reunion`
+abierto.
+6. El transcript crece con fluidez, **sin saltos ni duplicados** (por dentro ahora solo viajan los
+   segmentos nuevos en cada poll, ~97% menos datos).
+7. **NO pulses `AltGr+H` en toda la reunión.** Al abrirla después, la sección "⭐ Momentos" puede
+   traer entradas con badge `auto`: juzga si te parecen momentos reales. Si molestan se apagan con
+   `AUTO_HIGHLIGHTS_ENABLED=false`. El acta debe seguir mostrando SOLO los que marcaste a mano (aquí,
+   ninguno).
+8. Que la reunión tenga **al menos un compromiso tuyo**. Al cerrarla, el pendiente del acta debe decir
+   tu nombre, no "Yo", y debe aparecer `vflow-pendientes-...md` en `C:\OPS\_inbox-vflow\` (YAML
+   arriba, checklist abajo).
+9. Termina esa reunión y **arranca otra sin recargar la página** → el transcript debe limpiarse solo y
+   mostrar únicamente la nueva. Es el caso que protege el token de generación.
+10. Cierra una reunión **SIN pendientes** → NO debe crear archivo. Es la mitad del gate que más fácil
+    se rompe sin que nadie lo note.
+11. `/reunion` → historial → selecciona 2-3 reuniones → "Chatear con N reuniones" → chip "Email de
+    seguimiento" → Copiar y "Exportar a OPS" (debe caer en `_inbox-vflow\entregables\`).
+
+**Bloque C, el copiloto con contexto OPS (~4 min).** Crea un `.md` corto con contexto tuyo
+compartible (un proyecto activo + un compromiso con fecha), pégale la ruta en Ajustes → "Copiloto con
+contexto OPS".
+12. En una reunión, habla ~1 min de algo relacionado y pregunta en "Preguntar": *"¿esto conecta con
+    algo mío?"* → debe conectar citando timestamps, **sin inventar**.
+13. Cambia el modo proactivo a **Silencioso** y repite → ya NO debe usar el briefing (es el gate de
+    privacidad para cuando compartes pantalla).
+14. Borra el `.md` con la app corriendo y pregunta otra vez → no debe romperse, responde sin briefing.
+
+**Bloque D, cortando el internet (~3 min).**
+15. Con backend `groq`: Ajustes → activa "Respaldo local sin internet" (requiere el modelo local
+    descargado), corta el wifi y dicta → debe pegar texto igual, con aviso "transcribiendo con el
+    modelo local". Al volver el wifi, el siguiente dictado (tras ~2 min) vuelve solo a Groq.
+16. **NUEVO de la Ola 7 (2026-08-01):** con backend `local`, dicta un párrafo largo y fíjate en la
+    velocidad. Ahora corre en la GTX 1060 y debería sentirse **3-5x más rápido** que como lo
+    recordabas. Si se siente igual de lento, la GPU no se está usando: mira `vflow.log`, que dice en
+    qué dispositivo cargó el modelo.
+
+**Nota que no es una prueba, es una advertencia:** NO actives `MEETING_RETENTION_DAYS` si quieres
+conservar todo (default `0` = para siempre). Si algún día lo activas en Ajustes → Reuniones, borra
+actas y transcripts **definitivamente**, y aplica al reiniciar la app.
+
+**G3 visual (mirada rápida, no prueba):** la sección Identidad, "⭐ Momentos" y el overlay del chat
+multi-reunión. El entorno del agente no compone frames del navegador, así que esos tres nunca los vio
+un ojo; el estado computado sí se verificó.
 - **🙋 DECISIÓN 4.4 — ¿Reordenamos también core/ por features?** (la web ya quedó partida en
   la Ola 4; core/ sigue siendo archivos sueltos: meeting.py, insights.py, transcriber.py...).
   Reordenarlo deja fronteras limpias para la capa de agentes (4.5) y el crecimiento a móvil,
@@ -53,22 +97,9 @@
   - **C**: no por ahora → 4.5 se implementa igual (el contrato ya existe), solo que sobre la
     estructura actual de core/.
   Responde "4.4: A/B/C".
-- **G2 Ola 4 — Prueba física del reorden web** (3 min, con la app reiniciada tras estos
-  commits): (1) abre el dashboard → todo debe verse y funcionar EXACTAMENTE igual que antes
-  (la UI servida es byte-idéntica por diseño; si notas CUALQUIER diferencia visual, repórtala:
-  sería un bug del reorden); (2) /reunion igual; (3) cambia un ajuste en Ajustes (p.ej. fuente
-  de audio) y verifica que aplica sin reiniciar (los flags en caliente siguen vivos — hay test,
-  pero el ojo real confirma). G3 visual: MOOT (cero cambio de bytes en la UI).
-- **G2 Ola 3 (nueva) — Prueba física del polling incremental + retención** (5-10 min, con la app
-  reiniciada tras estos commits): (1) inicia una reunión real (AltGr+R) y ten abierto /reunion un
-  rato largo → el transcript debe crecer con fluidez y sin saltos/duplicados (por dentro ahora
-  solo viajan los segmentos nuevos por poll, ~97% menos datos); (2) termina esa reunión y arranca
-  OTRA sin recargar la página → el transcript debe LIMPIARSE solo y mostrar únicamente la reunión
-  nueva (es el caso que el diseño protege con el token de generación); (3) el panel embebido del
-  dashboard debe seguir comportándose igual que siempre; (4) retención: NO actives
-  MEETING_RETENTION_DAYS si quieres conservar todo (default 0 = para siempre); si algún día lo
-  activas en Ajustes → Reuniones, recuerda que borra actas y transcripts definitivamente y aplica
-  al reiniciar la app.
+- *(Los bloques `G2 Ola 4` y `G2 Ola 3` que vivían aquí se consolidaron el 2026-08-01 en la sección
+  "PRUEBAS FÍSICAS PENDIENTES" de arriba, sin perder ningún paso. No se re-escribieron por separado
+  para que no queden dos listas divergentes de lo mismo.)*
 - **G2 Ola 0 — VERIFICADO 2026-07-12** (Johann + orquestador con la app viva): (1) re-pulsar AltGr+R
   durante el guardado → notificación "Guardando la reunión anterior…" + ninguna reunión rota ✓;
   (2) AltGr+R/T sostenido → sin ráfaga de beeps (confirmado por log: ciclos deliberados, no
@@ -581,7 +612,7 @@
 - **G2 Ola 5 — Prueba física del proactivo v2** (10 min, app reiniciada, reunión real AltGr+R con audio): (1) HUD flotante: despliégalo con AltGr+A y desde el pill; tarjetas de pendientes con ✓/✗ funcionan; Esc devuelve el foco a donde estabas; (2) "me perdí" AltGr+M → resumen de contexto reciente; (3) badge de 1 palabra en el pill cuando hay sugerencia; (4) detecciones 5.1: haz una pregunta que nadie responda y adquiere un compromiso hablando → deberían aparecer tarjetas (máx ~1 push/5 min salvo pendientes); (5) memoria cruzada 5.2: habla de un tema que YA esté en el acta de una reunión pasada de tu DB → tarjeta "El dd/mm se acordó: …" (solo en modo copilot/entrenador); (6) conflictos de hotkeys: con tu IDE abierto, verifica que AltGr+A y AltGr+M no disparen atajos raros del IDE (AltGr ≡ Ctrl+Alt; reporta cualquier choque); (7) modos: en Silencioso no debe aparecer NINGÚN push.
   - **Fix post-G2 (2026-07-03, commit bd58d53):** Johann probó el HUD real y reportó dos bugs que ninguna verificación headless podía atrapar: (a) el HUD se veía "casi invisible" — un QWidget plano con solo WA_TranslucentBackground no garantiza que su stylesheet pinte fondo/bordes en Windows (la pill nunca dependió de esto: pinta a mano en paintEvent); (b) el HUD quedaba DETRÁS del pill — la pill reasserta HWND_TOPMOST por Win32 cada 1s y el HUD solo tenía el hint más débil de Qt. Corregido replicando el patrón de pill_widget.py (paintEvent con QPainter para el fondo redondeado, mismo mecanismo Win32 SetWindowPos con timer de 500ms) + anclaje que se recalcula con la altura REAL tras el primer show() + ancho/tipografía/botones rediseñados. Verificado con smoke test headless (offscreen) sin excepciones; **la verificación visual final sigue pendiente de tu ojo** — vuelve a probar el HUD.
 - **G2 Ola 6 — Prueba física de plataforma y dictado** (15 min, app reiniciada): **(webhook 6.1)** en Configuración → Webhook: actívalo apuntando a un receptor tuyo (p. ej. webhook.site con WEBHOOK_ALLOW_LOCAL=false, o un servicio local con =true), pon un secreto, cierra una reunión corta → debe llegar UN POST con header X-Vflow-Signature verificable; con scope=pendientes el body NO trae resumen ni transcript; prueba también una URL http:// o a 192.168.x sin el opt-in → la UI/log debe rechazarla; **(dead-drop)** setea PENDING_EXPORT_DIR a una carpeta y cierra otra reunión → aparece vflow-pendientes-<id>-<fecha>.md; **(6.2)** dicta algo que tu diccionario corrija → en el historial esa fila muestra "Ver crudo" (el original) y "Deshacer edición IA" lo restaura; corrige a mano UNA palabra de una transcripción en el dashboard → en el panel Diccionario aparece la sección "Sugeridas" con el par, nace DESACTIVADA, Aceptar la activa y Descartar la borra; **(6.3)** activa "Modos de dictado por app" en Configuración, dicta en tu cliente de email → registro formal; dicta en el IDE (code.exe) → términos técnicos intactos; dicta en una app NO mapeada → texto idéntico al de siempre; verifica que la latencia con el toggle OFF sigue siendo la normal, y que "Deshacer edición IA" también revierte el reformateo.
-- **G2 Ola 7 — Prueba física del briefing OPS** (5 min, app reiniciada): (1) crea un .md corto con contexto tuyo compartible (p.ej. `C:\OPS\_briefing\contexto.md`: un proyecto activo + un compromiso con fecha); (2) en Configuración → "Copiloto con contexto OPS" pega la ruta y guarda; (3) inicia una reunión real (AltGr+R) y habla ~1 min tocando algo que se relacione con tu briefing; (4) en /reunion → pestaña "Preguntar" pregunta "¿esto conecta con algo mío?" → la respuesta debe CONECTAR con lo del briefing citando timestamps, sin inventar; (5) cambia el modo proactivo a **Silencioso** y repite la pregunta → la respuesta ya NO debe usar el briefing (gate de privacidad para pantalla compartida); (6) borra el .md mientras la app corre y pregunta otra vez → no debe romperse (fail-open, responde sin briefing). Nota: el susurro NO empuja tarjetas de contexto en el insight stream (eso es backlog v1.1, ver G4 Ola 7).
+- *(La prueba física del briefing OPS que vivía aquí se consolidó el 2026-08-01 en el Bloque C de la sección "PRUEBAS FÍSICAS PENDIENTES", arriba en PARA JOHANN. Sus 6 pasos están completos allá. Sigue vigente la nota: el susurro NO empuja tarjetas de contexto en el insight stream, eso es backlog v1.1, ver G4 Ola 7.)*
 - **G4 Ola 7 — Recorte de alcance del briefing OPS (decisión del debate, revisable async):** el plan pedía inyectar el briefing en el insight stream en vivo (update_state) para habilitar tarjetas de detección "🧭 Contexto:". El debate adversarial (2 Opus con código real) probó que eso descalibra las detecciones 5.1 (0 FP en 12 ventanas, modelo Haiku susceptible a 8KB fijos) y que su verificación honesta exige ≥12 ventanas midiendo FP Y FN. Decisión: **v1 entrega el briefing SOLO en el chat pull "Preguntar" (answer_live)** — donde no hay detecciones que romper, el usuario lo pidió explícitamente y el costo de un error es una respuesta mediocre, no una interrupción. Las tarjetas "🧭 Contexto:" del insight stream quedan como v1.1 con recalibración bloqueante. Si quieres esas tarjetas ya (aceptando el trabajo de recalibración), pídelo; no bloquea el resto. **Nota de privacidad a tener en cuenta al usar la feature:** (a) comparte pantalla → pon modo Silencioso (ahora el briefing también se omite del chat en Silencioso); (b) con INSIGHTS_FALLBACK=true (default), si tu backend primario falla, el prompt con briefing puede salir por groq/openrouter — misma frontera de red que el transcript, pero el briefing es un dossier tuyo más concentrado; tenlo presente si el briefing lleva algo sensible.
 - **G4 Ola 3 — Recorte de alcance (decisión técnica, revisable async):** el plan prometía "turnos e interrupciones (solape)" pero el debate adversarial probó contra el código que el solape entre canales NO es computable de forma fiable: el loopback WASAPI se salta silencios, así que los ejes de tiempo de "Yo" (mic continuo) y "Ellos" (muestras discontinuas) divergen sin mapa común. v1 entrega: talk-time %, talk-to-listen, monólogo más largo por canal, WPM, preguntas por canal, y "turnos" aproximados por alternancia de speaker en el texto. "Interrupciones" queda fuera (necesitaría timestamps de pared por buffer del loopback: posible v2 anotando el instante de llegada de cada buffer). Si quieres esa v2, pídela; no bloquea nada de lo demás.
 
