@@ -185,7 +185,7 @@ class TestModificadoresFisicos:
     def test_espera_a_que_suelten_los_modificadores_antes_del_ctrl_c(self, fake, monkeypatch):
         orden = []
         monkeypatch.setattr(clipboard, "_wait_modifiers_released",
-                            lambda timeout=0.6: (orden.append("espera"), [])[1])
+                            lambda timeout=clipboard.MODIFIER_WAIT_SECONDS: (orden.append("espera"), [])[1])
         original = fake.send_ctrl_c
 
         def _ctrl_c():
@@ -197,22 +197,25 @@ class TestModificadoresFisicos:
         clipboard.capture_selection()
         assert orden == ["espera", "ctrl_c"]
 
-    def test_si_no_los_sueltan_los_fuerza_y_sigue(self, fake, monkeypatch):
-        forzado = []
-        monkeypatch.setattr(clipboard, "_wait_modifiers_released", lambda timeout=0.6: ["ctrl", "alt"])
-        monkeypatch.setattr(clipboard, "_force_release_modifiers", lambda: forzado.append(1))
+    def test_si_no_los_sueltan_aborta_diciendolo(self, fake, monkeypatch):
+        """Aborta con SU PROPIO estado, no con "no hay selección": mentirle al
+        usuario sobre la causa fue el bug original."""
+        monkeypatch.setattr(clipboard, "_wait_modifiers_released",
+                            lambda timeout=clipboard.MODIFIER_WAIT_SECONDS: ["ctrl", "alt"])
         fake.selection_is("la selección")
         texto, status = clipboard.capture_selection()
-        assert forzado == [1], "sin el respaldo, quien sostenga el atajo se queda sin captura"
-        assert (texto, status) == ("la selección", "ok")
+        assert (texto, status) == (None, "modifiers")
+        assert fake.ctrl_c_sent == 0, "no tiene sentido mandar un Ctrl+C que se sabe roto"
 
-    def test_no_fuerza_nada_si_ya_estaban_libres(self, fake, monkeypatch):
-        forzado = []
-        monkeypatch.setattr(clipboard, "_wait_modifiers_released", lambda timeout=0.6: [])
-        monkeypatch.setattr(clipboard, "_force_release_modifiers", lambda: forzado.append(1))
-        fake.selection_is("x")
-        clipboard.capture_selection()
-        assert forzado == []
+    def test_no_existe_ningun_forzado_de_teclas(self):
+        """Decisión, no omisión. Soltar los modificadores a la fuerza desincroniza el
+        propio listener de Vflow (medido por un auditor con el HotkeyListener real):
+        dejaba `_alt_gr_held` en False con el usuario aún sosteniendo AltGr, así que
+        la SEGUNDA pulsación del atajo no emitía nada, y podía terminar en silencio
+        un dictado en curso. Este test existe para que no vuelva a aparecer."""
+        assert not hasattr(clipboard, "_force_release_modifiers")
+        fuente = inspect.getsource(clipboard.capture_selection)
+        assert ".release(" not in fuente
 
     def test_los_modificadores_que_se_vigilan_incluyen_alt_y_ctrl(self):
         """AltGr entra por `alt` (0x12): en Windows es Alt derecho + Ctrl."""
@@ -725,6 +728,26 @@ class TestNoHayCaminoAlternativo:
         src = inspect.getsource(main.VflowApp.__init__)
         assert "self.hud.transform_accepted.connect(self._on_transform_accepted)" in src
 
+    def test_la_captura_no_corre_en_el_hilo_de_qt(self):
+        """3a-fix2: `capture_selection` espera a que el usuario suelte el atajo, y esa
+        espera en el hilo de Qt congelaba la interfaz hasta segundo y medio. Ni el
+        atajo ni la bandeja pueden llamarla directo."""
+        import ast
+
+        import textwrap
+
+        def _llamadas(nombre):
+            arbol = ast.parse(textwrap.dedent(self._src(nombre)))
+            return {
+                n.func.id for n in ast.walk(arbol)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            }
+
+        for entrada in ("_on_transform_hotkey", "start_transform"):
+            assert "capture_selection" not in _llamadas(entrada), entrada
+        assert "capture_selection" in _llamadas("_capture_worker")
+        assert "Thread" in self._src("_start_capture_worker")
+
     def test_el_panel_se_abre_antes_de_llamar_al_modelo(self):
         src = self._src("_start_transform")
         assert src.index("enter_transform_mode") < src.index("_transform_worker")
@@ -793,8 +816,9 @@ class TestNoHayCaminoAlternativo:
         sobre el nombre confundía leer con guardar.
         """
         import ast
+        import textwrap
 
-        arbol = ast.parse(inspect.cleandoc(self._src("_on_transform_ready")))
+        arbol = ast.parse(textwrap.dedent(self._src("_on_transform_ready")))
         asignaciones = [
             t.attr
             for n in ast.walk(arbol) if isinstance(n, (ast.Assign, ast.AugAssign))

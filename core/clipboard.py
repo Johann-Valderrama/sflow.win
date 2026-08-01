@@ -260,7 +260,13 @@ def _modifiers_down() -> list:
     return abajo
 
 
-def _wait_modifiers_released(timeout: float = 0.6) -> list:
+#: Cuánto se espera a que el usuario suelte el atajo. Generoso a propósito: desde
+#: que la captura corre FUERA del hilo de Qt (ver main.py), esta espera no congela
+#: nada, así que es preferible aguantar a un usuario lento antes que abortarle.
+MODIFIER_WAIT_SECONDS = 1.5
+
+
+def _wait_modifiers_released(timeout: float = MODIFIER_WAIT_SECONDS) -> list:
     """Espera a que el usuario suelte los modificadores. Devuelve los que sigan abajo.
 
     **Esto es lo que hace que la captura funcione con un atajo que usa AltGr**, y la
@@ -281,24 +287,24 @@ def _wait_modifiers_released(timeout: float = 0.6) -> list:
     return _modifiers_down()
 
 
-def _force_release_modifiers():
-    """Suelta los modificadores a la fuerza (respaldo si el usuario no los suelta).
-
-    Soltar una tecla que no estaba pulsada es inofensivo, y cuando el usuario suelte
-    la suya de verdad el evento extra tampoco hace daño. Es preferible a quedarse
-    esperando: sin esto, alguien que mantenga AltGr pulsado un segundo de más se
-    queda sin captura y lee "no hay texto seleccionado" con el texto seleccionado.
-    """
-    try:
-        ctrl = Controller()
-        for tecla in (Key.alt_gr, Key.alt_r, Key.alt_l, Key.alt,
-                      Key.ctrl_r, Key.ctrl_l, Key.ctrl, Key.shift, Key.cmd):
-            try:
-                ctrl.release(tecla)
-            except Exception:  # noqa: BLE001 — best-effort por tecla
-                pass
-    except Exception as e:  # noqa: BLE001
-        logger.warning("capture_selection: no se pudieron soltar los modificadores: %s", e)
+# NO EXISTE UN _force_release_modifiers, y su ausencia es una decisión (2026-08-01).
+#
+# La primera versión de este arreglo, si el usuario no soltaba los modificadores a
+# tiempo, los soltaba a la fuerza con pynput. Dos auditores independientes con
+# lentes opuestos convergieron en el mismo defecto, y uno lo MIDIÓ ejecutando el
+# `HotkeyListener` real: **esos releases sintéticos los ve el propio listener de
+# Vflow**, porque el hook de bajo nivel de pynput entrega también los eventos
+# inyectados y `core/hotkey.py` descarta el flag `injected` al declarar sus
+# callbacks con un solo parámetro. Consecuencias medidas: `_alt_gr_held` quedaba en
+# False con el usuario aún sosteniendo AltGr, así que **la segunda pulsación del
+# atajo no emitía nada** (peor que el bug original: sin mensaje siquiera), el
+# contador de taps de Shift subía solo, y un dictado en curso con Ctrl+Alt o en
+# manos-libres podía terminarse SIN AVISO.
+#
+# Por eso hoy solo se ESPERA. Si el usuario no suelta, se aborta diciéndoselo, que
+# es un fallo honesto y reversible por él en un segundo. Tocar el estado del
+# teclado de todo el sistema para arreglar un problema de esta feature era subir el
+# blast radius muchísimo más de lo que valía.
 
 
 def capture_selection(timeout: float = 0.8) -> "tuple[str | None, str]":
@@ -330,8 +336,14 @@ def capture_selection(timeout: float = 0.8) -> "tuple[str | None, str]":
         ``(texto, "ok")``        — hay selección y cabe.
         ``(None, "empty")``      — no había nada seleccionado (o no se pudo
                                    confirmar que el Ctrl+C copiara algo nuevo).
+        ``(None, "modifiers")``  — el usuario sigue sosteniendo el atajo. Se aborta
+                                   diciéndoselo en vez de mentirle con "no hay
+                                   selección", que es lo que pasaba antes.
         ``(None, "too_long")``   — la selección supera el tope duro.
         ``(None, "failed")``     — no se pudo simular Ctrl+C.
+
+    NOTA para quien la llame: puede bloquear hasta ``MODIFIER_WAIT_SECONDS`` + el
+    ``timeout`` del portapapeles, así que **no se llama desde el hilo de Qt**.
     """
     save_frontmost_app()
 
@@ -339,10 +351,9 @@ def capture_selection(timeout: float = 0.8) -> "tuple[str | None, str]":
     # modificador de su propio atajo (ver _wait_modifiers_released, con la medición).
     pendientes = _wait_modifiers_released()
     if pendientes:
-        logger.info("capture_selection: modificadores aún abajo (%s), se sueltan a la fuerza",
+        logger.info("capture_selection: modificadores aún presionados (%s), se aborta",
                     ", ".join(pendientes))
-        _force_release_modifiers()
-        time.sleep(0.05)
+        return None, "modifiers"
 
     prev_text = _get_clipboard_text()
     seq_before = _clipboard_sequence()

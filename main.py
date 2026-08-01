@@ -631,6 +631,7 @@ class VflowApp(QObject):
     transcription_fallback_notice = pyqtSignal(str)      # unidad 5.5: aviso de fallback de red Groq -> local
     dictation_manual_preset_consumed = pyqtSignal()       # unidad 2b: el preset manual armado se acaba de gastar
     transform_ready = pyqtSignal(dict)                    # unidad 3c: resultado de core.transform.transform_text
+    transform_capture_ready = pyqtSignal(object, str)     # 3a-fix2: (texto, estado) de la captura en hilo
 
     def __init__(self):
         """Inicializa componentes (recorder, transcriber, DB, hotkey, pill) y conecta señales."""
@@ -688,6 +689,7 @@ class VflowApp(QObject):
         # destino de ESA solicitud. Ver _new_transform_generation.
         self._transform_gen = 0
         self._transform_hwnd = None
+        self._transform_pending_prompt = None  # 3a-fix2: prompt en espera de la captura
 
         # Contador de generación y guard anti-duplicado
         self._generation = 0
@@ -771,6 +773,9 @@ class VflowApp(QObject):
         self.hud.transform_copy_original_requested.connect(self._on_transform_copy_original)
         self.hud.transform_prompt_chosen.connect(self._on_transform_prompt_chosen)
         self.transform_ready.connect(self._on_transform_ready, Qt.ConnectionType.QueuedConnection)
+        self.transform_capture_ready.connect(
+            self._on_transform_capture_ready, Qt.ConnectionType.QueuedConnection
+        )
 
     def start(self):
         """Inicia el listener de hotkeys y muestra la pill en estado idle."""
@@ -1417,12 +1422,35 @@ class VflowApp(QObject):
         Un solo atajo para los 8 prompts (unidad 3d). La captura ocurre AQUÍ y no
         después de elegir: para cuando el usuario lea la lista, el foco ya estará
         en el panel y la selección de su aplicación podría haberse perdido.
+
+        La captura va a un HILO (3a-fix2): ``capture_selection`` espera a que el
+        usuario suelte el atajo, y esa espera en el hilo de Qt congelaba la pill, el
+        HUD y el resto de la interfaz hasta un segundo y medio. Lo encontró un
+        auditor independiente, no los tests.
         """
+        self._start_capture_worker(None)
+
+    def _start_capture_worker(self, prompt_key):
+        """Lanza la captura en background. ``prompt_key`` None = abrir el selector."""
+        self._transform_pending_prompt = prompt_key
+        threading.Thread(target=self._capture_worker, daemon=True).start()
+
+    def _capture_worker(self):
+        text, status = capture_selection()
+        self.transform_capture_ready.emit(text, status)
+
+    @pyqtSlot(object, str)
+    def _on_transform_capture_ready(self, text, status: str):
         from core import transform as _transform  # noqa: PLC0415
 
-        text, status = capture_selection()
         if status != "ok":
             self._notify_transform_capture_problem(status)
+            return
+        prompt_key = self._transform_pending_prompt
+        self._transform_pending_prompt = None
+        if prompt_key is not None:
+            self._new_transform_generation()
+            self._start_transform(text, prompt_key)
             return
         self._new_transform_generation()
         self._ensure_hud_visible()
@@ -1466,13 +1494,13 @@ class VflowApp(QObject):
         return self._transform_gen
 
     def start_transform(self, prompt_key: str):
-        """Transform desde la bandeja: captura la selección y aplica ese prompt."""
-        text, status = capture_selection()
-        if status != "ok":
-            self._notify_transform_capture_problem(status)
-            return
-        self._new_transform_generation()
-        self._start_transform(text, prompt_key)
+        """Transform desde la bandeja: captura la selección y aplica ese prompt.
+
+        Misma captura en hilo que el atajo (3a-fix2): desde la bandeja el usuario no
+        sostiene modificadores, pero el Ctrl+C y la espera del portapapeles siguen
+        siendo bloqueantes y no tienen por qué congelar la interfaz.
+        """
+        self._start_capture_worker(prompt_key)
 
     def _start_transform(self, text: str, prompt_key: str):
         from core import transform as _transform  # noqa: PLC0415 — perezoso
@@ -1492,6 +1520,7 @@ class VflowApp(QObject):
     def _notify_transform_capture_problem(self, status: str):
         mensajes = {
             "empty": "No hay texto seleccionado. Selecciona algo y vuelve a intentar.",
+            "modifiers": "Suelta AltGr y vuelve a intentar: con el atajo presionado no se puede copiar la selección.",
             "too_long": "La selección es demasiado grande para transformarla.",
             "failed": "No se pudo leer la selección de la aplicación en foco.",
         }
