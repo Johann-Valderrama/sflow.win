@@ -591,6 +591,62 @@ contrato dentro de meses, se re-comprueban, no se copian):
 - **Los snippets leen su tabla desde caché en memoria** (patrón de `core/dictionary.py`: caché con
   swap atómico e invalidación perezosa), nunca una consulta SQLite por dictado dentro del hot-path.
 
+### 20. Smart commands: voz a puntuación (Ola 1 de PLAN-DICTADO, 2026-07-31)
+
+Reglas locales que convierten lo que dictas en signos. **Sin LLM, sin red, sin disco, sin
+interfaz.** Es la pasada 3 del contrato de la sección 19: corre en `main.py` sobre el texto ya
+ensamblado, solo en el dictado, y nunca en `core/transcriber.py`.
+
+> **CAMBIO DE COMPORTAMIENTO para quien ya dictaba, y por eso se anuncia aquí en vez de colarse.**
+> Desde esta versión, decir `"signo coma"` deja de escribir esas dos palabras y pone una `,`. Si
+> alguien dicta esas frases de forma literal a menudo, se apaga con `SMART_COMMANDS_ENABLED=false`,
+> que se relee en caliente y no exige reiniciar. Va con default ON porque la pasada no manda nada a
+> ninguna parte y el error se ve dictando, en el acto.
+
+**Los disparadores llevan PREFIJO obligatorio** (`signo` o `signos` en español, `symbol` en inglés).
+Se dice `"signo coma"`, nunca `"coma"` pelada. Esto es una mejora deliberada sobre el upstream
+`daniel-carreon/sflow`, no una copia: sus reglas disparan con la palabra suelta y atrapan habla
+normal en español, así que `"hay dos puntos importantes"` se convertía en `"hay: importantes"` y
+`"entró en coma profundo"` en `"entró en, profundo"`. El prefijo casi elimina esos falsos positivos
+y, de regalo, deja dictar esas palabras literalmente, cosa que el diseño del upstream no permite.
+
+Se descartó `puntuación` como prefijo alternativo por la misma lógica: es una palabra con
+significado genérico real (*"revisemos la puntuación coma por coma"*), así que reintroducía el
+problema que el prefijo existe para matar. Quitarlo no cuesta ninguna capacidad, porque todo lo que
+se diría con `puntuación X` se dice con `signo X`. Queda como test negativo en
+`tests/test_smart_commands.py`.
+
+| Se dicta (tras el prefijo) | Produce |
+|---|---|
+| `punto` | `. ` |
+| `coma` | `, ` |
+| `dos puntos` | `: ` |
+| `punto y coma` | `; ` |
+| `puntos suspensivos` | `… ` |
+| `punto y aparte` | `.` + párrafo nuevo |
+| `nuevo párrafo` / `nuevo parrafo` | párrafo nuevo |
+| `nueva línea` / `salto de línea` (y sus variantes sin tilde) | salto de línea |
+
+En inglés, tras `symbol`: `period` / `full stop`, `comma`, `colon`, `semicolon`, `ellipsis`,
+`new line`, `new paragraph`.
+
+Detalles que importan al tocar esto:
+
+- **Un solo regex combinado**, no una pasada por regla. Con 20 `re.sub` secuenciales el presupuesto
+  de 5 ms del Eje 3 quedaba al límite (~4,8 ms medianos con picos por encima) sobre 5.000
+  caracteres; con una sola alternancia el texto se recorre una vez y baja a ~0,5 ms.
+- **El orden de la tabla es por cantidad de palabras descendente**, porque `re` con alternancia toma
+  la primera que coincide y no la más larga: sin eso, `punto` se comería `punto y aparte` y dejaría
+  suelto un `" y aparte"`.
+- **`raw_text`** conserva el texto pre-comandos si no había crudo previo (contrato de la sección 19),
+  así que el "Deshacer edición IA" del historial revierte también la puntuación por voz.
+- **Fuera de v1, decidido y no omitido en silencio:** interrogación y exclamación (en español
+  necesitan apertura y cierre, y decidir dónde va la apertura es un diseño propio) y capitalizar la
+  letra siguiente tras un punto (Whisper ya capitaliza; una segunda pasada adivinando hace más daño
+  que bien). Las dos razones están en el docstring de `core/smart_commands.py`.
+- **Límite conocido y aceptado:** el prefijo en español y el comando en inglés se pueden mezclar
+  (`"signo comma"` dispara). Es inofensivo y bloquearlo no aporta nada.
+
 ## Security & Privacy
 
 ### 1. API Key Encryption (DPAPI)
@@ -692,6 +748,7 @@ Edit `config.py`:
 - `USER_NAME` / `USER_ROLE` / `USER_DOMAIN` (default `""`, unidad 5.2) — Identidad opcional del usuario, inyectada como 1 línea (con coletilla anti-atribución) en insights en vivo (solo si el modo proactivo NO es `silent`), acta y Asistente; "Yo" pasa a ser el nombre real en pendientes. Vacío = apagado. Nota: el nombre entra en actas persistidas (visibles por clientes MCP).
 - `AUTO_HIGHLIGHTS_ENABLED` (default `true`, unidad 5.1) — Candidatos automáticos a momento destacado como intención adicional del MISMO update_state (cero LLM extra, máx 2/ventana); se persisten en `highlights_json` con `source:"auto"` y JAMÁS entran al acta ni al gate anti-alucinación de `momentos_destacados` (solo los manuales AltGr+H alimentan el acta). Kill-switch en caliente.
 - `TRANSCRIPTION_FALLBACK` (default `false`, unidad 5.5) — Espejo de `GROQ_FALLBACK`: con backend primario groq, un fallo de RED en el DICTADO (nunca reunión/URL) cae al modelo local si ya está descargado (sin auto-descarga; aviso de tray si falta). Breaker con cooldown `TRANSCRIPTION_FALLBACK_COOLDOWN` (default `120`s): dentro del cooldown el dictado va directo a local; un éxito de Groq lo resetea. translate solo con target `en`.
+- `SMART_COMMANDS_ENABLED` (default: `true`, Ola 1 de PLAN-DICTADO): convierte disparadores dictados con prefijo (`"signo coma"`) en su signo. Ver la sección 20. Es el **único killswitch del proyecto que nace encendido**, y a propósito: la pasada es regex local, sin red ni disco ni LLM, así que no hay dato que se escape ni fallo silencioso posible. Por lo mismo falla ABIERTO: solo el literal `false` apaga, cualquier otro valor deja la pasada activa (al revés de `DASHBOARD_AUTH_ENABLED`, donde el lado seguro del fallo es cerrar).
 - `DICTATION_MODES_ENABLED` (default: `false`) — Activa el reformateo post-dictado por app activa (Ola 6).
 - `DICTATION_MODE_MAP` — Mapa `exe:preset` (p. ej. `outlook.exe:email,slack.exe:chat,code.exe:codigo`) que asigna un preset de reformateo por `.exe` en foco; parseo tolerante a espacios/mayúsculas.
 - `DASHBOARD_AUTH_ENABLED` (default: `true`) - Exige el token local de sesión (`core/localauth.py`) en el dashboard y su API. Solo el valor `false` lo apaga; cualquier otro valor deja la protección encendida (fail-closed). Ver "Security & Privacy" → "Token local de sesión del dashboard".
