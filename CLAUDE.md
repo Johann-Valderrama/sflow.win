@@ -776,6 +776,8 @@ Edit `config.py`:
 ### Environment Variables (`.env`)
 
 > Fuente de verdad programática: `config.ENV_CATALOG` (catálogo único, con default/kind/killswitch/doc por variable), verificada por `tests/test_env_catalog.py`. Esta lista es prosa para lectura humana; ante duda o drift, `ENV_CATALOG` manda.
+>
+> **Gotcha al agregar una variable nueva (pagado en la Ola 1 de PLAN-DICTADO):** `test_env_catalog.py` recorre el AST y exige que TODA lectura `os.getenv` en código de producción tenga su entrada en `ENV_CATALOG`, y además que el default del catálogo coincida con el literal del propio `os.getenv`. Consecuencia práctica: **la entrada del catálogo va en el MISMO commit que introduce la lectura**, no en un commit posterior de documentación, o la suite queda en rojo en medio. No intentes esquivarlo renombrando la variable: el guardián está bien y lo que estaría mal es el orden del trabajo.
 
 - `GROQ_API_KEY` — Your Groq API key (automatically encrypted)
 - `SAVE_HISTORY` (default: `true`) — Set to `false` to disable recording transcriptions to database
