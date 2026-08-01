@@ -379,8 +379,9 @@ razones, la primera decisiva por sí sola:
    demás. Los conceptos de `pinned`/`hit_count`/budget del diccionario tampoco significan lo mismo
    aquí.
 
-**Decisión sobre el disparador (mía como orquestador, reversible, marcada para que Johann la revise):
-los snippets NO llevan el prefijo obligatorio de la Ola 1.** El disparador lo ELIGE el usuario, así
+**Decisión sobre el disparador: los snippets NO llevan el prefijo obligatorio de la Ola 1.**
+Propuesta por el orquestador y **CONFIRMADA por Johann el 2026-08-01**, así que queda cerrada: no se
+re-abre sin que él lo pida. El disparador lo ELIGE el usuario, así
 que el problema es distinto al de los smart commands: allá las palabras que colisionan con el habla
 normal (`coma`, `dos puntos`) son fijas e inevitables, y por eso hizo falta el prefijo; aquí, si
 alguien elige `"firma"` y se le expande sin querer, lo ve en el acto y cambia el disparador, que está

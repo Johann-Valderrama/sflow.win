@@ -590,9 +590,9 @@
   `core/transcriber.py` para los TRES flujos, y un snippet no puede expandirse cuando el disparador
   lo pronuncia otra persona en una reunión. Más: corregir no es expandir, y un snippet de un párrafo
   quemaría el presupuesto de ~480 caracteres del prompt de vocabulario de Whisper. **Y la decisión
-  hermana, marcada REVISABLE por Johann: los snippets no llevan prefijo obligatorio**, porque la
-  frase la elige el usuario y un falso positivo se ve y se corrige en el acto; a cambio, el panel
-  avisa cómo elegirla. Detalle: plan, sección Ola 4. : gatillo Ola 4 : @opus-5
+  hermana, CONFIRMADA por Johann el 2026-08-01: los snippets no llevan prefijo obligatorio**, porque
+  la frase la elige el usuario y un falso positivo se ve y se corrige en el acto; a cambio, el panel
+  avisa cómo elegirla. Detalle: plan, sección Ola 4. : gatillo Ola 4 : @opus-5 + Johann (confirmó)
 - 2026-07-31 **El prefijo de los smart commands se queda solo en "signo"** (commit 3865dc5, estado:
   aceptada). El plan ofrecía `signo` / `puntuación`; se cae el segundo porque es una palabra con
   significado genérico real en español ("revisemos la puntuación coma por coma"), o sea que
