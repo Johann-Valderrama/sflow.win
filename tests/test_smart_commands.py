@@ -12,13 +12,22 @@ Cubre:
 (g) espaciado exacto alrededor del reemplazo
 (h) killswitch SMART_COMMANDS_ENABLED (default ON, solo "false" apaga)
 (i) presupuesto de latencia del Eje 3 (5 ms sobre ~5.000 caracteres)
+(j) cableado en main.py::_transcribe_final (unidad 1b): camino feliz, los
+    gates (traducción / audio de sistema / killswitch), la regla de raw_text,
+    el orden respecto al reformateo LLM (dictation_modes) y la guarda de
+    seguridad contra una pasada vacía
 """
 import os
 import time
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+import core.smart_commands as smart_commands
 from core.smart_commands import apply_smart_commands, smart_commands_enabled
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 # ---------------------------------------------------------------------------
@@ -277,3 +286,276 @@ class TestEntradaVaciaONone:
 
     def test_cadena_vacia(self):
         assert apply_smart_commands("") == ""
+
+
+# ---------------------------------------------------------------------------
+# (j) Cableado en main.py::_transcribe_final (unidad 1b, Ola 1).
+#
+# Replica la lógica que main.py añade entre "text = text.strip()" y el bloque
+# de dictation_modes, SIN instanciar VflowApp (exige QApplication/hotkeys/
+# recorder reales) — mismo patrón que
+# tests/test_dictation_modes.py::TestRawTextMostRaw y
+# tests/test_pipeline_texto.py::TestDictadoEnsambladoLlegaCompleto.
+#
+# Llama a las funciones REALES de smart_commands (apply_smart_commands +
+# smart_commands_enabled, que lee SMART_COMMANDS_ENABLED del entorno) y
+# mockea dictation_modes, para poder verificar el ORDEN entre las dos pasadas
+# sin depender de un LLM real.
+# ---------------------------------------------------------------------------
+def _simulate_transcribe_final_wiring(
+    text, raw_full, *, translate, source,
+    modes_on=False, preset=None, reformatted=None,
+):
+    from core import dictation_modes as _dm
+
+    with patch.object(_dm, "modes_enabled", return_value=modes_on), \
+         patch.object(_dm, "preset_for_exe", return_value=preset), \
+         patch.object(_dm, "reformat_text", return_value=reformatted):
+
+        # main.py:895-896
+        if raw_full is not None and raw_full.strip() == text:
+            raw_full = None
+
+        # main.py: bloque de smart commands (unidad 1b)
+        if (
+            not translate
+            and source != "system"
+            and smart_commands.smart_commands_enabled()
+        ):
+            with_commands = smart_commands.apply_smart_commands(text)
+            if with_commands and with_commands.strip() and with_commands != text:
+                if raw_full is None:
+                    raw_full = text
+                text = with_commands
+
+        # main.py: bloque de dictation_modes (unidad 6.3, ya existente)
+        if not translate and source != "system" and _dm.modes_enabled():
+            p = _dm.preset_for_exe("dummy.exe")
+            if p:
+                new_text = _dm.reformat_text(text, p)
+                if new_text and new_text != text:
+                    if raw_full is None:
+                        raw_full = text
+                    text = new_text
+
+        return text, raw_full
+
+
+class TestCableadoCaminoFeliz:
+    def test_signo_coma_sale_con_la_coma_puesta(self, monkeypatch):
+        monkeypatch.delenv("SMART_COMMANDS_ENABLED", raising=False)
+        text, raw_full = _simulate_transcribe_final_wiring(
+            "uno signo coma dos", raw_full=None, translate=False, source="mic",
+        )
+        assert text == "uno, dos"
+        assert raw_full == "uno signo coma dos"
+
+
+class TestCableadoGates:
+    """Los tres gates que deciden si el bloque de smart commands corre. Son la
+    mitad del valor de la unidad 1b (Eje 2 del contrato, CLAUDE.md sección
+    19): sin ellos, reunión/URL heredarían la pasada por construcción si
+    alguien la moviera al sitio equivocado — aquí se verifica el lado
+    `main.py`, que es el que sí debe aplicarla cuando corresponde."""
+
+    def test_translate_true_no_aplica(self, monkeypatch):
+        monkeypatch.delenv("SMART_COMMANDS_ENABLED", raising=False)
+        text, raw_full = _simulate_transcribe_final_wiring(
+            "uno signo coma dos", raw_full=None, translate=True, source="mic",
+        )
+        assert text == "uno signo coma dos"
+        assert raw_full is None
+
+    def test_audio_de_sistema_no_aplica(self, monkeypatch):
+        monkeypatch.delenv("SMART_COMMANDS_ENABLED", raising=False)
+        text, raw_full = _simulate_transcribe_final_wiring(
+            "uno signo coma dos", raw_full=None, translate=False, source="system",
+        )
+        assert text == "uno signo coma dos"
+        assert raw_full is None
+
+    def test_killswitch_false_no_aplica(self, monkeypatch):
+        monkeypatch.setenv("SMART_COMMANDS_ENABLED", "false")
+        text, raw_full = _simulate_transcribe_final_wiring(
+            "uno signo coma dos", raw_full=None, translate=False, source="mic",
+        )
+        assert text == "uno signo coma dos"
+        assert raw_full is None
+
+
+class TestCableadoRawText:
+    """La regla de raw_text (CLAUDE.md sección 19, Eje 1): si smart commands
+    cambia el texto y no había crudo previo, el crudo pasa a ser el texto
+    pre-cambio; si ya había crudo (el diccionario cambió algo antes), ese
+    crudo anterior es MÁS crudo y se conserva sin pisarlo."""
+
+    def test_sin_crudo_previo_el_crudo_pasa_a_ser_el_texto_pre_cambio(self, monkeypatch):
+        monkeypatch.delenv("SMART_COMMANDS_ENABLED", raising=False)
+        text, raw_full = _simulate_transcribe_final_wiring(
+            "hola signo coma qué tal", raw_full=None, translate=False, source="mic",
+        )
+        assert text == "hola, qué tal"
+        assert raw_full == "hola signo coma qué tal"
+
+    def test_con_crudo_previo_del_diccionario_no_se_pisa(self, monkeypatch):
+        """Simula que el diccionario ya cambió 'Johan'->'Johann' antes de este
+        bloque (raw_full = crudo pre-diccionario). Smart commands cambia el
+        texto AÚN MÁS (agrega puntuación), pero raw_full debe seguir siendo el
+        crudo pre-diccionario, que es el más crudo de los dos."""
+        monkeypatch.delenv("SMART_COMMANDS_ENABLED", raising=False)
+        text, raw_full = _simulate_transcribe_final_wiring(
+            "hola Johann signo coma qué tal",
+            raw_full="hola Johan signo coma qué tal",
+            translate=False, source="mic",
+        )
+        assert text == "hola Johann, qué tal"
+        assert raw_full == "hola Johan signo coma qué tal"
+
+
+class TestCableadoOrdenRespectoAlReformateoLLM:
+    """Eje 1 del contrato: smart commands (pasada 3) corre ANTES que el
+    reformateo LLM de dictation_modes (pasada 5)."""
+
+    def test_reformat_text_recibe_el_texto_ya_puntuado_por_smart_commands(self, monkeypatch):
+        monkeypatch.delenv("SMART_COMMANDS_ENABLED", raising=False)
+
+        captured = {}
+
+        def _fake_reformat(text, preset, timeout=None):
+            captured["text"] = text
+            return text.upper()
+
+        from core import dictation_modes as _dm
+        with patch.object(_dm, "modes_enabled", return_value=True), \
+             patch.object(_dm, "preset_for_exe", return_value="email"), \
+             patch.object(_dm, "reformat_text", _fake_reformat):
+
+            text = "hola signo coma qué tal"
+            if smart_commands.smart_commands_enabled():
+                with_commands = smart_commands.apply_smart_commands(text)
+                if with_commands and with_commands.strip() and with_commands != text:
+                    text = with_commands
+
+            if _dm.modes_enabled():
+                preset = _dm.preset_for_exe("dummy.exe")
+                if preset:
+                    text = _dm.reformat_text(text, preset)
+
+        assert captured["text"] == "hola, qué tal", (
+            "reformat_text no recibió el texto YA puntuado por smart commands "
+            "— el orden 3 antes que 5 (CLAUDE.md sección 19, Eje 1) está roto."
+        )
+        assert text == "HOLA, QUÉ TAL"
+
+
+class TestCableadoGuardaDeSeguridad:
+    """Una pasada de smart commands que devolviera vacío o solo espacios
+    NUNCA reemplaza el dictado."""
+
+    def test_pasada_vacia_no_borra_el_dictado(self, monkeypatch):
+        monkeypatch.delenv("SMART_COMMANDS_ENABLED", raising=False)
+        with patch.object(smart_commands, "apply_smart_commands", return_value=""):
+            text, raw_full = _simulate_transcribe_final_wiring(
+                "uno signo coma dos", raw_full=None, translate=False, source="mic",
+            )
+        assert text == "uno signo coma dos"
+        assert raw_full is None
+
+    def test_pasada_solo_espacios_no_borra_el_dictado(self, monkeypatch):
+        monkeypatch.delenv("SMART_COMMANDS_ENABLED", raising=False)
+        with patch.object(smart_commands, "apply_smart_commands", return_value="   "):
+            text, raw_full = _simulate_transcribe_final_wiring(
+                "uno signo coma dos", raw_full=None, translate=False, source="mic",
+            )
+        assert text == "uno signo coma dos"
+        assert raw_full is None
+
+
+# ---------------------------------------------------------------------------
+# (k) Guardián ESTRUCTURAL sobre main.py (unidad 1b, hallazgo del coordinador
+# 2026-07-31): las pruebas de (j) de arriba REPLICAN el algoritmo del bloque
+# de main.py dentro del propio test — verifican que la lógica que escribimos
+# es correcta, no que `main.py` la ejecute de verdad. Una mutación que borre
+# o desactive el bloque de smart commands en `_transcribe_final` las deja
+# TODAS en verde, porque ninguna de ellas lee `main.py`.
+#
+# Mismo criterio que TestAlcanceEstructural en tests/test_pipeline_texto.py:
+# lee el código FUENTE de main.py (sin instanciar Qt) y afirma una propiedad
+# de UBICACIÓN y ORDEN, no de comportamiento en runtime. Cubre exactamente lo
+# que el contrato de CLAUDE.md sección 19 exige de la unidad 1b: que el
+# cableado EXISTA dentro de `_transcribe_final`, que esté en el ORDEN correcto
+# respecto al reformateo LLM (Eje 1), y que conserve sus GATES (Eje 2).
+# ---------------------------------------------------------------------------
+class TestCableadoExisteEnMainPy:
+    @staticmethod
+    def _transcribe_final_source() -> str:
+        """Extrae el cuerpo del método `_transcribe_final` de main.py (desde su
+        `def` hasta el siguiente método al mismo nivel de indentación), para no
+        confundir una llamada DENTRO de ese método con una en otro lado del
+        archivo."""
+        source = (REPO_ROOT / "main.py").read_text(encoding="utf-8")
+        start = source.index("def _transcribe_final(")
+        next_def = source.index("\n    def ", start)
+        return source[start:next_def]
+
+    def test_main_py_llama_a_apply_smart_commands_dentro_de_transcribe_final(self):
+        body = self._transcribe_final_source()
+        assert "smart_commands.apply_smart_commands(" in body, (
+            "main.py::_transcribe_final ya NO llama a "
+            "smart_commands.apply_smart_commands(...). El cableado de la unidad "
+            "1b desapareció: la pasada de voz->puntuación dejó de aplicarse en "
+            "el dictado real, aunque toda la suite de tests/test_smart_commands.py "
+            "siga en verde (esos tests, salvo este, prueban el ALGORITMO, no que "
+            "main.py lo ejecute). Ver CLAUDE.md sección 19, 'Contrato del "
+            "pipeline de texto', unidad 1b."
+        )
+
+    def test_apply_smart_commands_corre_antes_que_reformat_text(self):
+        body = self._transcribe_final_source()
+        idx_sc = body.find("smart_commands.apply_smart_commands(")
+        idx_llm = body.find("dictation_modes.reformat_text(")
+        assert idx_sc != -1 and idx_llm != -1, (
+            "No se encontraron ambas llamadas (smart_commands.apply_smart_commands "
+            "y dictation_modes.reformat_text) dentro de main.py::_transcribe_final "
+            "— no se puede verificar el orden entre las pasadas 3 y 5. Ver "
+            "CLAUDE.md sección 19, Eje 1 (ORDEN)."
+        )
+        assert idx_sc < idx_llm, (
+            "smart_commands.apply_smart_commands aparece DESPUÉS de "
+            "dictation_modes.reformat_text en main.py::_transcribe_final. Eso "
+            "invierte el Eje 1 del contrato (CLAUDE.md sección 19): la pasada 3 "
+            "(smart commands) tiene que correr ANTES que la pasada 5 (reformateo "
+            "LLM), para que el LLM reciba el texto ya puntuado por el usuario."
+        )
+
+    def test_bloque_de_smart_commands_conserva_sus_gates(self):
+        body = self._transcribe_final_source()
+        idx_sc = body.find("smart_commands.apply_smart_commands(")
+        assert idx_sc != -1, (
+            "No se encontró la llamada a smart_commands.apply_smart_commands "
+            "en main.py::_transcribe_final; no se puede verificar el bloque de "
+            "gates que la envuelve."
+        )
+        idx_if = body.rfind("if (", 0, idx_sc)
+        assert idx_if != -1, (
+            "No se encontró un 'if (' antes de "
+            "smart_commands.apply_smart_commands(...) en main.py. Sin un bloque "
+            "de gates explícito envolviendo la llamada, no hay forma de "
+            "confirmar que translate/source siguen protegiendo la pasada. Ver "
+            "CLAUDE.md sección 19, Eje 2 (ALCANCE)."
+        )
+        gate_block = body[idx_if:idx_sc]
+        for gate in ("translate", 'source != "system"'):
+            assert gate in gate_block, (
+                f"El bloque de gates que envuelve la llamada a "
+                f"smart_commands.apply_smart_commands en main.py ya no "
+                f"menciona {gate!r}. Sin ese gate, la pasada de voz->puntuación "
+                "se escaparía a modo traducción (translate=True) y/o a dictado "
+                "de audio del sistema (AUDIO_SOURCE=system, donde quien "
+                "'dicta' no es necesariamente el usuario), metiendo puntuación "
+                "inventada en habla que no es la del usuario dictando en su "
+                "propio idioma para su propia ventana. Ver CLAUDE.md sección "
+                "19, Eje 2 (ALCANCE) — el mismo daño que TestAlcanceEstructural "
+                "en tests/test_pipeline_texto.py vigila del lado de "
+                "core/transcriber.py."
+            )

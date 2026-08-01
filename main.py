@@ -58,6 +58,7 @@ from core.hotkey import HotkeyListener
 from core.meeting import MEETING
 from core.clipboard import paste_text, copy_text, save_frontmost_app, get_saved_exe
 from core import dictation_modes
+from core import smart_commands
 from core.secrets import encrypt
 from core import proactive as _proactive
 from core.proactive import PROACTIVE, LullDetector, MonologueWatch
@@ -893,6 +894,47 @@ class VflowApp(QObject):
                 text = text.strip()
                 if raw_full is not None and raw_full.strip() == text:
                     raw_full = None
+
+                # Smart commands: voz -> puntuación (unidad 1a/1b, Ola 1 de
+                # PLAN-DICTADO-2026-07-31). Corre sobre el texto YA ENSAMBLADO, con
+                # los MISMOS gates que dictation_modes de abajo (Eje 2 del contrato,
+                # CLAUDE.md sección 19): NO en traducción (translate=True) ni en
+                # AUDIO_SOURCE=system, porque en ambos casos quien "dicta" no es
+                # necesariamente el usuario, y esta pasada solo puede correr donde
+                # el hablante es el usuario y el destino es la ventana en foco.
+                # Cableado aquí y NUNCA en core/transcriber.py: ese módulo lo
+                # comparten reunión (core/meeting.py) y URL (core/url_transcribe.py),
+                # y lo heredarían por construcción — ver TestAlcanceEstructural en
+                # tests/test_pipeline_texto.py, que falla si transcriber.py llega a
+                # mencionar smart_commands.
+                if (
+                    not translate
+                    and self.recorder.source != "system"
+                    and smart_commands.smart_commands_enabled()
+                ):
+                    with_commands = smart_commands.apply_smart_commands(text)
+                    # Guarda de seguridad: una pasada que devolviera vacío o solo
+                    # espacios NUNCA reemplaza el texto — un dictado no puede
+                    # desaparecer por una regla de puntuación.
+                    if with_commands and with_commands.strip() and with_commands != text:
+                        # Mismo patrón que el reformateo LLM más abajo: el texto MÁS
+                        # crudo va a raw_full. Si el diccionario ya había producido
+                        # un raw_full (crudo pre-diccionario), ese sigue siendo más
+                        # crudo que el pre-smart-commands y se conserva; si no había
+                        # raw_full aún, el texto pre-smart-commands pasa a serlo.
+                        if raw_full is None:
+                            raw_full = text
+                        text = with_commands
+
+                # ANCLA para la Ola 4 (unidad 4b, snippets): la expansión de
+                # snippets va JUSTO AQUÍ — después de smart commands y antes del
+                # bloque de dictation_modes de abajo. Motivo (Eje 1 del contrato,
+                # CLAUDE.md sección 19): el texto que expande un snippet es texto
+                # que el usuario ESCRIBIÓ y ya viene puntuado; si los snippets
+                # corrieran antes de smart commands, esta pasada volvería a
+                # escanear ese texto guardado y mutilaría cualquier palabra literal
+                # que contenga (p. ej. un snippet cuyo texto diga "signo coma"). Con
+                # este orden, lo que inserta un snippet no lo vuelve a tocar nadie.
 
                 # Modos de dictado por app activa (unidad 6.3) — opt-in, apagado por
                 # defecto. Solo aplica al dictado normal (modo 1/2): NO en traducción
