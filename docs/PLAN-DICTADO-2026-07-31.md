@@ -360,6 +360,35 @@ ventana del usuario sin pasar por el control de G1?"*, más un segundo lente ort
 
 ## Ola 4: snippets
 
+**RESPUESTA al hallazgo E8, que el plan exigía decidir aquí y no colar: un snippet NO es una entrada
+de diccionario con texto largo, y meterlos en la misma tabla rompería las dos features.** Tres
+razones, la primera decisiva por sí sola:
+
+1. **El ALCANCE es incompatible, y está fijado por el contrato.** El diccionario corre en
+   `core/transcriber.py` y aplica a los TRES flujos (dictado, reunión, URL). Los snippets solo pueden
+   correr en el dictado: un disparador pronunciado por OTRA persona en una reunión no puede expandirse
+   a tu firma de correo dentro del acta. Compartir tabla obligaría a agregar una columna de alcance
+   Y a partir el punto de aplicación en dos, que es exactamente tener dos features con una tabla
+   compartida sin ganar nada.
+2. **El propósito es distinto.** El diccionario CORRIGE lo que Whisper oyó mal: "escucho X, escribo
+   Y", misma intención del hablante, texto de largo comparable. Un snippet SUSTITUYE una orden corta
+   por contenido que el usuario redactó antes. No es corrección, es expansión.
+3. **Rompería el prompt de vocabulario.** Las entradas del diccionario alimentan el prompt de
+   contexto de Whisper con un presupuesto de ~480 caracteres (`core/dictionary.py`). Un snippet de un
+   párrafo metido en esa cola quemaría el presupuesto entero y degradaría la transcripción de todo lo
+   demás. Los conceptos de `pinned`/`hit_count`/budget del diccionario tampoco significan lo mismo
+   aquí.
+
+**Decisión sobre el disparador (mía como orquestador, reversible, marcada para que Johann la revise):
+los snippets NO llevan el prefijo obligatorio de la Ola 1.** El disparador lo ELIGE el usuario, así
+que el problema es distinto al de los smart commands: allá las palabras que colisionan con el habla
+normal (`coma`, `dos puntos`) son fijas e inevitables, y por eso hizo falta el prefijo; aquí, si
+alguien elige `"firma"` y se le expande sin querer, lo ve en el acto y cambia el disparador, que está
+en sus manos. Obligar a decir `"signo firma correo"` leería mal para una frase que el propio usuario
+redactó. A cambio, el matcher exige coincidencia de **frase completa con fronteras de palabra**, y el
+panel de `4c` sugiere elegir una frase que no se diga por accidente. Si en el uso real molesta, meter
+un prefijo opcional es una columna y una línea de matcher.
+
 | Unidad | Qué | Dificultad | Ejecutar con | Por qué | Depende de | Escribe | Verifica | Si falla |
 |---|---|---|---|---|---|---|---|---|
 | 4a | Tabla `snippets` con migración idempotente + CRUD | Baja | Sonnet.L | El repo ya tiene el patrón de migración idempotente en `db/database.py` | - | `db/database.py`, `tests/test_snippets.py` | `SCRIPT: pytest tests/test_snippets.py` | REINTENTO |
