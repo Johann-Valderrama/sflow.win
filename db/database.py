@@ -2,10 +2,106 @@ import os
 import json
 import logging
 import sqlite3
+import unicodedata
 from datetime import datetime, timedelta
 from config import DB_PATH
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Snippets: normalización de disparador + tope de tamaño del body
+# (Ola 4 de PLAN-DICTADO-2026-07-31, unidad 4a)
+# ---------------------------------------------------------------------------
+
+# Tope de tamaño del body: 20.000 caracteres (~3.000-4.000 palabras, unas
+# 8-10 páginas). Una firma de correo o un párrafo de plantilla no se acerca
+# a esto ni de lejos (una firma típica ronda 100-400 caracteres); el número
+# es deliberadamente holgado para cubrir el caso legítimo más largo que se
+# pueda imaginar (un descargo de responsabilidad completo, una plantilla de
+# oferta con varias secciones) sin abrir la puerta a que el campo termine
+# guardando un documento entero por accidente. El rechazo es EXPLÍCITO con
+# el número en el mensaje, nunca un truncado silencioso: un snippet cortado
+# sin avisar es peor que uno rechazado, porque el usuario no se entera hasta
+# que ya lo pegó a medias en otra aplicación.
+_BODY_MAX_CHARS = 20000
+
+
+class DuplicateTriggerError(ValueError):
+    """El disparador (normalizado) ya existe en otro snippet.
+
+    Se lanza desde add_snippet/update_snippet cuando el índice único sobre
+    trigger_key rechaza el INSERT/UPDATE. La unicidad vive en el ESQUEMA
+    (regla concreta del plan: "resuélvelo en el ESQUEMA, no con disciplina
+    del llamador"), esta excepción solo traduce el sqlite3.IntegrityError
+    crudo a algo que el panel (4c) puede mostrarle al usuario sin parsear
+    texto de error de SQLite.
+    """
+
+
+def normalize_trigger(text: str) -> str:
+    """Normaliza un disparador de snippet para unicidad Y para matching.
+
+    Decisión (unidad 4a, con nota para 4b): dos snippets con el mismo
+    disparador salvo mayúsculas o acentos son el MISMO snippet para el
+    usuario ("Firma Correo" y "firma correo" tienen que comportarse igual).
+    Se aplica:
+      1. Descomposición NFKD + eliminación de marcas combinantes (quita
+         acentos/diacríticos: "petición" y "peticion" quedan iguales).
+      2. `casefold()` (más robusto que `.lower()` para comparación
+         case-insensitive de Unicode general).
+      3. Colapso de espacios internos + recorte de extremos (dos espacios
+         entre palabras no crean un disparador "distinto").
+
+    El resultado se guarda en la columna `trigger_key` (índice único) y es
+    la clave con la que este módulo detecta duplicados. **El matcher de la
+    unidad 4b tiene que normalizar el texto dictado con esta MISMA función
+    antes de comparar contra los disparadores guardados** — si usa un
+    criterio distinto (p. ej. solo `.lower()`), la tabla aceptará
+    disparadores que el matcher nunca va a encontrar. Por eso vive aquí,
+    pública, en vez de duplicada o escondida como detalle interno del CRUD.
+    """
+    if not text:
+        return ""
+    decomposed = unicodedata.normalize("NFKD", text)
+    without_accents = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return " ".join(without_accents.casefold().split())
+
+
+def _clean_trigger(trigger: str) -> str:
+    """Recorta espacios y valida que el disparador no quede vacío.
+
+    Lanza ValueError si trigger es None, vacío o solo espacios en blanco.
+    Esto NO normaliza mayúsculas/acentos: lo que se guarda en la columna
+    `trigger` es literal, tal como lo escribió el usuario (la forma
+    normalizada vive aparte, en `trigger_key`, vía normalize_trigger()).
+    """
+    cleaned = (trigger or "").strip()
+    if not cleaned:
+        raise ValueError("El disparador no puede estar vacío")
+    return cleaned
+
+
+def _validate_body(body: str) -> str:
+    """Valida el contenido del snippet: no vacío, no supera _BODY_MAX_CHARS.
+
+    Deliberadamente NO se sanea el contenido de ninguna otra forma: no se
+    recortan saltos de línea, comillas, espacios internos ni acentos. El
+    body es texto libre que el usuario redactó y que termina pegado
+    LITERAL en otra aplicación (correo, chat, editor); cualquier
+    transformación aquí sería corromper lo que el usuario escribió a
+    propósito. Lo único que se rechaza es vacío (un snippet que expande a
+    nada no tiene sentido) y demasiado largo (ver _BODY_MAX_CHARS).
+    """
+    text = body if body is not None else ""
+    if not text.strip():
+        raise ValueError("El contenido del snippet no puede estar vacío")
+    if len(text) > _BODY_MAX_CHARS:
+        raise ValueError(
+            f"El contenido del snippet supera el máximo de {_BODY_MAX_CHARS} "
+            f"caracteres (tiene {len(text)})"
+        )
+    return text
 
 
 class TranscriptionDB:
@@ -146,6 +242,29 @@ class TranscriptionDB:
         created_at TEXT DEFAULT (datetime('now'))
     )"""
 
+    # DDL para snippets (Ola 4 de PLAN-DICTADO, unidad 4a): tabla + índice
+    # único sobre la forma normalizada del disparador (trigger_key, ver
+    # normalize_trigger() arriba). CREATE TABLE/INDEX ... IF NOT EXISTS ya
+    # son idempotentes por construcción: a diferencia de las columnas nuevas
+    # de _MIGRATIONS (que necesitan el manejo de "duplicate column" porque
+    # ALTER TABLE ADD COLUMN no admite IF NOT EXISTS), una tabla nueva no lo
+    # necesita. El nombre de columna `trigger` es palabra reservada de SQL
+    # (CREATE TRIGGER); se referencia SIEMPRE entre comillas dobles para no
+    # arriesgar ambigüedad del parser.
+    _SNIPPETS_DDL = [
+        """CREATE TABLE IF NOT EXISTS snippets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            "trigger" TEXT NOT NULL,
+            trigger_key TEXT NOT NULL,
+            body TEXT NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            hit_count INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now'))
+        )""",
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_snippets_trigger_key
+           ON snippets(trigger_key)""",
+    ]
+
     # DDL para reuniones (modo reunión: captura dual mic+loopback)
     _MEETINGS_DDL = """CREATE TABLE IF NOT EXISTS meetings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,6 +296,8 @@ class TranscriptionDB:
                     conn.execute(ddl)
                 conn.execute(self._URL_QUEUE_DDL)
                 conn.execute(self._MEETINGS_DDL)
+                for ddl in self._SNIPPETS_DDL:
+                    conn.execute(ddl)
                 conn.commit()
                 # Migraciones seguras: ignorar "duplicate column" si ya existen
                 for migration in self._MIGRATIONS:
@@ -240,6 +361,8 @@ class TranscriptionDB:
                     conn.execute(ddl)
                 conn.execute(self._URL_QUEUE_DDL)
                 conn.execute(self._MEETINGS_DDL)
+                for ddl in self._SNIPPETS_DDL:
+                    conn.execute(ddl)
                 conn.commit()
                 # Migraciones también aquí: la DB fresca recién creada por _DDL no
                 # tiene las columnas ALTER TABLE de _MIGRATIONS (bug preexistente,
@@ -515,6 +638,174 @@ class TranscriptionDB:
             cursor = conn.execute(
                 "UPDATE dictionary SET enabled = ? WHERE id = ?",
                 (1 if enabled else 0, entry_id),
+            )
+            return cursor.rowcount
+
+    # ------------------------------------------------------------------
+    # Snippets CRUD (Ola 4 de PLAN-DICTADO, unidad 4a)
+    #
+    # NO son entradas de diccionario: ver docs/PLAN-DICTADO-2026-07-31.md,
+    # sección "Ola 4" para las tres razones (alcance, propósito, presupuesto
+    # de vocabulario de Whisper). Un snippet SUSTITUYE una orden corta
+    # (disparador) por texto que el usuario redactó antes; solo puede correr
+    # en el flujo de dictado (CLAUDE.md, sección 19, eje 2 — nunca en
+    # reunión/URL, que contienen habla de terceros).
+    # ------------------------------------------------------------------
+
+    def list_snippets(self, enabled_only: bool = False) -> list:
+        """Retorna los snippets, ordenados por created_at DESC.
+
+        enabled_only=True filtra solo los habilitados (enabled=1): es lo
+        que el matcher de la unidad 4b usa para leer todos los snippets
+        ACTIVOS de un golpe y construir su caché en memoria, mismo patrón
+        de caché-con-swap-atómico que core/dictionary.py — el matcher NUNCA
+        debe hacer una consulta SQLite por dictado dentro del hot-path (ver
+        CLAUDE.md sección 19, eje 3). El panel de gestión (4c) usa el
+        default (todos, incluidos los apagados) para poder listarlos y
+        reactivarlos.
+        """
+        query = "SELECT * FROM snippets"
+        if enabled_only:
+            query += " WHERE enabled = 1"
+        query += " ORDER BY created_at DESC"
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(query).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_snippet(self, snippet_id: int) -> dict | None:
+        """Devuelve un snippet por id, o None si no existe."""
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM snippets WHERE id = ?", (snippet_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def snippet_trigger_exists(self, trigger: str, exclude_id: int = None) -> bool:
+        """True si ya existe un snippet cuyo disparador normalizado coincide.
+
+        Comparación vía trigger_key (case/acentos-insensitive, ver
+        normalize_trigger()). exclude_id excluye un id de la búsqueda, para
+        que el panel pueda validar una EDICIÓN sin chocar contra el propio
+        snippet que se está editando.
+        """
+        key = normalize_trigger(trigger or "")
+        if not key:
+            return False
+        with self._connect() as conn:
+            if exclude_id is not None:
+                row = conn.execute(
+                    "SELECT 1 FROM snippets WHERE trigger_key = ? AND id != ? LIMIT 1",
+                    (key, exclude_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT 1 FROM snippets WHERE trigger_key = ? LIMIT 1",
+                    (key,),
+                ).fetchone()
+            return row is not None
+
+    def add_snippet(self, trigger: str, body: str) -> int:
+        """Inserta un snippet nuevo. Devuelve el id insertado.
+
+        Lanza ValueError si el disparador o el contenido están vacíos (o
+        solo espacios), o si el contenido supera _BODY_MAX_CHARS. Lanza
+        DuplicateTriggerError si ya existe un snippet cuyo disparador
+        normalizado (mayúsculas/acentos ignorados) coincide con este — la
+        unicidad la exige el ÍNDICE ÚNICO sobre trigger_key, no disciplina
+        del llamador.
+        """
+        trigger = _clean_trigger(trigger)
+        body = _validate_body(body)
+        trigger_key = normalize_trigger(trigger)
+        with self._connect() as conn:
+            try:
+                cursor = conn.execute(
+                    'INSERT INTO snippets ("trigger", trigger_key, body) VALUES (?, ?, ?)',
+                    (trigger, trigger_key, body),
+                )
+                return cursor.lastrowid
+            except sqlite3.IntegrityError as exc:
+                raise DuplicateTriggerError(
+                    f"Ya existe un snippet con el disparador «{trigger}» "
+                    "(mayúsculas y acentos no cuentan como distintos)"
+                ) from exc
+
+    def update_snippet(self, snippet_id: int, trigger: str = None, body: str = None) -> int:
+        """Actualiza trigger y/o body de un snippet existente.
+
+        Solo toca los campos que se pasan (None = no tocar). Aplica las
+        mismas validaciones que add_snippet a los campos que sí se
+        actualizan, y el mismo DuplicateTriggerError si el nuevo trigger
+        normalizado choca con OTRO snippet. Devuelve filas actualizadas
+        (0 si el id no existe o no se pasó ningún campo).
+        """
+        fields = []
+        values = []
+        if trigger is not None:
+            trigger = _clean_trigger(trigger)
+            fields.append('"trigger" = ?')
+            values.append(trigger)
+            fields.append("trigger_key = ?")
+            values.append(normalize_trigger(trigger))
+        if body is not None:
+            body = _validate_body(body)
+            fields.append("body = ?")
+            values.append(body)
+        if not fields:
+            return 0
+        values.append(snippet_id)
+        with self._connect() as conn:
+            try:
+                cursor = conn.execute(
+                    f"UPDATE snippets SET {', '.join(fields)} WHERE id = ?",
+                    values,
+                )
+                return cursor.rowcount
+            except sqlite3.IntegrityError as exc:
+                raise DuplicateTriggerError(
+                    f"Ya existe un snippet con el disparador «{trigger}» "
+                    "(mayúsculas y acentos no cuentan como distintos)"
+                ) from exc
+
+    def delete_snippet(self, snippet_id: int) -> int:
+        """Elimina un snippet por id. Retorna filas eliminadas."""
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM snippets WHERE id = ?", (snippet_id,))
+            return cursor.rowcount
+
+    def set_snippet_enabled(self, snippet_id: int, enabled: bool) -> int:
+        """Activa o desactiva un snippet (apagarlo sin borrarlo). Retorna filas actualizadas."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE snippets SET enabled = ? WHERE id = ?",
+                (1 if enabled else 0, snippet_id),
+            )
+            return cursor.rowcount
+
+    def increment_snippet_hits(self, ids: list) -> int:
+        """Incrementa hit_count en 1 para cada id ÚNICO de la lista.
+
+        Pensado para que el matcher (4b) lo llame fire-and-forget desde un
+        hilo daemon en background, NUNCA en el hot-path síncrono del
+        dictado — mismo patrón que core/dictionary.py::apply_replacements
+        con increment_dictionary_hits. Un solo UPDATE ... WHERE id IN (...):
+        un id repetido dentro de la MISMA lista se incrementa solo UNA vez
+        por llamada (SQL no aplica el SET una vez por cada placeholder que
+        matchea la misma fila). Si un dictado expande el mismo snippet más
+        de una vez y hay que contar cada ocurrencia, el llamador agrupa por
+        id y llama una vez por ocurrencia (mismo patrón que el helper
+        `_inc_hits` con `Counter` en core/dictionary.py). Retorna filas
+        actualizadas.
+        """
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"UPDATE snippets SET hit_count = hit_count + 1 WHERE id IN ({placeholders})",
+                ids,
             )
             return cursor.rowcount
 
