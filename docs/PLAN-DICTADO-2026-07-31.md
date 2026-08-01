@@ -234,6 +234,19 @@ prompts de los presets.
 | **Snippets** | `main.py` (Ola 4) | **sí** | **no** | **no** | **no** |
 | Reformateo LLM | `main.py:909` | sí (opt-in) | no | no | no |
 
+**EJECUTADA el 2026-07-31.** `0a` en el commit `40ca392` (contrato de los tres ejes en `CLAUDE.md`,
+sección 19: es la fuente de verdad, esta sección del plan es el registro de por qué se escribió).
+`0b` en `tests/test_pipeline_texto.py`, 13 tests: 8 corren hoy y 5 se activan solos cuando aterricen
+las Olas 1 y 4. Suite 794 → 802 pass, cero regresiones. El guardián se probó MUTANDO
+`core/transcriber.py` a propósito: los dos tests de alcance (reunión y URL) fallaron y ningún otro,
+o sea que cazan el defecto E1 y no otra cosa.
+
+**Contrato de nombres que ya asumieron los tests de capa B** (para que `1a` y `4b` no elijan otro y
+haya que tocar el test): `core/smart_commands.py` expone `apply_smart_commands(text) -> str` y
+`core/snippets_matcher.py` expone `expand_snippets(text) -> str`, siguiendo el estilo de
+`dictionary.apply_replacements`. Si un ejecutor prefiere otro nombre, el test no da un falso verde:
+falla con un mensaje que dice qué línea ajustar.
+
 ---
 
 ## Ola 1: smart commands (voz → puntuación)
