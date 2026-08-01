@@ -231,7 +231,51 @@ un ojo; el estado computado sí se verificó.
   - **🙋 QUEDA UNA DECISIÓN DE JOHANN, sin bloquear nada:** ¿el default de `LOCAL_WHISPER_MODEL` pasa
     de `small` a `medium`, ahora que la GPU lo vuelve viable? Está escrita con su tradeoff en
     `docs/PENDIENTES.md` §3. El default sigue en `small` hasta que él decida.
+- **OLA 3 COMPLETA (2026-08-01), Transform sobre selección: 6 commits** `9bde38e` (`3z`, diseño) →
+  `ea0afb8` (`3a`) → `0cc26e1` (`3b`) → `bd22acc` (`3c`) → `6a07825` (`3d`) → `866af43` (`3d-fix`).
+  Suite 1042 → **1125 pass, 0 fail**. Dirigió y ejecutó `Opus.H` inline; verificaron 2
+  `verificador-qa` read-only con lentes ortogonales (`@sonnet-5` y `@haiku-4.5`).
+  - **La decisión de la ola es `3z` y es un NO: un Transform no crea fila en `transcriptions`**, ni
+    con `SAVE_HISTORY=true`. El texto seleccionado y el resultado viven en RAM y mueren con el panel.
+    Asimetría con el dictado: allá Vflow es el autor del texto; aquí el insumo puede ser el contrato
+    de un cliente o un campo de un gestor de contraseñas. Regla durable escrita para lo que venga
+    (incluida la Ola 5): Vflow persiste texto del que es autor ante Vflow o que el usuario pidió por
+    su identificador; lo que lee de la selección de otra app se procesa y se suelta. Consecuencia
+    declarada, no escondida: **el "Deshacer edición IA" de 6.2 NO cubre Transform**, y lo reemplazan
+    tres capas (Esc antes de aplicar, el Ctrl+Z nativo de la app destino, y "copiar el texto
+    original" en el panel).
+  - **Los dos controles que sostienen la ola:** la salida del LLM solo llega a la ventana por
+    `transform_accepted`, que emite el panel y lleva el texto (el worker no conoce `paste_text` y
+    `main.py` no se guarda copia); y el texto ajeno viaja entre delimitadores con **nonce aleatorio
+    por llamada**, con `GUARD_RULE` antepuesto aparte para que editar un prompt no pueda quitarlo.
+    Modo local fail-closed: con backend `endpoint` se niega a mandar nada si `INSIGHTS_FALLBACK`
+    sigue encendido, y sondea el servidor ANTES de enviar.
+  - **El panel es un MODO de `ui/hud_widget.py`**, no un widget nuevo (hallazgo E6 de la evaluación),
+    y hereda su corrección pagada de jamás togglear `WindowDoesNotAcceptFocus` en caliente.
+  - **Un solo atajo, AltGr+X, con selector numerado 1-8.** Ocho atajos eran ocho colisiones nuevas,
+    pero dejarlo solo en la bandeja (como resolvió la Ola 2 con su preset manual) habría contradicho
+    la META ORIGINAL del plan, que dice "sin tocar el mouse".
+  - **LO QUE ENCONTRÓ EL VERIFICADOR Y LOS TESTS DE LA UNIDAD NO:** Transform no tenía identificador
+    de solicitud (el dictado sí, `_generation`), así que un segundo AltGr+X con el primer modelo aún
+    respondiendo podía pintar un resultado viejo en el panel que ya atendía otra solicitud, y
+    sustituir el texto justo antes del Enter. Y `_saved_hwnd` es global compartida con el dictado, y
+    `paste_text` la consume, así que un dictado en medio mandaba el texto aceptado a la ventana
+    equivocada. Los tests de la unidad no podían verlo: probaban a fondo el ciclo de UNA sola
+    transformación. Cerrado en `866af43`.
+  - **Lección de método de esta ola:** al mutar el arreglo del hwnd la suite **siguió verde**. Los
+    tests probaban las dos PIEZAS (la generación guarda el hwnd, `paste_text` respeta uno explícito)
+    y ninguno afirmaba que el pegado las USARA. **Un test de las piezas no vigila que alguien las
+    conecte**, y eso solo se ve mutando. Se agregó el guardián que faltaba y se re-corrió la misma
+    mutación hasta verla caer.
+  - **Sin ojo humano encima todavía:** el panel de Transform (Qt) y la sección nueva de Ajustes se
+    verificaron con widget real y tests, no con captura. Mismo límite del entorno declarado en la
+    Ola 2/4.
   - **Next action:** ventana nueva con `Lee docs/PLAN-DICTADO-2026-07-31.md y ejecuta el Kickoff
+    Ola 5.` Modelo: `Opus.H` o `Fable.H`. Queda solo la **Ola 5** (Command Mode: voz + selección),
+    que reusa TODO lo de la Ola 3 y solo agrega transcribir la orden hablada. Ojo: la regla durable
+    de `3z` le aplica igual, y el identificador de solicitud de `866af43` también.
+  - (Referencia histórica, la Next action que abrió esta ola:) ventana nueva con `Lee
+    docs/PLAN-DICTADO-2026-07-31.md y ejecuta el Kickoff
     Ola 3.` Modelo: `Opus.H` o `Fable.H`. Quedan la **Ola 3** (Transform sobre selección, con G1-A:
     se previsualiza antes de aplicar, reusando `ui/hud_widget.py`) y la **Ola 5** (Command Mode, que
     no empieza sin la 3 cerrada y verificada). La Ola 3 arranca por su unidad `3z`, que es DISEÑO en
