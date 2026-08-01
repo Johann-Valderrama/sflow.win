@@ -239,6 +239,11 @@ ARMING_DELAY = 0.15         # segundos que Ctrl+Alt deben sostenerse SIN otra te
 # Database (writable user data)
 DB_PATH = os.path.join(_DATA_DIR, "transcriptions.db")
 
+# Prompts de Transform editados por el usuario (unidad 3b). Archivo, no tabla: son
+# 8 textos largos que se editan de vez en cuando, no un dato relacional, y así no
+# hace falta una migración. Ausente = los 8 prompts de fábrica de core/transform.py.
+TRANSFORM_PROMPTS_PATH = os.path.join(_DATA_DIR, "transform_prompts.json")
+
 # Exported for other modules
 APP_DATA_DIR = _DATA_DIR
 
@@ -640,6 +645,14 @@ ENV_CATALOG = {
     },
 
     # --- Auth local del dashboard (lazy) --------------------------------------
+    # --- Transform sobre selección (Ola 3 de PLAN-DICTADO, unidad 3b) ---------
+    "TRANSFORM_TIMEOUT_SECONDS": {
+        "default": "30", "kind": "lazy", "killswitch": False,
+        "doc": "Límite duro para la llamada al LLM de Transform. Más alto que los 8s del "
+               "reformateo de dictado porque Transform NO está en el hot-path del pegado: "
+               "su resultado pasa antes por el panel de previsualización (G1-A), así que la "
+               "espera es visible y no bloquea nada. Valor inválido o <=0 vuelve a 30.",
+    },
     "DASHBOARD_AUTH_ENABLED": {
         "default": "true", "kind": "lazy", "killswitch": True,
         "doc": "Exige el token local de sesión (core/localauth.py) en el dashboard y su API; "
