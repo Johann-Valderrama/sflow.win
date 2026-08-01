@@ -41,7 +41,7 @@ class HotkeyListener(QObject):
     highlight_pressed = pyqtSignal()  # AltGr+H: marcar momento destacado durante la reunión
     hud_toggle = pyqtSignal()      # AltGr+A: abrir/cerrar el HUD proactivo (unidad 5.3)
     lost_pressed = pyqtSignal()    # AltGr+M: "Me perdí" — resumen de los últimos 2 min (unidad 5.3)
-    transform_pressed = pyqtSignal()  # AltGr+X: Transform sobre la selección (unidad 3d)
+    transform_pressed = pyqtSignal()  # Ctrl+Shift+X: Transform sobre la selección (unidad 3d)
 
     def __init__(self):
         """Inicializa el estado de teclas, el timer de armado y la detección de triple-tap."""
@@ -56,7 +56,7 @@ class HotkeyListener(QObject):
         self._h_held = False  # supresión de auto-repeat para AltGr+H (no es un toggle idempotente)
         self._a_held = False  # supresión de auto-repeat para AltGr+A (mismo patrón que H)
         self._m_held = False  # supresión de auto-repeat para AltGr+M (mismo patrón que H)
-        self._x_held = False  # supresión de auto-repeat para AltGr+X (mismo patrón que H)
+        self._x_held = False  # supresión de auto-repeat para Ctrl+Shift+X (mismo patrón que H)
         self._r_held = False  # supresión de auto-repeat para AltGr+R (unidad 0.3, mismo patrón que H)
         self._t_held = False  # supresión de auto-repeat para AltGr+T (unidad 0.3, mismo patrón que H)
 
@@ -184,7 +184,7 @@ class HotkeyListener(QObject):
         is_a = hasattr(key, 'vk') and key.vk == _A_VK
         _M_VK = 0x4D
         is_m = hasattr(key, 'vk') and key.vk == _M_VK
-        # 'X' (0x58) para Transform sobre la selección (AltGr+X, unidad 3d), mismo
+        # 'X' (0x58) para Transform sobre la selección (Ctrl+Shift+X, unidad 3d), mismo
         # criterio de detección por vk que los anteriores.
         _X_VK = 0x58
         is_x = hasattr(key, 'vk') and key.vk == _X_VK
@@ -236,13 +236,31 @@ class HotkeyListener(QObject):
                 self.lost_pressed.emit()
             return
 
-        # --- Transform sobre la selección: AltGr + X (unidad 3d) ---
+        # --- Transform sobre la selección: Ctrl+Shift+X (unidad 3d, corregido en 3a-fix4) ---
         # UN solo atajo para los 8 prompts: abre el panel con la lista y se elige
         # con 1-8. Ocho atajos habrían sido ocho colisiones nuevas con IDEs y
-        # navegadores, y este repo ya pagó una vez por un atajo mal elegido; pero
-        # dejarlo solo en la bandeja habría contradicho la meta del plan ("sin
-        # tocar el mouse"). Mismo patrón anti-auto-repeat que H/A/M.
-        if is_x and self._alt_gr_held:
+        # navegadores; dejarlo solo en la bandeja habría contradicho la meta del
+        # plan ("sin tocar el mouse"). Mismo patrón anti-auto-repeat que H/A/M.
+        #
+        # **POR QUÉ NO ES AltGr+X, que es lo que nació y hubo que cambiar.** Lo
+        # destapó el E2E y está MEDIDO: AltGr+X INSERTA una "X" en la aplicación en
+        # foco, así que si el destino es editable (un textarea, Word, el editor de
+        # código) el propio atajo REEMPLAZA el texto seleccionado antes de que la
+        # captura alcance a copiarlo. El usuario pierde su texto y el síntoma se
+        # confunde con "no había selección". Ctrl+Alt+X falla igual, porque Windows
+        # lo trata como AltGr. Ctrl+Shift+X no inserta nada (medido contra las
+        # cuatro combinaciones), y por eso es el único de los atajos del repo que NO
+        # usa AltGr: los demás no actúan sobre una selección, así que insertar un
+        # carácter les es inofensivo.
+        #
+        # Suprimir la tecla NO es una opción con pynput: su listener de win32 POSTEA
+        # el evento a una cola y corre este handler DESPUÉS, fuera del callback del
+        # hook (`pynput/_util/win32.py`, `ListenerMixin._handler`), así que
+        # `suppress_event()` desde aquí llega tarde. Lo único disponible es
+        # `Listener(suppress=True)`, que se tragaría TODAS las teclas del sistema.
+        # La vía durable si algún día hace falta suprimir es `RegisterHotKey` de
+        # Win32, que se queda con la combinación; queda anotada, no construida.
+        if is_x and self._ctrl_held and self._shift_held and not self._alt_held and not self._alt_gr_held:
             if not self._x_held:
                 self._x_held = True
                 self.transform_pressed.emit()

@@ -67,7 +67,7 @@ def get_transform_prompts():
     return jsonify({
         "prompts": _transform.list_prompts(),
         "aviso": _aviso(),
-        "hotkey": "AltGr+X",
+        "hotkey": "Ctrl+Shift+X",
         "target_lang": os.getenv("TRANSLATE_TARGET_LANG", "en"),
     })
 

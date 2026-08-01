@@ -782,33 +782,64 @@ class TestNoHayCaminoAlternativo:
 # Unidad 3d: atajo y panel del dashboard
 # ---------------------------------------------------------------------------
 class TestAtajo:
-    def test_altgr_x_emite_transform_pressed(self):
-        from unittest.mock import MagicMock
+    """Ctrl+Shift+X, no AltGr+X. El cambio salió del E2E y está MEDIDO: AltGr+X
+    INSERTA una "X" en la app en foco, así que sobre un campo editable el propio
+    atajo reemplaza el texto seleccionado antes de poder copiarlo. Ctrl+Alt+X falla
+    igual (Windows lo trata como AltGr); Ctrl+Shift+X no inserta nada."""
 
+    def _listener(self):
         from core.hotkey import HotkeyListener
 
         hk = HotkeyListener()
-        recibido = []
-        hk.transform_pressed.connect(lambda: recibido.append(1))
-        hk._alt_gr_held = True
+        hk._ctrl_held = True
+        hk._shift_held = True
+        return hk
+
+    @staticmethod
+    def _tecla_x():
+        from unittest.mock import MagicMock
+
         tecla = MagicMock()
         tecla.vk = 0x58
-        hk._on_press(tecla)
+        return tecla
+
+    def test_ctrl_shift_x_emite_transform_pressed(self):
+        hk = self._listener()
+        recibido = []
+        hk.transform_pressed.connect(lambda: recibido.append(1))
+        hk._on_press(self._tecla_x())
         assert recibido == [1]
+
+    def test_altgr_x_ya_NO_dispara(self):
+        """El atajo viejo destruía la selección del usuario: no puede seguir vivo."""
+        from core.hotkey import HotkeyListener
+
+        hk = HotkeyListener()
+        hk._alt_gr_held = True
+        recibido = []
+        hk.transform_pressed.connect(lambda: recibido.append(1))
+        hk._on_press(self._tecla_x())
+        assert recibido == []
+
+    def test_ctrl_alt_x_tampoco_dispara(self):
+        """Windows trata Ctrl+Alt como AltGr, así que insertaría igual."""
+        from core.hotkey import HotkeyListener
+
+        hk = HotkeyListener()
+        hk._ctrl_held = True
+        hk._alt_held = True
+        recibido = []
+        hk.transform_pressed.connect(lambda: recibido.append(1))
+        hk._on_press(self._tecla_x())
+        assert recibido == []
 
     def test_el_auto_repeat_no_dispara_ocho_transforms(self):
         """Windows repite on_press mientras la tecla sigue abajo: sin la supresión,
         dejar X pulsada mandaría el texto al modelo decenas de veces."""
-        from unittest.mock import MagicMock
-
-        from core.hotkey import HotkeyListener
-
-        hk = HotkeyListener()
+        hk = self._listener()
         recibido = []
         hk.transform_pressed.connect(lambda: recibido.append(1))
-        hk._alt_gr_held = True
-        tecla = MagicMock()
-        tecla.vk = 0x58
+        tecla = self._tecla_x()
         for _ in range(30):
             hk._on_press(tecla)
         assert recibido == [1]
@@ -816,18 +847,13 @@ class TestAtajo:
         hk._on_press(tecla)
         assert recibido == [1, 1]
 
-    def test_sin_altgr_la_x_no_dispara_nada(self):
-        from unittest.mock import MagicMock
-
+    def test_la_x_sola_no_dispara_nada(self):
         from core.hotkey import HotkeyListener
 
         hk = HotkeyListener()
         recibido = []
         hk.transform_pressed.connect(lambda: recibido.append(1))
-        hk._alt_gr_held = False
-        tecla = MagicMock()
-        tecla.vk = 0x58
-        hk._on_press(tecla)
+        hk._on_press(self._tecla_x())
         assert recibido == []
 
 

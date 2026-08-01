@@ -1430,7 +1430,7 @@ class VflowApp(QObject):
 
     @pyqtSlot()
     def _on_transform_hotkey(self):
-        """AltGr+X: captura la selección y abre el panel para elegir qué hacer.
+        """Ctrl+Shift+X: captura la selección y abre el panel para elegir qué hacer.
 
         Un solo atajo para los 8 prompts (unidad 3d). La captura ocurre AQUÍ y no
         después de elegir: para cuando el usuario lea la lista, el foco ya estará
@@ -1446,7 +1446,7 @@ class VflowApp(QObject):
             # impediría capturar en medio de un dictado con Ctrl+Alt, pero eso deja
             # el invariante en UNA sola capa y en la que menos contexto tiene. Aquí
             # sí se sabe que hay una grabación viva.
-            logger.info("transform: hay un dictado en curso, se ignora AltGr+X")
+            logger.info("transform: hay un dictado en curso, se ignora el atajo")
             return
         self._start_capture_worker(None)
 
@@ -1558,7 +1558,7 @@ class VflowApp(QObject):
     def _notify_transform_capture_problem(self, status: str):
         mensajes = {
             "empty": "No hay texto seleccionado. Selecciona algo y vuelve a intentar.",
-            "modifiers": "Suelta AltGr y vuelve a intentar: con el atajo presionado no se puede copiar la selección.",
+            "modifiers": "Suelta las teclas del atajo y vuelve a intentar: con el atajo presionado no se puede copiar la selección.",
             "too_long": "La selección es demasiado grande para transformarla.",
             "failed": "No se pudo leer la selección de la aplicación en foco.",
         }
