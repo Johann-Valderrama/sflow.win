@@ -437,6 +437,7 @@ class HudWidget(QWidget):
     transform_accepted = pyqtSignal(str)
     transform_discarded = pyqtSignal()
     transform_copy_original_requested = pyqtSignal(str)
+    transform_prompt_chosen = pyqtSignal(str)   # clave del prompt elegido (unidad 3d)
 
     def __init__(self):
         super().__init__()
@@ -773,6 +774,7 @@ class HudWidget(QWidget):
 
         # Estado del modo, SOLO en memoria (unidad 3z: un Transform no se persiste).
         self._transform_mode = False
+        self._transform_picker = []       # opciones cuando el panel está eligiendo prompt
         self._transform_original = None   # texto seleccionado por el usuario
         self._transform_result = None     # salida del modelo pendiente de aceptar
 
@@ -878,6 +880,36 @@ class HudWidget(QWidget):
                         self._registro_section, self._bottom_section):
             section.setVisible(visible)
 
+    def enter_transform_picker(self, original: str, opciones: list):
+        """Paso previo al modo Transform: elegir cuál de los 8 prompts aplicar.
+
+        Existe para que UN solo atajo (AltGr+X) cubra los ocho sin tocar el mouse,
+        que es la meta declarada del plan. ``opciones`` es una lista de dicts
+        ``{key, label, cuando}`` que entrega main.py desde ``core.transform``: el
+        HUD no importa core/ (misma frontera que ``set_level_provider``).
+        """
+        self._transform_mode = True
+        self._transform_picker = [o for o in (opciones or [])][:9]
+        self._transform_original = original
+        self._transform_result = None
+        self._title_lbl.setText("Transform · elige qué hacer")
+        self.transform_prompt_label.setText("Pulsa el número · Esc cancela")
+        lineas = [
+            f"<b>{i + 1}</b> · {o['label']} <span style='color:rgba(255,255,255,0.45)'>{o['cuando']}</span>"
+            for i, o in enumerate(self._transform_picker)
+        ]
+        self.transform_text_label.setText("<br>".join(lineas))
+        self.transform_status_label.setVisible(False)
+        self.transform_apply_btn.setEnabled(False)
+        self.transform_discard_btn.setEnabled(True)
+        self.transform_copy_btn.setEnabled(False)
+        self._set_meeting_sections_visible(False)
+        self._transform_section.setVisible(True)
+        self._activate_for_transform()
+
+    def is_transform_picker(self) -> bool:
+        return bool(self._transform_picker)
+
     def enter_transform_mode(self, original: str, prompt_label: str):
         """Entra al modo previsualización y muestra el spinner (aún no hay resultado).
 
@@ -885,6 +917,7 @@ class HudWidget(QWidget):
         y se borra al salir del modo. No se escribe en ninguna parte.
         """
         self._transform_mode = True
+        self._transform_picker = []
         self._transform_original = original
         self._transform_result = None
         self._title_lbl.setText(f"Transform · {prompt_label}")
@@ -925,6 +958,7 @@ class HudWidget(QWidget):
     def exit_transform_mode(self):
         """Sale del modo y BORRA el texto original y el resultado de la memoria."""
         self._transform_mode = False
+        self._transform_picker = []
         self._transform_original = None
         self._transform_result = None
         self.transform_text_label.setText("")
@@ -985,12 +1019,23 @@ class HudWidget(QWidget):
         """
         if self._transform_mode:
             key = event.key()
-            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-                self._on_transform_apply()
-                event.accept()
-                return
             if key == Qt.Key.Key_Escape:
                 self._on_transform_discard()
+                event.accept()
+                return
+            if self._transform_picker:
+                # Elegir prompt con 1..N. Enter NO hace nada aquí a propósito: en
+                # este estado no hay un resultado que aplicar, y un Enter perdido
+                # no debe convertirse en una elección que el usuario no hizo.
+                indice = key - Qt.Key.Key_1
+                if 0 <= indice < len(self._transform_picker):
+                    elegido = self._transform_picker[indice]["key"]
+                    self._transform_picker = []
+                    self.transform_prompt_chosen.emit(elegido)
+                    event.accept()
+                    return
+            elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._on_transform_apply()
                 event.accept()
                 return
         super().keyPressEvent(event)

@@ -584,6 +584,57 @@ class TestPanelPrevisualizacion:
         assert hud._transform_section.isVisibleTo(hud) is False
         assert hud._registro_section.isVisibleTo(hud) is True
 
+    def test_el_selector_elige_prompt_con_el_numero(self, hud):
+        from PyQt6.QtCore import Qt as _Qt
+        from PyQt6.QtGui import QKeyEvent
+
+        elegido = []
+        hud.transform_prompt_chosen.connect(elegido.append)
+        hud.enter_transform_picker("original", [
+            {"key": "corregir", "label": "Corregir", "cuando": "arregla la ortografía"},
+            {"key": "resumir", "label": "Resumir", "cuando": "más corto"},
+        ])
+        hud.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, _Qt.Key.Key_2, _Qt.KeyboardModifier.NoModifier))
+        assert elegido == ["resumir"]
+
+    def test_un_numero_fuera_de_la_lista_no_elige_nada(self, hud):
+        from PyQt6.QtCore import Qt as _Qt
+        from PyQt6.QtGui import QKeyEvent
+
+        elegido = []
+        hud.transform_prompt_chosen.connect(elegido.append)
+        hud.enter_transform_picker("original", [
+            {"key": "corregir", "label": "Corregir", "cuando": "arregla la ortografía"},
+        ])
+        hud.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, _Qt.Key.Key_7, _Qt.KeyboardModifier.NoModifier))
+        assert elegido == []
+
+    def test_en_el_selector_enter_no_aplica_nada(self, hud):
+        """No hay resultado que aplicar todavía: un Enter perdido no puede
+        convertirse en una elección que el usuario no hizo."""
+        from PyQt6.QtCore import Qt as _Qt
+        from PyQt6.QtGui import QKeyEvent
+
+        eventos = []
+        hud.transform_prompt_chosen.connect(eventos.append)
+        hud.transform_accepted.connect(eventos.append)
+        hud.enter_transform_picker("original", [
+            {"key": "corregir", "label": "Corregir", "cuando": "arregla la ortografía"},
+        ])
+        hud.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, _Qt.Key.Key_Return, _Qt.KeyboardModifier.NoModifier))
+        assert eventos == []
+
+    def test_esc_cancela_el_selector_y_borra_el_original(self, hud):
+        from PyQt6.QtCore import Qt as _Qt
+        from PyQt6.QtGui import QKeyEvent
+
+        hud.enter_transform_picker("TEXTO ORIGINAL", [
+            {"key": "corregir", "label": "Corregir", "cuando": "arregla la ortografía"},
+        ])
+        hud.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, _Qt.Key.Key_Escape, _Qt.KeyboardModifier.NoModifier))
+        assert hud.is_transform_mode() is False
+        assert hud._transform_original is None
+
     def test_no_se_tocan_los_flags_de_ventana_en_caliente(self, hud):
         """Invariante pagada del HUD (cabecera de ui/hud_widget.py): jamás togglear
         WindowDoesNotAcceptFocus. El modo Transform activa la ventana, no la
@@ -626,9 +677,16 @@ class TestNoHayCaminoAlternativo:
         src = inspect.getsource(main.VflowApp.__init__)
         assert "self.hud.transform_accepted.connect(self._on_transform_accepted)" in src
 
-    def test_start_transform_abre_el_panel_antes_de_llamar_al_modelo(self):
-        src = self._src("start_transform")
+    def test_el_panel_se_abre_antes_de_llamar_al_modelo(self):
+        src = self._src("_start_transform")
         assert src.index("enter_transform_mode") < src.index("_transform_worker")
+
+    def test_ninguna_otra_entrada_lanza_el_worker_por_su_cuenta(self):
+        """Las dos puertas de entrada (atajo AltGr+X y bandeja) tienen que pasar por
+        _start_transform, que es el único que abre el panel antes de transformar."""
+        for entrada in ("_on_transform_hotkey", "start_transform", "_on_transform_prompt_chosen"):
+            src = self._src(entrada)
+            assert "_transform_worker" not in src, entrada
 
     def test_el_panel_solo_emite_aceptado_desde_el_boton_aplicar(self):
         """En ui/hud_widget.py, transform_accepted.emit aparece UNA sola vez y es
@@ -641,9 +699,153 @@ class TestNoHayCaminoAlternativo:
         assert "transform_accepted.emit" in apply_src
         assert "self._transform_result" in apply_src
 
+    def test_ninguna_ruta_de_transform_escribe_en_el_historial(self):
+        """Unidad 3z, decisión 1: un Transform NO crea fila en `transcriptions`, y eso
+        no puede depender de que nadie se acuerde. Ninguno de los métodos de la
+        feature toca la base de datos."""
+        for nombre in ("_on_transform_hotkey", "start_transform", "_start_transform",
+                       "_transform_worker", "_on_transform_ready",
+                       "_on_transform_accepted", "_on_transform_copy_original"):
+            src = self._src(nombre)
+            assert "self.db" not in src, nombre
+            assert "SAVE_HISTORY" not in src, nombre
+
+    def test_el_modulo_de_transform_no_conoce_la_base_de_datos(self):
+        """Sobre el CÓDIGO, no sobre los comentarios: el docstring del módulo habla de
+        `transcriptions` justamente para decir que NO escribe ahí, y un grep de texto
+        plano lo confundiría con lo contrario."""
+        import ast
+
+        import core.transform as _t
+
+        arbol = ast.parse(inspect.getsource(_t))
+        nombres = {
+            n.id for n in ast.walk(arbol) if isinstance(n, ast.Name)
+        } | {
+            n.attr for n in ast.walk(arbol) if isinstance(n, ast.Attribute)
+        }
+        importados = {
+            alias.name for n in ast.walk(arbol)
+            if isinstance(n, ast.Import) for alias in n.names
+        } | {
+            n.module or "" for n in ast.walk(arbol) if isinstance(n, ast.ImportFrom)
+        }
+        assert not any(m.startswith("db") for m in importados), importados
+        assert "transcriptions" not in nombres
+        assert "insert" not in nombres
+
     def test_el_resultado_solo_lo_guarda_el_panel(self):
         """main.py no se queda una copia del resultado en el objeto de la app: si
         la tuviera, aparecería un segundo dueño del texto y con él un segundo
         camino posible hacia el pegado."""
         src = self._src("_on_transform_ready")
         assert "self._transform" not in src
+
+
+# ---------------------------------------------------------------------------
+# Unidad 3d: atajo y panel del dashboard
+# ---------------------------------------------------------------------------
+class TestAtajo:
+    def test_altgr_x_emite_transform_pressed(self):
+        from unittest.mock import MagicMock
+
+        from core.hotkey import HotkeyListener
+
+        hk = HotkeyListener()
+        recibido = []
+        hk.transform_pressed.connect(lambda: recibido.append(1))
+        hk._alt_gr_held = True
+        tecla = MagicMock()
+        tecla.vk = 0x58
+        hk._on_press(tecla)
+        assert recibido == [1]
+
+    def test_el_auto_repeat_no_dispara_ocho_transforms(self):
+        """Windows repite on_press mientras la tecla sigue abajo: sin la supresión,
+        dejar X pulsada mandaría el texto al modelo decenas de veces."""
+        from unittest.mock import MagicMock
+
+        from core.hotkey import HotkeyListener
+
+        hk = HotkeyListener()
+        recibido = []
+        hk.transform_pressed.connect(lambda: recibido.append(1))
+        hk._alt_gr_held = True
+        tecla = MagicMock()
+        tecla.vk = 0x58
+        for _ in range(30):
+            hk._on_press(tecla)
+        assert recibido == [1]
+        hk._on_release(tecla)
+        hk._on_press(tecla)
+        assert recibido == [1, 1]
+
+    def test_sin_altgr_la_x_no_dispara_nada(self):
+        from unittest.mock import MagicMock
+
+        from core.hotkey import HotkeyListener
+
+        hk = HotkeyListener()
+        recibido = []
+        hk.transform_pressed.connect(lambda: recibido.append(1))
+        hk._alt_gr_held = False
+        tecla = MagicMock()
+        tecla.vk = 0x58
+        hk._on_press(tecla)
+        assert recibido == []
+
+
+class TestPanelWeb:
+    @pytest.fixture
+    def client(self, tprompts):
+        from web.server import create_app
+
+        app = create_app()
+        app.config["TESTING"] = True
+        return app.test_client()
+
+    def test_lista_los_ocho_prompts(self, client):
+        data = client.get("/api/transform/prompts").get_json()
+        assert len(data["prompts"]) == 8
+        assert all(p["cuando"] for p in data["prompts"])
+
+    def test_el_aviso_dice_que_el_texto_va_a_un_modelo(self, client):
+        aviso = client.get("/api/transform/prompts").get_json()["aviso"]
+        assert "modelo de lenguaje" in aviso["texto"]
+        assert aviso["backend"]
+
+    def test_con_backend_en_la_nube_el_aviso_lo_dice(self, client, monkeypatch):
+        import core.insights
+
+        monkeypatch.setattr(core.insights, "_resolve_backend", lambda task: "groq")
+        aviso = client.get("/api/transform/prompts").get_json()["aviso"]
+        assert aviso["en_la_nube"] is True
+        assert "nube" in aviso["detalle"]
+
+    def test_con_backend_local_y_respaldo_encendido_el_aviso_avisa_del_problema(self, client, monkeypatch):
+        """La trampa de la objeción A2, dicha en la interfaz y no solo en el código."""
+        import core.insights
+
+        monkeypatch.setattr(core.insights, "_resolve_backend", lambda task: "endpoint")
+        monkeypatch.setattr(core.insights, "_fallback_enabled", lambda: True)
+        aviso = client.get("/api/transform/prompts").get_json()["aviso"]
+        assert aviso["en_la_nube"] is False
+        assert aviso["problema"] and "respaldo" in aviso["problema"]
+
+    def test_con_backend_local_y_respaldo_apagado_no_hay_problema(self, client, monkeypatch):
+        import core.insights
+
+        monkeypatch.setattr(core.insights, "_resolve_backend", lambda task: "endpoint")
+        monkeypatch.setattr(core.insights, "_fallback_enabled", lambda: False)
+        aviso = client.get("/api/transform/prompts").get_json()["aviso"]
+        assert aviso["problema"] is None
+
+    def test_editar_y_restablecer_un_prompt(self, client):
+        res = client.put("/api/transform/prompts/resumir", json={"system": "mi prompt"})
+        assert res.status_code == 200
+        assert transform_mod.get_prompt("resumir") == "mi prompt"
+        client.put("/api/transform/prompts/resumir", json={"system": ""})
+        assert transform_mod.get_prompt("resumir") == transform_mod.PROMPTS["resumir"]["system"]
+
+    def test_prompt_desconocido_da_404(self, client):
+        assert client.put("/api/transform/prompts/inventado", json={"system": "x"}).status_code == 404

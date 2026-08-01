@@ -41,6 +41,7 @@ class HotkeyListener(QObject):
     highlight_pressed = pyqtSignal()  # AltGr+H: marcar momento destacado durante la reunión
     hud_toggle = pyqtSignal()      # AltGr+A: abrir/cerrar el HUD proactivo (unidad 5.3)
     lost_pressed = pyqtSignal()    # AltGr+M: "Me perdí" — resumen de los últimos 2 min (unidad 5.3)
+    transform_pressed = pyqtSignal()  # AltGr+X: Transform sobre la selección (unidad 3d)
 
     def __init__(self):
         """Inicializa el estado de teclas, el timer de armado y la detección de triple-tap."""
@@ -55,6 +56,7 @@ class HotkeyListener(QObject):
         self._h_held = False  # supresión de auto-repeat para AltGr+H (no es un toggle idempotente)
         self._a_held = False  # supresión de auto-repeat para AltGr+A (mismo patrón que H)
         self._m_held = False  # supresión de auto-repeat para AltGr+M (mismo patrón que H)
+        self._x_held = False  # supresión de auto-repeat para AltGr+X (mismo patrón que H)
         self._r_held = False  # supresión de auto-repeat para AltGr+R (unidad 0.3, mismo patrón que H)
         self._t_held = False  # supresión de auto-repeat para AltGr+T (unidad 0.3, mismo patrón que H)
 
@@ -96,6 +98,7 @@ class HotkeyListener(QObject):
         self._h_held = False
         self._a_held = False
         self._m_held = False
+        self._x_held = False
         self._r_held = False
         self._t_held = False
         self._shift_tap_count = 0
@@ -181,6 +184,10 @@ class HotkeyListener(QObject):
         is_a = hasattr(key, 'vk') and key.vk == _A_VK
         _M_VK = 0x4D
         is_m = hasattr(key, 'vk') and key.vk == _M_VK
+        # 'X' (0x58) para Transform sobre la selección (AltGr+X, unidad 3d), mismo
+        # criterio de detección por vk que los anteriores.
+        _X_VK = 0x58
+        is_x = hasattr(key, 'vk') and key.vk == _X_VK
 
         # --- Tap limpio de Shift: cualquier otra tecla invalida tap y secuencia ---
         # Va ANTES de los bloques con return (reunión, modo 4) para que el acorde
@@ -227,6 +234,18 @@ class HotkeyListener(QObject):
             if not self._m_held:
                 self._m_held = True
                 self.lost_pressed.emit()
+            return
+
+        # --- Transform sobre la selección: AltGr + X (unidad 3d) ---
+        # UN solo atajo para los 8 prompts: abre el panel con la lista y se elige
+        # con 1-8. Ocho atajos habrían sido ocho colisiones nuevas con IDEs y
+        # navegadores, y este repo ya pagó una vez por un atajo mal elegido; pero
+        # dejarlo solo en la bandeja habría contradicho la meta del plan ("sin
+        # tocar el mouse"). Mismo patrón anti-auto-repeat que H/A/M.
+        if is_x and self._alt_gr_held:
+            if not self._x_held:
+                self._x_held = True
+                self.transform_pressed.emit()
             return
 
         # NO es un toggle idempotente frente al auto-repeat de Windows: sin _t_held,
@@ -303,6 +322,9 @@ class HotkeyListener(QObject):
         _M_VK = 0x4D
         if hasattr(key, 'vk') and key.vk == _M_VK:
             self._m_held = False
+        _X_VK = 0x58
+        if hasattr(key, 'vk') and key.vk == _X_VK:
+            self._x_held = False
         _R_VK = 0x52
         if hasattr(key, 'vk') and key.vk == _R_VK:
             self._r_held = False

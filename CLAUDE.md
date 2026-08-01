@@ -790,6 +790,74 @@ referencia contra `large-v3-turbo`).
   `TestInferenceFallback` que dependen del reintento y ninguno más. Las tres mutaciones se
   revirtieron a mano (nunca `git checkout` sobre un archivo con trabajo sin commitear).
 
+### 23. Transform sobre selección: el resultado se previsualiza, y nada se guarda (Ola 3 de PLAN-DICTADO, 2026-08-01)
+
+Seleccionas texto en cualquier aplicación, pulsas **AltGr+X**, eliges uno de 8 prompts con su
+número, y el resultado del modelo **aparece en un panel**: se aplica con Enter y se descarta con
+Esc. Es la decisión G1-A del plan, y el panel no es cosmético: es el control de seguridad de la
+feature, porque el insumo es texto que Vflow no produjo.
+
+> **CAMBIO DE COMPORTAMIENTO menor:** AltGr+X pasa a estar tomado por Vflow. Se anuncia aquí en vez
+> de colarse, mismo criterio que `SMART_COMMANDS_ENABLED` (sección 20) y `LOCAL_DEVICE` (sección 22).
+
+**Lo que NO hace, y es la decisión más importante de la ola (unidad `3z`):** un Transform **no crea
+fila en `transcriptions`**, ni siquiera con `SAVE_HISTORY=true`. El texto seleccionado y el resultado
+viven en RAM mientras el panel está abierto y mueren con él. La razón es una asimetría con el dictado:
+allá `raw_text` guarda lo que el propio usuario dictó y Vflow transcribió; aquí el insumo puede ser el
+contrato de un cliente, el correo de otra persona o un campo de un gestor de contraseñas. **La regla
+durable, para cuando nazca otra feature parecida: Vflow persiste texto del que es autor ante Vflow (lo
+dictó) o que el usuario pidió traer por su identificador (una URL); texto que Vflow lee de la selección
+de otra aplicación se procesa y se suelta.** El diseño completo, con las cuatro razones medidas en el
+código y el punto de extensión por si algún día se quiere historial, está en la sección `3z` de
+`docs/PLAN-DICTADO-2026-07-31.md`.
+
+Consecuencia que hay que saber: **el "Deshacer edición IA" del historial (unidad 6.2) NO cubre
+Transform** y no se finge que sí. La reversión son tres capas, cada una donde el usuario la busca:
+Esc antes de aplicar, el Ctrl+Z nativo de la aplicación destino después de aplicar (el pegado
+reemplaza la selección), y un botón "copiar el texto original" en el panel para cuando la app destino
+no tenga un deshacer decente.
+
+- **Captura (`core/clipboard.capture_selection`)**: manda Ctrl+C y detecta el cambio por
+  `GetClipboardSequenceNumber`, no comparando textos. **Si no confirma que se copió algo nuevo,
+  ABORTA**: sin esa guarda, disparar el atajo sin nada seleccionado mandaría al modelo lo que hubiera
+  en el portapapeles desde antes, y eso no se ve. Restaura el portapapeles previo cuando era texto
+  (con una imagen copiada no se puede: se deja la selección, que es el mismo estado de un Ctrl+C
+  manual, antes que destruir la imagen). Tope duro de 200.000 caracteres.
+- **Prompt (`core/transform.py`)**: la instrucción va en el mensaje `system` y el texto en el `user`,
+  **nunca concatenados**, y el texto viaja entre delimitadores con un **nonce aleatorio por llamada**
+  (`<<<TEXTO_SELECCIONADO a1b2…>>>`) que el propio texto no puede falsificar. `GUARD_RULE` se antepone
+  siempre y aparte del prompt, así que **un usuario que reescriba un prompt en Ajustes no puede quitar
+  el blindaje**. Que el modelo obedezca esa regla no lo garantiza nada: por eso el control real sigue
+  siendo la previsualización. Aquí se baja la probabilidad, allá se quita la consecuencia.
+- **Modo local, requisito no negociable**: con backend batch `endpoint`, Transform **se niega a mandar
+  nada** mientras `INSIGHTS_FALLBACK` siga encendido, y **sondea el servidor local antes de enviar**.
+  Sin esas dos guardas, el día que el usuario olvide levantar LM Studio su texto se iría a Groq en
+  silencio creyendo él que estaba en local (objeción A2 del debate del plan). Fail-closed.
+- **Un texto demasiado largo se RECHAZA, no se trunca**, al revés que el acta de una reunión. Un acta
+  se lee; una transformación REEMPLAZA el texto del usuario, y truncar le devolvería una versión
+  incompleta de su propio documento con aspecto de estar bien.
+- **Panel (`ui/hud_widget.py`)**: es un **MODO del HUD**, no un widget nuevo (hallazgo E6). Hereda que
+  sea flotante sin robar foco y su corrección pagada de **jamás togglear `WindowDoesNotAcceptFocus` en
+  caliente**: el modo activa la ventana (patrón de `_activate_for_input`), no reconfigura sus flags.
+  `transform_accepted` **lleva el texto**, así que el panel es el único que tiene el resultado y no hay
+  forma de que `main.py` pegue algo que el usuario no aceptó. El gate `silent` del modo proactivo **no
+  aplica** a este panel: lo que muestra ya está en la pantalla del usuario, y se apaga en `silent` lo
+  que Vflow empuja por su cuenta, no lo que el usuario acaba de pedir con un atajo.
+- **Un solo atajo para los 8**: AltGr+X abre el panel con la lista numerada y se elige con 1-8. Ocho
+  atajos habrían sido ocho colisiones nuevas con IDEs y navegadores (historia ya pagada en este repo),
+  y dejarlo solo en la bandeja habría contradicho la meta del plan de no tocar el mouse. En el
+  selector, Enter no hace nada a propósito: no hay resultado que aplicar y un Enter perdido no debe
+  volverse una elección que el usuario no hizo.
+- **Panel de Ajustes** (`web/blueprints/transform.py` + sección "Transform sobre selección"): los 8
+  prompts con su línea de cuándo se usa, editables, y el aviso de que el texto seleccionado va a un
+  modelo de lenguaje **con el backend REALMENTE configurado**, calculado en el servidor para que no
+  pueda quedarse desactualizado (mismo patrón que la unidad 2c). Si el backend es local pero el
+  respaldo en la nube sigue encendido, el panel lo dice ahí mismo.
+- **Los 8 prompts**: `corregir`, `formal`, `casual`, `resumir`, `expandir`, `bullets`, `traducir`
+  (idioma de `TRANSLATE_TARGET_LANG`), `simplificar`. Mismo filtro de admisión que los presets de
+  dictado: cada uno tiene que poder decir en UNA línea cuándo se usa y no el de al lado. Los edita el
+  usuario en `transform_prompts.json` del data dir (JSON roto = los de fábrica, fail-open).
+
 ## Security & Privacy
 
 ### 1. API Key Encryption (DPAPI)
@@ -835,6 +903,7 @@ Edit `core/hotkey.py`:
 - **Mode 4 (AltGr+T toggle)**: Press AltGr+T once to start translation hands-free; press again to stop.
 - **AltGr+A (HUD proactivo, Ola 5)**: toggles the floating proactive HUD open/closed (same action as a right-click on the pill). Auto-repeat suppressed.
 - **AltGr+M ("me perdí", Ola 5)**: opens the HUD if closed and triggers an instant summary of the last ~2 minutes via `answer_live` (worker thread, non-blocking). Auto-repeat suppressed.
+- **AltGr+X (Transform sobre selección, Ola 3 de PLAN-DICTADO)**: captura el texto seleccionado en la app en foco y abre el panel para elegir uno de los 8 prompts con su número (1-8); el resultado se previsualiza y se aplica con Enter o se descarta con Esc. Auto-repeat suprimido. Ver la sección 23.
 - To customize intervals, edit `DOUBLE_TAP_INTERVAL` in `config.py`.
 - **Arming Delay** — Edit `ARMING_DELAY` in `config.py` (default: 0.15s). Modes 1 and 3 (hold keys) require the hotkey combination to be pressed for this duration *without other keys* before recording starts. This prevents accidental triggers when using IDE shortcuts like Ctrl+Alt+L. Set to 0 for immediate activation (at the cost of possible misfires).
 
@@ -895,6 +964,7 @@ Edit `config.py`:
 - `USER_NAME` / `USER_ROLE` / `USER_DOMAIN` (default `""`, unidad 5.2) — Identidad opcional del usuario, inyectada como 1 línea (con coletilla anti-atribución) en insights en vivo (solo si el modo proactivo NO es `silent`), acta y Asistente; "Yo" pasa a ser el nombre real en pendientes. Vacío = apagado. Nota: el nombre entra en actas persistidas (visibles por clientes MCP).
 - `AUTO_HIGHLIGHTS_ENABLED` (default `true`, unidad 5.1) — Candidatos automáticos a momento destacado como intención adicional del MISMO update_state (cero LLM extra, máx 2/ventana); se persisten en `highlights_json` con `source:"auto"` y JAMÁS entran al acta ni al gate anti-alucinación de `momentos_destacados` (solo los manuales AltGr+H alimentan el acta). Kill-switch en caliente.
 - `TRANSCRIPTION_FALLBACK` (default `false`, unidad 5.5) — Espejo de `GROQ_FALLBACK`: con backend primario groq, un fallo de RED en el DICTADO (nunca reunión/URL) cae al modelo local si ya está descargado (sin auto-descarga; aviso de tray si falta). Breaker con cooldown `TRANSCRIPTION_FALLBACK_COOLDOWN` (default `120`s): dentro del cooldown el dictado va directo a local; un éxito de Groq lo resetea. translate solo con target `en`.
+- `TRANSFORM_TIMEOUT_SECONDS` (default: `30`, Ola 3 unidad 3b): límite duro de la llamada al LLM de Transform. Más alto que los 8s del reformateo de dictado porque Transform NO está en el hot-path del pegado: su resultado pasa antes por el panel. Ver la sección 23.
 - `SMART_COMMANDS_ENABLED` (default: `true`, Ola 1 de PLAN-DICTADO): convierte disparadores dictados con prefijo (`"signo coma"`) en su signo. Ver la sección 20. Es el **único killswitch del proyecto que nace encendido**, y a propósito: la pasada es regex local, sin red ni disco ni LLM, así que no hay dato que se escape ni fallo silencioso posible. Por lo mismo falla ABIERTO: solo el literal `false` apaga, cualquier otro valor deja la pasada activa (al revés de `DASHBOARD_AUTH_ENABLED`, donde el lado seguro del fallo es cerrar).
 - `DICTATION_MODES_ENABLED` (default: `false`) - Activa el reformateo post-dictado por uno de los 5 presets (email/chat/codigo/lista/notas), elegido por app en foco o a mano desde la bandeja ("Próximo dictado"). Ver la sección 21; panel descubrible en Ajustes.
 - `DICTATION_MODE_MAP` - Mapa `exe:preset` (p. ej. `outlook.exe:email,slack.exe:chat,code.exe:codigo,notepad.exe:lista`) que asigna un preset de reformateo por `.exe` en foco; parseo tolerante a espacios/mayúsculas. Editable desde Ajustes, con la lista de apps afectadas visible antes de activar el flag de arriba.

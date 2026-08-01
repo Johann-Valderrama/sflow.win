@@ -741,6 +741,9 @@ class VflowApp(QObject):
         self.hotkey.meeting_toggle.connect(self._on_meeting_toggle, Qt.ConnectionType.QueuedConnection)
         self.hotkey.highlight_pressed.connect(self._on_highlight, Qt.ConnectionType.QueuedConnection)
         self.hotkey.hud_toggle.connect(self._on_hud_toggle, Qt.ConnectionType.QueuedConnection)
+        self.hotkey.transform_pressed.connect(
+            self._on_transform_hotkey, Qt.ConnectionType.QueuedConnection
+        )
         self.hotkey.lost_pressed.connect(self._on_lost_pressed, Qt.ConnectionType.QueuedConnection)
         self.meeting_stopped.connect(self._on_meeting_stopped, Qt.ConnectionType.QueuedConnection)
         self.transcription_done.connect(self._on_transcription_done, Qt.ConnectionType.QueuedConnection)
@@ -761,6 +764,7 @@ class VflowApp(QObject):
         # nada más: es el control de G1-A hecho cableado.
         self.hud.transform_accepted.connect(self._on_transform_accepted)
         self.hud.transform_copy_original_requested.connect(self._on_transform_copy_original)
+        self.hud.transform_prompt_chosen.connect(self._on_transform_prompt_chosen)
         self.transform_ready.connect(self._on_transform_ready, Qt.ConnectionType.QueuedConnection)
 
     def start(self):
@@ -1394,24 +1398,59 @@ class VflowApp(QObject):
     # objeto: lo tiene el panel hasta que el usuario decide.
     # ------------------------------------------------------------------
 
+    @pyqtSlot()
+    def _on_transform_hotkey(self):
+        """AltGr+X: captura la selección y abre el panel para elegir qué hacer.
+
+        Un solo atajo para los 8 prompts (unidad 3d). La captura ocurre AQUÍ y no
+        después de elegir: para cuando el usuario lea la lista, el foco ya estará
+        en el panel y la selección de su aplicación podría haberse perdido.
+        """
+        from core import transform as _transform  # noqa: PLC0415
+
+        text, status = capture_selection()
+        if status != "ok":
+            self._notify_transform_capture_problem(status)
+            return
+        self._ensure_hud_visible()
+        self.hud.enter_transform_picker(
+            text,
+            [{"key": p["key"], "label": p["label"], "cuando": p["cuando"]}
+             for p in _transform.list_prompts()],
+        )
+
+    @pyqtSlot(str)
+    def _on_transform_prompt_chosen(self, prompt_key: str):
+        """El usuario eligió un prompt en el panel: arranca la transformación con
+        el texto que el propio panel capturó (no se vuelve a leer la selección:
+        el foco ya no está en su aplicación)."""
+        original = self.hud._transform_original
+        if not original:
+            return
+        self._start_transform(original, prompt_key)
+
+    def _ensure_hud_visible(self):
+        if not self._hud_visible:
+            self.hud.ensure_initial_geometry()
+            self.hud.show()
+            self._hud_visible = True
+
     def start_transform(self, prompt_key: str):
-        """Dispara un Transform sobre lo que el usuario tenga seleccionado."""
+        """Transform desde la bandeja: captura la selección y aplica ese prompt."""
+        text, status = capture_selection()
+        if status != "ok":
+            self._notify_transform_capture_problem(status)
+            return
+        self._start_transform(text, prompt_key)
+
+    def _start_transform(self, text: str, prompt_key: str):
         from core import transform as _transform  # noqa: PLC0415 — perezoso
 
         meta = _transform.PROMPTS.get(prompt_key)
         if meta is None:
             logger.warning("transform: prompt desconocido '%s'", prompt_key)
             return
-
-        text, status = capture_selection()
-        if status != "ok":
-            self._notify_transform_capture_problem(status)
-            return
-
-        if not self._hud_visible:
-            self.hud.ensure_initial_geometry()
-            self.hud.show()
-            self._hud_visible = True
+        self._ensure_hud_visible()
         self.hud.enter_transform_mode(text, meta["label"])
         threading.Thread(
             target=self._transform_worker, args=(text, prompt_key), daemon=True

@@ -24,6 +24,7 @@ from web.blueprints import meetings as _bp_meetings
 from web.blueprints import pages as _bp_pages
 from web.blueprints import settings as _bp_settings
 from web.blueprints import snippets as _bp_snippets
+from web.blueprints import transform as _bp_transform
 from web.blueprints import transcriptions as _bp_transcriptions
 from web.blueprints import url_queue as _bp_url_queue
 from web.blueprints.url_queue import _process_next_url_item  # noqa: F401 — re-exportado (test)
@@ -65,6 +66,7 @@ def create_app() -> Flask:
     flask_app.register_blueprint(_bp_settings.bp)
     flask_app.register_blueprint(_bp_dictionary.bp)
     flask_app.register_blueprint(_bp_snippets.bp)
+    flask_app.register_blueprint(_bp_transform.bp)
     flask_app.register_blueprint(_bp_url_queue.bp)
     flask_app.register_blueprint(_bp_meeting.bp)
     flask_app.register_blueprint(_bp_meetings.bp)

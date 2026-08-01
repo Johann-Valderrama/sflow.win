@@ -393,7 +393,7 @@ de que el entorno del agente no compone frames, porque sigue siendo cierta para 
 | 3a | Capturar la selección de la app en foco por portapapeles Win32, restaurándolo después | Media | Sonnet.M | Reusa `core/clipboard.py`, que ya sabe guardar y restaurar foco y portapapeles | 3z | `core/clipboard.py`, `tests/test_transform.py` | `SCRIPT: pytest tests/test_transform.py` | REINTENTO |
 | 3b | `core/transform.py`: 8 prompts configurables, delimitadores explícitos instrucción-vs-datos, backend batch de `insights` | Media | el fuerte del régimen.H | Es el punto donde entra texto no confiable a un prompt: el diseño del delimitador es el control | 3a | `core/transform.py`, `config.py`, `tests/test_transform.py` | `SCRIPT: pytest tests/test_transform.py` | GATE G4 |
 | 3c | El panel de previsualización de G1-A, **agregándole un modo a `ui/hud_widget.py`, NO construyendo un widget nuevo** | Media | el fuerte del régimen.H | Es el control de seguridad de la ola; si queda mal, falla en silencio. La evaluación del 2026-07-31 midió que el HUD ya ES ese panel: flotante sin robar foco (`:436-439`), Enter (`:410`), Esc (`:416`), y hasta un método para mostrar respuesta de modelo (`:749`); el cableado ya existe (`main.py:556`, señales en `:641-642`). Reusarlo hereda su corrección pagada: jamás togglear `WindowDoesNotAcceptFocus` en caliente (`ui/hud_widget.py:23`) | 3b | `ui/hud_widget.py`, `main.py`, `tests/test_transform.py` | `JUICIO: ¿puede el resultado del LLM llegar a la ventana del usuario SIN pasar por el panel?` | GATE G4 |
-| 3d | Atajos + panel de configuración de los 8 prompts + `raw_text` conservado | Media | Sonnet.M | Mecánico sobre patrones que ya existen en el repo | 3c | `core/hotkey.py`, `main.py`, `web/`, `CLAUDE.md` | `SCRIPT: pytest` completo | REINTENTO |
+| 3d | Atajos + panel de configuración de los 8 prompts + ~~`raw_text` conservado~~ (SUPERADO por 3z: no hay fila que guardar) | Media | Sonnet.M | Mecánico sobre patrones que ya existen en el repo | 3c | `core/hotkey.py`, `main.py`, `web/`, `CLAUDE.md` | `SCRIPT: pytest` completo | REINTENTO |
 
 ### 3z EJECUTADA (2026-08-01): el crudo de un Transform NO se guarda
 
@@ -555,6 +555,21 @@ ajeno, buscable desde una caja de texto. Agregarlo después es aditivo y no inva
 | `3d` | Panel de Ajustes con la advertencia del modelo de lenguaje y el backend real; **cero** escritura en `transcriptions` |
 
 ---
+
+**EJECUTADA el 2026-08-01**, cuatro commits: `9bde38e` (`3z`), `ea0afb8` (`3a`), `0cc26e1` (`3b`),
+`bd22acc` (`3c`) y el de `3d`. Suite 1042 → 1118 pass, 0 fail. Tres cosas que salieron al ejecutar y
+que el plan no preveía:
+
+- **`3d` pedía "`raw_text` conservado" y eso quedó SUPERADO por la propia unidad `3z`**, que decidió
+  horas antes que un Transform no crea fila. No hay `raw_text` que conservar porque no hay fila. Se
+  tacha en la tabla en vez de borrarlo, para que no parezca que se olvidó.
+- **Un solo atajo (AltGr+X) con selector numerado, en vez de "atajos" en plural.** Ocho atajos eran
+  ocho colisiones nuevas, y la Ola 2 ya había declarado que no queda ninguna combinación claramente
+  libre; pero resolverlo como hizo la Ola 2 (solo bandeja, sin atajo) habría contradicho la META
+  ORIGINAL de este plan, que dice "sin tocar el mouse". El selector es lo que concilia las dos cosas,
+  y por eso `3c` creció con un estado más del que el plan preveía.
+- **La enmienda del portapapeles** (ver `3z`, decisión 3): "restaurar siempre" no se puede cumplir con
+  contenido no textual, y se resolvió a favor de no destruir la imagen del usuario.
 
 **Verificación de la ola:** aquí SÍ hay error silencioso, así que verificador independiente
 read-only con este lente exacto: *"¿existe algún camino por el que la salida del LLM llegue a la

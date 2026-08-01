@@ -829,6 +829,32 @@
                 </div>
             </div>
 
+            <!-- Sección: Transform sobre selección (Ola 3 de docs/PLAN-DICTADO-2026-07-31.md,
+                 unidad 3d). El aviso NO es decorativo: la unidad 3z lo puso como condición
+                 para que la ola cumpla su juicio ("no captura texto de otras apps sin
+                 decirlo"), y su texto se calcula en el servidor leyendo el backend REALMENTE
+                 configurado, para que no pueda quedarse desactualizado. -->
+            <div class="set-sec collapsed" id="sec-transform" style="--sec-accent:rgba(96,165,250,.6)">
+                <button type="button" class="set-sec-head" onclick="toggleSetSec('transform')" aria-expanded="false" aria-controls="sec-transform-body">
+                    <span class="set-sec-title"><svg class="set-sec-chev ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg><span class="set-dot" style="background:rgba(96,165,250,.85)"></span>Transform sobre selección</span>
+                    <span class="set-sec-toggle"><span class="set-sec-toggle-label">Mostrar</span></span>
+                </button>
+                <div id="sec-transform-body" class="set-sec-body space-y-3">
+                    <p class="text-xs text-white/55">Seleccionas texto en cualquier aplicación, pulsas <strong><span id="cfg-transform-hotkey">AltGr+X</span></strong>, eliges qué hacer con el número, y el resultado <strong>aparece primero en un panel</strong>: se aplica con Enter y se descarta con Esc. Nunca reemplaza tu texto sin que lo hayas visto.</p>
+
+                    <div id="cfg-transform-aviso" class="p-3 rounded-lg bg-amber-500/[0.06] border border-amber-500/20">
+                        <p class="text-xs text-amber-300/80" id="cfg-transform-aviso-texto"></p>
+                        <p class="text-xs mt-1 text-amber-300/80" id="cfg-transform-aviso-detalle"></p>
+                        <p class="text-xs mt-1 text-red-300/90 hidden" id="cfg-transform-aviso-problema"></p>
+                    </div>
+
+                    <div>
+                        <p class="text-xs text-white/55 mb-1.5">Los 8 prompts. Puedes reescribir cualquiera; el blindaje contra instrucciones escondidas en el texto seleccionado se añade siempre aparte y no se puede quitar editando esto.</p>
+                        <div id="cfg-transform-prompts" class="space-y-2"></div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Sección: Copiloto con contexto OPS (unidad 7.1) -->
             <div class="set-sec collapsed" id="sec-ops-briefing" style="--sec-accent:rgba(167,139,250,.6)">
                 <button type="button" class="set-sec-head" onclick="toggleSetSec('ops-briefing')" aria-expanded="false" aria-controls="sec-ops-briefing-body">
@@ -1806,6 +1832,9 @@
             document.getElementById('cfg-dictation-modes-enabled').checked = settings.dictation_modes_enabled === true;
             document.getElementById('cfg-dictation-mode-map').value = settings.dictation_mode_map || '';
             renderDictationAppsPreview();
+            // Transform sobre selección (Ola 3, unidad 3d): su propio endpoint, porque
+            // el aviso depende del backend resuelto y no de /api/settings.
+            loadTransformPanel();
             // Copiloto con contexto OPS — briefing v1 (unidad 7.1)
             document.getElementById('cfg-ops-briefing-path').value = settings.ops_briefing_path || '';
             // Identidad del usuario en prompts (unidad 5.2)
@@ -2020,6 +2049,63 @@
             const backend = backendSelect.value || 'groq';
             const label = _DICTATION_CLOUD_BACKEND_LABELS[backend] || backend;
             note.textContent = 'Hoy, con tu configuración actual, el texto dictado se manda a: ' + label + '.';
+        }
+
+        // --- Transform sobre selección (Ola 3, unidad 3d) ---
+        // El aviso NO se compone en el cliente: lo calcula el servidor leyendo el
+        // backend real (GET /api/transform/prompts), así que aquí solo se pinta. Con
+        // la lógica duplicada en JS, cualquier cambio de backend en core/ dejaría la
+        // advertencia mintiendo sin que nada fallara.
+        async function loadTransformPanel() {
+            const cont = document.getElementById('cfg-transform-prompts');
+            if (!cont) return;
+            try {
+                const res = await fetch('/api/transform/prompts');
+                const data = await res.json();
+                const aviso = data.aviso || {};
+                document.getElementById('cfg-transform-aviso-texto').textContent = aviso.texto || '';
+                document.getElementById('cfg-transform-aviso-detalle').textContent = aviso.detalle || '';
+                const problema = document.getElementById('cfg-transform-aviso-problema');
+                problema.textContent = aviso.problema || '';
+                problema.classList.toggle('hidden', !aviso.problema);
+                document.getElementById('cfg-transform-hotkey').textContent = data.hotkey || 'AltGr+X';
+                cont.innerHTML = (data.prompts || []).map((p, i) => `
+                    <div class="p-2.5 rounded-lg bg-white/[0.02] border border-white/[0.06]">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="text-xs font-semibold text-white/80">${i + 1} · ${escapeHtml(p.label)}</span>
+                            <span class="text-xs text-white/45">${escapeHtml(p.cuando)}</span>
+                            ${p.editado ? '<span class="text-xs text-blue-300/80">editado</span>' : ''}
+                        </div>
+                        <textarea id="cfg-transform-prompt-${p.key}" rows="3" spellcheck="false"
+                            class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 focus:outline-none focus:ring-2 focus:ring-blue-500/60 w-full">${escapeHtml(p.system)}</textarea>
+                        <div class="flex gap-2 mt-1.5">
+                            <button type="button" class="btn-secondary text-xs" onclick="saveTransformPrompt('${p.key}')">Guardar</button>
+                            ${p.editado ? `<button type="button" class="btn-ghost text-xs" onclick="resetTransformPrompt('${p.key}')">Volver al de fábrica</button>` : ''}
+                        </div>
+                    </div>`).join('');
+            } catch (e) {
+                cont.innerHTML = '<p class="text-xs text-red-300/80">No se pudieron cargar los prompts.</p>';
+            }
+        }
+
+        async function saveTransformPrompt(key) {
+            const ta = document.getElementById('cfg-transform-prompt-' + key);
+            if (!ta) return;
+            await fetch('/api/transform/prompts/' + key, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({system: ta.value}),
+            });
+            loadTransformPanel();
+        }
+
+        async function resetTransformPrompt(key) {
+            await fetch('/api/transform/prompts/' + key, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({system: ''}),
+            });
+            loadTransformPanel();
         }
 
         // Presets válidos para el preview del mapa; espejo de core.dictation_modes.PRESETS
