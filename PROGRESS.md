@@ -158,11 +158,27 @@
     B de la Ola 0: el contrato del pipeline de texto quedó completamente ejecutable.** Límite
     declarado: la captura de píxeles de `4c` falló en dos intentos (el panel del navegador no compone
     frames en este entorno); se midió por estado computado desde dos procesos independientes.
+  - **OLA 2 COMPLETA (2026-08-01, 3 commits, suite 970 → 1012 pass / 0 fail).** `2a` (`83ab2b9`):
+    presets `lista` y `notas`, más la regla de RESPETAR los saltos de línea explícitos metida en
+    `_COMMON_RULE` (cierra el choque Ola 1 vs Ola 2 que hizo nacer la Ola 0; el test que la vigila
+    recorre `PRESETS`, así que un sexto preset sin la regla falla solo). `2b` (`2b0fb2b`): elección
+    manual de UN SOLO USO que gana sobre el mapeo por `.exe`, con el preset activo visible en el
+    tooltip de la bandeja y aviso en el menú si el reformateo está apagado. Sin atajo de teclado:
+    ya hay seis y no apareció una combinación libre, se declara en vez de meter una que choque.
+    `2c` (`78afd05`): panel de Ajustes con los 5 presets explicados, aviso de que el texto va a un
+    LLM leyendo el backend REAL configurado, y la lista de apps que se auto-reformatearían visible
+    ANTES de activar. **`DICTATION_MODES_ENABLED` sigue en `false`.**
+  - **PROCEDENCIA de `2c`, anotada a propósito:** ese trabajo apareció sin commitear en el árbol
+    hacia las 01:36 del 2026-08-01 y NO lo produjo la ventana que lo commiteó a las 08:30. Se validó
+    antes de integrarlo (default intacto, 10 tests nuevos verdes, suite completa verde). Si otra
+    ventana lo estaba haciendo, su trabajo está commiteado y el árbol quedó limpio.
   - **Next action:** ventana nueva con `Lee docs/PLAN-DICTADO-2026-07-31.md y ejecuta el Kickoff
-    Ola 2.` (presets a la carta: el preset de lista, elegirlo a mano y hacerlo descubrible sin
-    cambiar el default). Modelo: `Opus.H` o `Fable.H`, indistinto. Alternativa igual de válida: la
-    **Ola 7** (medir GPU), independiente y la única del plan que se decide con un número. Quedan
-    esas dos, más la Ola 3 y la Ola 5, que son las de Transform y Command Mode.
+    Ola 7.` (medir si la GTX 1060 le gana a la CPU en el backend local; es la única ola del plan que
+    se decide con un NÚMERO y no con un juicio, y si 7a no muestra ganancia la ola se DESCARTA y se
+    anota el dato). Modelo: `Opus.H` o `Fable.H`. Quedan además la **Ola 3** (Transform sobre
+    selección, con G1-A: se previsualiza antes de aplicar, reusando `ui/hud_widget.py`) y la
+    **Ola 5** (Command Mode, que no empieza sin la 3 cerrada y verificada). La Ola 3 arranca por su
+    unidad `3z`, que es DISEÑO en documento y no código.
   - **Lección de método de esta tanda, aplicable a las olas que faltan:** un test que REPLICA la
     lógica que quiere vigilar no es un guardián. Antes de cerrar una unidad, romper el sistema a
     propósito y comprobar que el test cae. Pasó dos veces seguidas (`0b` lo hizo bien por

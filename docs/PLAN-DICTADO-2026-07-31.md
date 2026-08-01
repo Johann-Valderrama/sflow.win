@@ -360,9 +360,27 @@ documentación, la ola no cumplió su objetivo aunque el código funcione.
 > rompía el patrón que el propio proyecto ya sigue en todo lo que sale a la red
 > (`WEBHOOK_ENABLED`, `OPS_BRIEFING_PATH`, ambos apagados por defecto).
 
+**EJECUTADA el 2026-08-01**, tres commits: `83ab2b9` (`2a`), `2b0fb2b` (`2b`), `78afd05` (`2c`).
+Suite 970 → 1012 pass, 0 fail. `DICTATION_MODES_ENABLED` sigue en `false`, que era la condición
+central de la ola.
+
+- **`2a` cerró además un cabo del contrato de la Ola 0** que estaba escrito pero sin implementar: la
+  regla de RESPETAR los saltos de línea explícitos vive ahora en `_COMMON_RULE`, así que aplica a
+  los cinco presets, y el test que la vigila recorre `PRESETS` en vez de una lista escrita a mano.
+- **`2b` sin atajo de teclado**, declarado en vez de forzado: ya hay seis atajos y no apareció una
+  combinación claramente libre; meter una que choque con un IDE es historia ya pagada en este repo.
+- **`2c` fue más allá de lo pedido en dos puntos que valen:** el aviso lee el backend REALMENTE
+  configurado (si el usuario tiene LM Studio, le dice que el texto no sale del equipo, en vez de
+  afirmar "nube" por defecto), y muestra QUÉ APPS se auto-reformatearían **antes** de que active
+  nada, que es la objeción A1 del debate convertida en algo que el usuario ve en vez de leer.
+
 **Verificación de la ola:** `JUICIO`, un solo lente, modelo barato: *"¿la opción es DESCUBRIBLE
 sin leer la documentación, y queda claro que manda texto a un modelo?"*. Esta ola existe
-justamente porque el motor ya estaba y nadie lo veía.
+justamente porque el motor ya estaba y nadie lo veía. **Resultado: cumple**, con los cuatro tests de
+`tests/test_dictation_modes_ui.py` como forma ejecutable de ese juicio (presets explicados y no solo
+nombrados, aviso del modelo de lenguaje, apps auto-reformateadas visibles antes de activar, default
+sigue apagado). **Límite, el mismo de `4c`:** no se verificó con captura de píxeles, porque el panel
+del navegador de este entorno no compone frames.
 
 ---
 
