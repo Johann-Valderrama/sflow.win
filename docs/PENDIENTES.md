@@ -36,6 +36,9 @@ El esquema ya está preparado (`source`, `hit_count` en la tabla `dictionary`):
 - **Modelo `medium`** local: ya soportado por el selector del dashboard; solo descargar si `small` falla con vocabulario difícil (probar antes el diccionario, que suele bastar).
 - **Regenerar `requirements.lock`** al añadir cualquier dependencia: `pip-compile --generate-hashes --allow-unsafe --output-file requirements.lock requirements.in` (política: paquetes con >30 días en PyPI).
 
+- **Requisito de CUDA 12.x** (no 13.x): el backend local corre en CUDA si la máquina lo tiene, pero ctranslate2 necesita DLL de cuBLAS del Toolkit 12.x (`cublas64_12.dll`). Una máquina con CUDA 13.x instalado sin 12.x falla a la carga con error de DLL no encontrado (ver CLAUDE.md sección 22). El blindaje `_ensure_cuda_on_path()` lo maneja, pero el gotcha es de arquitectura: Toolkit 12 y 13 NO son intercambiables para esta biblioteca.
+- **Modelo `medium` es viable en CUDA, no en CPU** (medición 7a, 2026-08-01): CPU int8 corre `medium` más lento que tiempo real en clips cortos (x0.7-x1.1), inutilizable para dictado. CUDA int8 corre a x4.5-x7.6 tiempo real, igual de usable que `small` en CPU. Ya está descargado en `models/` (ver benchmark: `docs/benchmarks/local-backend-gpu-2026-08-01.md`). Sin penalización de fidelidad medible (control de auto-consistencia: CPU y CUDA ambos deterministas consigo mismos, divergencia <2% entre dispositivos debida a precisión numérica, no a calidad del modelo).
+
 ### 3.1 Lo que tiene el upstream y aquí no (auditoría de `daniel-carreon/sflow`, 2026-07-31)
 
 > Salidas de comparar este fork contra su upstream, medido sobre el código de los dos. Ninguna
