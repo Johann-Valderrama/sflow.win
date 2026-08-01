@@ -58,6 +58,7 @@ from core.hotkey import HotkeyListener
 from core.meeting import MEETING
 from core.clipboard import (
     paste_text, copy_text, save_frontmost_app, get_saved_exe, capture_selection,
+    get_saved_hwnd,
 )
 from core import dictation_modes
 from core import smart_commands
@@ -683,6 +684,10 @@ class VflowApp(QObject):
         self._monologue_watch = MonologueWatch()
         self._hud_visible = False
         self._hud_has_unseen_card = False  # controla el badge de la pill
+        # Transform (unidad 3d-fix): generación de la solicitud vigente y ventana
+        # destino de ESA solicitud. Ver _new_transform_generation.
+        self._transform_gen = 0
+        self._transform_hwnd = None
 
         # Contador de generación y guard anti-duplicado
         self._generation = 0
@@ -1164,17 +1169,24 @@ class VflowApp(QObject):
         # La pill permanece en STATE_PROCESSING hasta que paste_finished confirme el resultado
         threading.Thread(target=self._paste_worker, args=(text,), daemon=True).start()
 
-    def _paste_worker(self, text: str):
+    def _paste_worker(self, text: str, hwnd=None):
         """Ejecuta paste_text en un hilo background (es bloqueante ~0.5-2s).
 
         En modo "system" (audio del sistema) no se simula Ctrl+V: el usuario suele
         estar mirando el video, no escribiendo. El texto queda en el portapapeles
         y en el historial, con notificación.
+
+        ``hwnd`` (unidad 3d-fix) fija la ventana destino en vez de tomar la global
+        compartida; solo lo usa Transform, cuyo pegado puede ocurrir minutos después
+        de la captura. El dictado sigue pasando ``None`` y se comporta igual que
+        siempre. Un Transform NO se desvía por ``AUDIO_SOURCE=system``: ese gate es
+        del dictado (no hay a dónde pegar mientras suena un video), y aquí el
+        usuario acaba de seleccionar texto en una ventana concreta.
         """
-        if self.recorder.source == "system":
+        if hwnd is None and self.recorder.source == "system":
             status = "copied_system" if copy_text(text) else "failed"
         else:
-            status = paste_text(text)
+            status = paste_text(text, hwnd=hwnd)
         self.paste_finished.emit(status)
 
     @pyqtSlot(str)
@@ -1412,6 +1424,7 @@ class VflowApp(QObject):
         if status != "ok":
             self._notify_transform_capture_problem(status)
             return
+        self._new_transform_generation()
         self._ensure_hud_visible()
         self.hud.enter_transform_picker(
             text,
@@ -1435,12 +1448,30 @@ class VflowApp(QObject):
             self.hud.show()
             self._hud_visible = True
 
+    def _new_transform_generation(self):
+        """Abre una solicitud de Transform nueva e invalida las que estén en vuelo.
+
+        Mismo patrón que ``self._generation`` del dictado, y por el mismo motivo
+        (lo encontró un verificador independiente, no los tests de la unidad):
+        sin esto, un segundo AltGr+X mientras el primer modelo aún responde deja
+        DOS hilos vivos, y el que llegue primero pinta su resultado en un panel que
+        ya está atendiendo otra solicitud. En el peor caso el texto se sustituye
+        justo antes de que el usuario pulse Enter, y entonces se aplica algo que
+        nunca leyó — que es exactamente lo que la previsualización existe para
+        impedir. También guarda la ventana destino de ESTA solicitud (ver
+        ``clipboard.get_saved_hwnd``).
+        """
+        self._transform_gen += 1
+        self._transform_hwnd = get_saved_hwnd()
+        return self._transform_gen
+
     def start_transform(self, prompt_key: str):
         """Transform desde la bandeja: captura la selección y aplica ese prompt."""
         text, status = capture_selection()
         if status != "ok":
             self._notify_transform_capture_problem(status)
             return
+        self._new_transform_generation()
         self._start_transform(text, prompt_key)
 
     def _start_transform(self, text: str, prompt_key: str):
@@ -1453,7 +1484,9 @@ class VflowApp(QObject):
         self._ensure_hud_visible()
         self.hud.enter_transform_mode(text, meta["label"])
         threading.Thread(
-            target=self._transform_worker, args=(text, prompt_key), daemon=True
+            target=self._transform_worker,
+            args=(text, prompt_key, self._transform_gen),
+            daemon=True,
         ).start()
 
     def _notify_transform_capture_problem(self, status: str):
@@ -1470,9 +1503,11 @@ class VflowApp(QObject):
                 3500,
             )
 
-    def _transform_worker(self, text: str, prompt_key: str):
+    def _transform_worker(self, text: str, prompt_key: str, gen: int):
         """Hilo daemon: la llamada al modelo es bloqueante (hasta
-        TRANSFORM_TIMEOUT_SECONDS). El resultado vuelve al hilo Qt por señal."""
+        TRANSFORM_TIMEOUT_SECONDS). El resultado vuelve al hilo Qt por señal, con
+        la generación de su solicitud pegada para que un resultado viejo se pueda
+        descartar en vez de pintarse encima de otra transformación."""
         from core import transform as _transform  # noqa: PLC0415
 
         try:
@@ -1480,11 +1515,15 @@ class VflowApp(QObject):
         except Exception as exc:  # noqa: BLE001 — transform_text no debería lanzar
             logger.error("transform: fallo inesperado: %s", exc)
             res = {"ok": False, "error": str(exc), "error_kind": "backend"}
+        res["gen"] = gen
         self.transform_ready.emit(res)
 
     @pyqtSlot(dict)
     def _on_transform_ready(self, res: dict):
         """Único destino del resultado del modelo: el panel. No pega nada."""
+        if res.get("gen") != self._transform_gen:
+            logger.info("transform: resultado de una solicitud vieja, descartado")
+            return
         if res.get("ok"):
             self.hud.show_transform_result(res.get("text") or "")
         else:
@@ -1492,8 +1531,15 @@ class VflowApp(QObject):
 
     @pyqtSlot(str)
     def _on_transform_accepted(self, text: str):
-        """El usuario aceptó lo que vio: recién ahora el texto toca su ventana."""
-        threading.Thread(target=self._paste_worker, args=(text,), daemon=True).start()
+        """El usuario aceptó lo que vio: recién ahora el texto toca su ventana.
+
+        Se pega en la ventana que estaba en foco cuando se hizo la SELECCIÓN, no en
+        la que quedó en la global compartida: entre la captura y el Enter puede
+        haber pasado un dictado, que se lleva esa global por delante.
+        """
+        threading.Thread(
+            target=self._paste_worker, args=(text, self._transform_hwnd), daemon=True
+        ).start()
 
     @pyqtSlot(str)
     def _on_transform_copy_original(self, original: str):

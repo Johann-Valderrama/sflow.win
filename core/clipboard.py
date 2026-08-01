@@ -118,6 +118,20 @@ def save_frontmost_app():
     _saved_exe = _get_foreground_exe_name(_saved_hwnd) if _saved_hwnd else None
 
 
+def get_saved_hwnd():
+    """Devuelve el HWND guardado en el último ``save_frontmost_app()``, SIN consumirlo.
+
+    Existe para Transform (unidad 3d-fix): ``_saved_hwnd`` es una global de módulo
+    que comparten el dictado y Transform, y ``paste_text`` la CONSUME. Con un
+    Transform esperando la aprobación del usuario, un dictado normal en medio la
+    sobrescribe o la deja en None, y el texto ya aceptado terminaba pegándose en
+    la ventana equivocada o quedándose solo en el portapapeles. Quien necesite
+    recordar SU ventana destino se la guarda con esto y se la pasa luego a
+    ``paste_text(hwnd=...)``.
+    """
+    return _saved_hwnd
+
+
 def get_saved_exe() -> "str | None":
     """Devuelve el basename del .exe capturado en el último ``save_frontmost_app()``.
 
@@ -320,8 +334,16 @@ def copy_text(text: str) -> bool:
         return False
 
 
-def paste_text(text: str) -> str:
+def paste_text(text: str, hwnd=None) -> str:
     """Copy text to clipboard and paste into the previously active window.
+
+    Args:
+        hwnd: ventana destino EXPLÍCITA (unidad 3d-fix). Con ``None`` se usa y se
+            CONSUME la global ``_saved_hwnd``, que es el comportamiento de siempre
+            del dictado. Quien pase un hwnd propio no toca esa global: así un
+            Transform que estuvo esperando aprobación se pega en la ventana donde
+            se hizo la selección, aunque en medio haya habido un dictado, y sin
+            robarle a ese dictado su propia ventana destino.
 
     Returns:
         "pasted"         — texto copiado al clipboard y Ctrl+V simulado con éxito.
@@ -347,8 +369,9 @@ def paste_text(text: str) -> str:
         return "failed"
 
     # 3. Verificar ventana destino
-    hwnd = _saved_hwnd
-    _saved_hwnd = None
+    if hwnd is None:
+        hwnd = _saved_hwnd
+        _saved_hwnd = None
 
     if not hwnd or not _user32.IsWindow(hwnd):
         logger.warning("No valid target window to paste into (hwnd=%s).", hwnd)

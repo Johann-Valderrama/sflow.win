@@ -735,11 +735,25 @@ class TestNoHayCaminoAlternativo:
         assert "insert" not in nombres
 
     def test_el_resultado_solo_lo_guarda_el_panel(self):
-        """main.py no se queda una copia del resultado en el objeto de la app: si
-        la tuviera, aparecería un segundo dueño del texto y con él un segundo
-        camino posible hacia el pegado."""
-        src = self._src("_on_transform_ready")
-        assert "self._transform" not in src
+        """main.py no se queda una copia del RESULTADO en el objeto de la app: si la
+        tuviera, aparecería un segundo dueño del texto y con él un segundo camino
+        posible hacia el pegado.
+
+        Se comprueba que no haya NINGUNA asignación a un atributo de self dentro del
+        slot, en vez de buscar un prefijo de nombre: el slot sí LEE `_transform_gen`
+        (el identificador de solicitud del arreglo posterior), y un test escrito
+        sobre el nombre confundía leer con guardar.
+        """
+        import ast
+
+        arbol = ast.parse(inspect.cleandoc(self._src("_on_transform_ready")))
+        asignaciones = [
+            t.attr
+            for n in ast.walk(arbol) if isinstance(n, (ast.Assign, ast.AugAssign))
+            for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
+            if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and t.value.id == "self"
+        ]
+        assert asignaciones == []
 
 
 # ---------------------------------------------------------------------------
@@ -793,6 +807,136 @@ class TestAtajo:
         tecla.vk = 0x58
         hk._on_press(tecla)
         assert recibido == []
+
+
+class TestReentrada:
+    """Los dos defectos que encontró el VERIFICADOR independiente, no los tests de
+    la unidad (que probaban exhaustivamente el ciclo de UNA sola transformación y
+    por eso no podían verlos). Comparten raíz: Transform no tenía identificador de
+    solicitud, cosa que el dictado sí tiene desde siempre."""
+
+    class _AppFalsa:
+        """Reproduce el estado y los métodos de VflowApp que intervienen, sin
+        QApplication ni hotkeys reales (mismo patrón que test_chunk_assembly.py)."""
+
+        def __init__(self):
+            import main
+
+            self._transform_gen = 0
+            self._transform_hwnd = None
+            self.pintado = []
+            self.errores = []
+            self.pegado = []
+            self._on_transform_ready = main.VflowApp._on_transform_ready.__get__(self)
+            self._new_transform_generation = main.VflowApp._new_transform_generation.__get__(self)
+            app = self
+
+            class _Hud:
+                def show_transform_result(self, text):
+                    app.pintado.append(text)
+
+                def show_transform_error(self, msg):
+                    app.errores.append(msg)
+
+            self.hud = _Hud()
+
+    def _app(self, monkeypatch):
+        import core.clipboard
+
+        monkeypatch.setattr(core.clipboard, "_saved_hwnd", 1111)
+        return self._AppFalsa()
+
+    def test_un_resultado_de_una_solicitud_vieja_no_se_pinta(self, monkeypatch):
+        app = self._app(monkeypatch)
+        gen1 = app._new_transform_generation()
+        app._new_transform_generation()          # el usuario disparó AltGr+X otra vez
+        app._on_transform_ready({"ok": True, "text": "RESULTADO VIEJO", "gen": gen1})
+        assert app.pintado == [], (
+            "un resultado en vuelo de la solicitud anterior no puede aparecer en el "
+            "panel que ya está atendiendo otra"
+        )
+
+    def test_el_resultado_de_la_solicitud_vigente_si_se_pinta(self, monkeypatch):
+        app = self._app(monkeypatch)
+        app._new_transform_generation()
+        gen2 = app._new_transform_generation()
+        app._on_transform_ready({"ok": True, "text": "RESULTADO NUEVO", "gen": gen2})
+        assert app.pintado == ["RESULTADO NUEVO"]
+
+    def test_un_error_de_una_solicitud_vieja_tampoco_se_pinta(self, monkeypatch):
+        app = self._app(monkeypatch)
+        gen1 = app._new_transform_generation()
+        app._new_transform_generation()
+        app._on_transform_ready({"ok": False, "error": "fallo viejo", "gen": gen1})
+        assert app.errores == []
+
+    def test_al_aceptar_se_pega_en_la_ventana_de_ESA_solicitud(self, monkeypatch):
+        """El guardián que de verdad importa del arreglo de la ventana.
+
+        Se escribe así por una razón medida: la primera versión de estos tests
+        comprobaba que `_new_transform_generation` guardaba el hwnd y que
+        `paste_text` respetaba uno explícito, o sea las dos PIEZAS, y con eso la
+        mutación de volver a la ventana global compartida no tumbó ni un test. Un
+        test de las piezas no vigila que alguien las use.
+        """
+        import main
+
+        app = self._AppFalsa()
+        app._transform_hwnd = 4242
+        recibido = {}
+
+        def _paste_worker(text, hwnd=None):
+            recibido["text"] = text
+            recibido["hwnd"] = hwnd
+
+        app._paste_worker = _paste_worker
+
+        class _HiloInline:
+            def __init__(self, target=None, args=(), daemon=False):
+                self._target, self._args = target, args
+
+            def start(self):
+                self._target(*self._args)
+
+        monkeypatch.setattr(main.threading, "Thread", _HiloInline)
+        main.VflowApp._on_transform_accepted.__get__(app)("RESULTADO")
+        assert recibido == {"text": "RESULTADO", "hwnd": 4242}
+
+    def test_cada_solicitud_guarda_su_propia_ventana_destino(self, monkeypatch):
+        """El bug de la ventana: `_saved_hwnd` es global y la comparten dictado y
+        Transform, y `paste_text` la consume. Cada solicitud se queda con la suya."""
+        import core.clipboard
+
+        app = self._AppFalsa()
+        monkeypatch.setattr(core.clipboard, "_saved_hwnd", 4242)
+        app._new_transform_generation()
+        assert app._transform_hwnd == 4242
+        # Un dictado en medio se lleva la global por delante...
+        monkeypatch.setattr(core.clipboard, "_saved_hwnd", None)
+        # ...y el Transform pendiente conserva la suya.
+        assert app._transform_hwnd == 4242
+
+
+class TestPasteTextConVentanaExplicita:
+    def test_con_hwnd_explicito_no_consume_la_global(self, monkeypatch):
+        """Si Transform consumiera la global, le robaría su ventana destino a un
+        dictado que estuviera en curso."""
+        from core import clipboard as cb
+
+        monkeypatch.setattr(cb, "_saved_hwnd", 999)
+        monkeypatch.setattr(cb, "_set_clipboard_text", lambda t: None)
+        monkeypatch.setattr(cb._user32, "IsWindow", lambda h: False)
+        cb.paste_text("texto", hwnd=1234)
+        assert cb._saved_hwnd == 999
+
+    def test_sin_hwnd_se_comporta_como_siempre(self, monkeypatch):
+        from core import clipboard as cb
+
+        monkeypatch.setattr(cb, "_saved_hwnd", 999)
+        monkeypatch.setattr(cb, "_set_clipboard_text", lambda t: None)
+        monkeypatch.setattr(cb._user32, "IsWindow", lambda h: False)
+        cb.paste_text("texto")
+        assert cb._saved_hwnd is None, "el dictado sigue consumiendo la global"
 
 
 class TestPanelWeb:

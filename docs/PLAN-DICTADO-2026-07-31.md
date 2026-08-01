@@ -571,6 +571,29 @@ que el plan no preveía:
 - **La enmienda del portapapeles** (ver `3z`, decisión 3): "restaurar siempre" no se puede cumplir con
   contenido no textual, y se resolvió a favor de no destruir la imagen del usuario.
 
+**VERIFICADA el 2026-08-01 con los dos lentes, y el de la salida del LLM encontró algo real.**
+
+- **Lente de los delimitadores (Haiku, read-only): PASS.** El nonce aleatorio por llamada no es
+  falsificable desde el texto, la instrucción y el texto nunca se concatenan, y `GUARD_RULE` no se
+  puede quitar editando un prompt. Probó además saltos de línea, unicode invisible, RTL y el
+  parámetro de idioma (que no viene del request, se lee del entorno).
+- **Lente de la salida del LLM (Sonnet, read-only): FAIL, con dos defectos de la misma raíz.**
+  Transform no tenía identificador de solicitud, cosa que el dictado sí tiene (`_generation`), y ese
+  hueco no lo podían ver los tests de la unidad porque probaban a fondo el ciclo de UNA sola
+  transformación. (1) Un segundo AltGr+X mientras el primer modelo aún responde dejaba dos hilos
+  vivos, y el que llegara primero pintaba su resultado en un panel que ya atendía otra solicitud; en
+  el peor caso el texto se sustituía justo antes del Enter y se aplicaba algo que el usuario nunca
+  leyó, que es justo lo que la previsualización existe para impedir. (2) `_saved_hwnd` es una global
+  que comparten dictado y Transform y que `paste_text` CONSUME, así que un dictado en medio hacía
+  que el texto ya aceptado se pegara en la ventana equivocada o se quedara solo en el portapapeles.
+- **Arreglados en el commit `3d-fix`:** generación por solicitud que viaja hasta el resultado (los
+  viejos se descartan) y ventana destino guardada por solicitud, con `paste_text(hwnd=...)` que ya no
+  consume la global. Suite 1118 → 1125.
+- **Lección de método de esta ola, que vale más que el arreglo:** al mutar el arreglo del hwnd, la
+  suite **siguió verde**. Los tests probaban las dos PIEZAS (que la generación guardaba el hwnd, que
+  `paste_text` respetaba uno explícito) pero ninguno afirmaba que el pegado las USARA. Un test de las
+  piezas no vigila que alguien las conecte, y eso se ve mutando, nunca leyendo.
+
 **Verificación de la ola:** aquí SÍ hay error silencioso, así que verificador independiente
 read-only con este lente exacto: *"¿existe algún camino por el que la salida del LLM llegue a la
 ventana del usuario sin pasar por el control de G1?"*, más un segundo lente ortogonal barato:
