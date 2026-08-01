@@ -358,6 +358,16 @@ ENV_CATALOG = {
                "no es un control de seguridad, al revés de DASHBOARD_AUTH_ENABLED). Ola 7 de "
                "PLAN-DICTADO-2026-07-31, medido en docs/benchmarks/local-backend-gpu-2026-08-01.md.",
     },
+    "LOCAL_CUDA_FALLBACK_COOLDOWN": {
+        "default": "300", "kind": "lazy", "killswitch": False,
+        "doc": "Segundos que el breaker de core/backends/local_backend.py evita reintentar CUDA "
+               "tras un fallo de INFERENCIA (no de carga, eso ya lo cubre LOCAL_DEVICE): un modelo "
+               "que cargo bien y luego falla al transcribir (VRAM ocupada por otra app, reset de "
+               "driver a mitad de sesion) no vuelve a intentar CUDA en cada dictado hasta que pase "
+               "el cooldown, cae directo a CPU. Un exito de inferencia en CUDA resetea el breaker. "
+               "Mismo patron que TRANSCRIPTION_FALLBACK_COOLDOWN/INSIGHTS_FALLBACK_COOLDOWN. "
+               "Unidad 7b (fix del verificador independiente), 2026-08-01.",
+    },
     "GROQ_FALLBACK": {
         "default": "false", "kind": "lazy", "killswitch": True,
         "doc": "Si 'true', reintenta con Groq cuando el backend local falla (requiere GROQ_API_KEY). "

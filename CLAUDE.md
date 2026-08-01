@@ -729,11 +729,37 @@ referencia contra `large-v3-turbo`).
   explícito no cambia esa garantía, solo el orden de preferencia. Un valor no reconocido se trata
   como `"auto"` (fail-open deliberado: esta variable no es un control de seguridad, al revés de
   `DASHBOARD_AUTH_ENABLED`, así que un typo en el `.env` no debe dejar a nadie sin dictado).
-- **El fallback es el corazón de la unidad, no un detalle.** Un fallo de CUDA al cargar (driver
-  viejo, VRAM ocupada por otra app, GPU en uso exclusivo, DLL de cuBLAS ausente del PATH) se
-  registra con `logger.warning` (más fuerte si `LOCAL_DEVICE=cuda` era explícito: el usuario pidió
-  GPU y no la tuvo) y `_load_model()` reintenta en CPU con la configuración de siempre, en la MISMA
-  llamada, nunca propaga la excepción hacia `transcribe()`/`translate()`.
+- **El fallback cubre DOS momentos distintos, no uno.** La primera versión de esta unidad solo
+  protegía la CARGA; un verificador independiente encontró que la INFERENCIA quedaba desprotegida
+  (ver el corolario de abajo), así que hoy son dos mecanismos separados:
+  1. **Fallo de CARGA** (`_load_model()`): un fallo al CONSTRUIR el modelo en CUDA (driver viejo,
+     VRAM ocupada por otra app, GPU en uso exclusivo, DLL de cuBLAS ausente del PATH) se registra
+     con `logger.warning` (más fuerte si `LOCAL_DEVICE=cuda` era explícito) y se reintenta en CPU
+     en la MISMA llamada, sin propagar.
+  2. **Fallo de INFERENCIA** (`_run_inference()`, llamado desde `transcribe()`/`translate()`): un
+     modelo que cargó BIEN en CUDA puede fallar DESPUÉS, a media sesión, al llamar
+     `model.transcribe()` (otra app toma la VRAM, el driver hace un reset/TDR). Antes de esta
+     unidad esa excepción atravesaba sin control hasta `main.py`, y como `LocalBackend` es
+     singleton de por vida del proceso (`core/backends/__init__.py`), **cada dictado siguiente
+     volvía a fallar** con el mismo modelo roto, hasta el próximo release por inactividad
+     (`LOCAL_MODEL_IDLE_MINUTES`, default 10 min) o reiniciar Vflow. Ahora: si el device en uso es
+     CUDA, se libera el modelo roto de forma SEGURA (`release()`, que respeta `_inflight` y difiere
+     la destrucción si otro hilo lo sigue usando) y se reintenta la MISMA transcripción con un
+     modelo CPU efímero (`_build_ephemeral_cpu_model()`), para no perder el audio que el usuario ya
+     grabó. Si el device en uso YA era CPU, o el reintento en CPU TAMBIÉN falla, se propaga tal
+     cual: es un fallo genuino, sin una tercera vía.
+- **Breaker con cooldown para el fallo de INFERENCIA** (`LOCAL_CUDA_FALLBACK_COOLDOWN`, default
+  300s, mismo patrón que `TRANSCRIPTION_FALLBACK_COOLDOWN`/`INSIGHTS_FALLBACK_COOLDOWN` en
+  `core/transcriber.py`/`core/insights.py`): sin esto, tras cada release por inactividad
+  `_load_model()` volvía a intentar CUDA de cero, así que un problema persistente (VRAM ocupada
+  toda la sesión) se pagaba una y otra vez. Con el breaker abierto, `_load_model()` carga directo
+  en CPU sin intentar CUDA hasta que pase el cooldown. Un éxito de inferencia en CUDA resetea el
+  breaker.
+- **No hay lock de inferencia, y es a propósito.** Se evaluó y se descartó: CTranslate2 libera el
+  GIL durante la inferencia nativa, así que dos hilos ya corrían en paralelo sobre el mismo modelo
+  ANTES de esta unidad (medido: 1 hilo ~1.23s, 2 hilos concurrentes ~1.65s, no ~2.46s, con texto
+  idéntico byte a byte). Agregar un lock serializaría lo que hoy corre en paralelo y degradaría
+  reuniones y la cola de URL sin arreglar nada real.
 - **`compute_type` va acoplado al device resuelto, no es una variable nueva.** CUDA → `"int8"`,
   CPU → `"int8"` (sin cambios). El banco midió que en esta GPU Pascal (compute capability 6.1) NI
   SIQUIERA EXISTEN `float16`/`int8_float16` como `compute_type` de ctranslate2, y que `"int8"` e
@@ -753,10 +779,16 @@ referencia contra `large-v3-turbo`).
   13.3 instalado en la máquina de Johann no lo usa).
 - **`get_device()`** en `LocalBackend` expone el dispositivo REAL con el que se cargó el modelo
   (`"cpu"` / `"cuda"` / `None` si aún no se cargó): no confundir con `LOCAL_DEVICE` (lo pedido).
-- **Tests herméticos** (`tests/test_local_backend_device.py`): `WhisperModel` se sustituye por un
-  doble vía el seam `_import_whisper_model()`, así que la suite corre en cualquier máquina, con o
-  sin GPU real. La resolución del fallback se probó mutando el código a propósito (romper el
-  `except` para que la excepción de CUDA propagara) y confirmando que solo esos 2 tests caían.
+- **Tests herméticos** (`tests/test_local_backend_device.py`, 30 tests): `WhisperModel` se
+  sustituye por un doble vía el seam `_import_whisper_model()` (con `.transcribe()` configurable
+  para simular tanto fallos de CARGA como de INFERENCIA), así que la suite corre en cualquier
+  máquina, con o sin GPU real. Los dos guardianes se probaron mutando el código a propósito: (1)
+  forzar `_requested_device()` a devolver siempre `"cpu"` tumbó los 10 tests que afirman resolución
+  a CUDA y ninguno más; (2) romper el `except` de `_load_model()` para que la excepción de carga
+  propagara tumbó los 2 tests del fallback de carga y ninguno más; (3) romper el `except` de
+  `_run_inference()` para que la excepción de inferencia propagara tumbó los 5 tests de
+  `TestInferenceFallback` que dependen del reintento y ninguno más. Las tres mutaciones se
+  revirtieron a mano (nunca `git checkout` sobre un archivo con trabajo sin commitear).
 
 ## Security & Privacy
 
@@ -843,6 +875,8 @@ Edit `config.py`:
 - `TRANSCRIPTION_BACKEND` (default: `groq`) — Backend activo: `"groq"` (API Groq) o `"local"` (faster-whisper sin internet)
 - `LOCAL_WHISPER_MODEL` (default: `small`) — Modelo local: `"small"` (~466 MB, rápido) o `"medium"` (~1.5 GB, más preciso)
 - `LOCAL_MODEL_IDLE_MINUTES` (default: `10`) — Minutos de inactividad antes de liberar el modelo de RAM; `0` = nunca liberar
+- `LOCAL_DEVICE` (default: `auto`, Ola 7 unidad 7b): dispositivo del backend local: `"auto"` (CUDA si carga bien, si no CPU), `"cpu"` o `"cuda"` (fuerza el intento; un fallo de CUDA cae a CPU igual, tanto al CARGAR como al hacer INFERENCIA). Valor no reconocido se trata como `"auto"`. Ver sección 22.
+- `LOCAL_CUDA_FALLBACK_COOLDOWN` (default: `300`, Ola 7 unidad 7b-fix): segundos que el breaker evita reintentar CUDA tras un fallo de INFERENCIA (no de carga); un éxito de inferencia en CUDA lo resetea. Ver sección 22.
 - `GROQ_FALLBACK` (default: `false`) — Si `true`, cuando el backend local falla la app reintenta con Groq (requiere `GROQ_API_KEY`). Apagado por defecto; activar desde dashboard Settings (checkbox visible solo cuando backend=local).
 - `VAD_ENABLED` (default: `true`) — Aplica Silero VAD al audio antes de enviarlo a Groq para recortar silencios (reduce costo y alucinaciones). El backend local usa su propio VAD interno; esta opción solo afecta a Groq. Apagar si hay problemas (fail-open: el audio se envía sin modificar).
 - `AUDIO_SOURCE` (default: `mic`) — Fuente de captura: `"mic"` (micrófono) o `"system"` (audio del sistema vía WASAPI loopback con pyaudiowpatch, para transcribir videos/cursos que suenan en el PC). Cambiable desde el tray ("Fuente: …") o el dashboard sin reiniciar: se relee al inicio de cada grabación. En modo `system`: no hay auto-pegado (el texto va al portapapeles + notificación del tray + historial), el watchdog de micrófono se desactiva (WASAPI loopback no entrega buffers en silencio total), y `LoopbackSource` (core/recorder.py) captura a la frecuencia nativa del dispositivo de salida con downmix a mono y resample a 16kHz, por lo que el resto del pipeline no cambia. Cada transcripción guarda su fuente en la columna `source` de la DB (migración idempotente). Script de diagnóstico: `test_loopback.py` en la raíz.

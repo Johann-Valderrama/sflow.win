@@ -8,12 +8,23 @@ en esta GPU Pascal). Esta unidad construye la resolución de device + el fallbac
 un fallo de CUDA al cargar (driver, VRAM ocupada, DLL de cuBLAS ausente del PATH)
 JAMÁS puede dejar al usuario sin dictado, así que siempre cae a CPU.
 
+**Ampliado el mismo día (fix del verificador independiente):** el fallback de
+`_load_model()` protege la CARGA, no la INFERENCIA. `TestInferenceFallback`
+cubre el hueco real que encontró: un modelo que carga bien en CUDA y falla
+DESPUÉS, a media sesión, al llamar `model.transcribe()` (VRAM tomada por otra
+app, reset de driver). El fix atrapa ese fallo en `transcribe()`/`translate()`,
+libera el modelo roto de forma segura (`release()`, respeta `_inflight`) y
+reintenta la MISMA llamada en CPU; y abre un breaker con cooldown
+(`LOCAL_CUDA_FALLBACK_COOLDOWN`) para no reintentar CUDA en cada carga
+mientras el problema persiste.
+
 Hermético: WhisperModel se sustituye por un doble de prueba vía
 ``_import_whisper_model()`` (seam explícito para esto). Estos tests corren en
 CUALQUIER máquina, con o sin GPU real: nunca dependen de que CUDA esté
 instalado. La única excepción es TestEnsureCudaOnPath, que tampoco toca la GPU:
 solo ejercita el glob de archivos sobre un directorio temporal.
 """
+import io
 import os
 
 import pytest
@@ -30,22 +41,48 @@ from core.backends.local_backend import LocalBackend, _ensure_cuda_on_path, _req
 def fake_whisper(monkeypatch):
     """Sustituye ``_import_whisper_model()`` por una fábrica configurable.
 
-    ``fake.calls``   -> lista de dicts (kwargs de cada intento de construcción,
-                        en orden). Es el guardián real de estos tests: si
-                        _load_model() dejara de intentar CUDA, o dejara de
-                        caer a CPU tras un fallo, la lista de calls no
-                        coincidiría con lo esperado.
-    ``fake.fail_on``  -> set de devices que deben lanzar al "construirse"
-                        (simula un fallo de carga de CUDA sin necesitar GPU).
+    ``fake.calls``            -> lista de dicts (kwargs de cada intento de
+                                 CONSTRUCCIÓN, en orden). Es el guardián real
+                                 de los tests de carga: si _load_model()
+                                 dejara de intentar CUDA, o dejara de caer a
+                                 CPU tras un fallo, la lista no coincidiría.
+    ``fake.fail_on``           -> set de devices que deben lanzar al
+                                 CONSTRUIRSE (simula un fallo de CARGA).
+    ``fake.transcribe_calls``  -> lista de dicts {"device", "kwargs"} de cada
+                                 llamada a ``.transcribe()`` (INFERENCIA), en
+                                 orden. Guardián de los tests de fallback de
+                                 inferencia.
+    ``fake.fail_transcribe_on`` -> set de devices cuya llamada ``.transcribe()``
+                                 debe lanzar (simula un fallo de INFERENCIA:
+                                 el modelo cargó bien pero falla al usarse,
+                                 el hueco real que encontró el verificador).
+    ``fake.text_for_device``   -> dict device -> texto que "transcribe" ese
+                                 device; permite comprobar CUÁL device produjo
+                                 el resultado final devuelto al caller.
     """
     calls = []
     fail_on = set()
+    transcribe_calls = []
+    fail_transcribe_on = set()
+    text_for_device = {}
+
+    class _FakeSegment:
+        def __init__(self, text):
+            self.text = text
 
     class _FakeModel:
         def __init__(self, model_size, **kwargs):
+            self.device = kwargs.get("device")
             calls.append({"model_size": model_size, **kwargs})
-            if kwargs.get("device") in fail_on:
-                raise RuntimeError(f"fake: fallo simulado cargando en {kwargs.get('device')}")
+            if self.device in fail_on:
+                raise RuntimeError(f"fake: fallo simulado cargando en {self.device}")
+
+        def transcribe(self, wav_buffer, **kwargs):
+            transcribe_calls.append({"device": self.device, "kwargs": kwargs})
+            if self.device in fail_transcribe_on:
+                raise RuntimeError(f"fake: fallo simulado de INFERENCIA en {self.device}")
+            text = text_for_device.get(self.device, f"texto-{self.device}")
+            return iter([_FakeSegment(text)]), None
 
     monkeypatch.setattr(local_backend, "_import_whisper_model", lambda: _FakeModel)
 
@@ -55,6 +92,9 @@ def fake_whisper(monkeypatch):
     handle = _Handle()
     handle.calls = calls
     handle.fail_on = fail_on
+    handle.transcribe_calls = transcribe_calls
+    handle.fail_transcribe_on = fail_transcribe_on
+    handle.text_for_device = text_for_device
     return handle
 
 
@@ -281,3 +321,152 @@ class TestEnsureCudaOnPath:
         _ensure_cuda_on_path(search_bases=[str(toolkit)])
 
         assert os.environ["PATH"] == r"C:\some\unrelated\dir"
+
+    def test_never_raises_on_unexpected_error(self, monkeypatch):
+        """Hallazgo del verificador independiente: la garantía de "nunca
+        falla" no debe descansar en que os.path.exists/glob.glob de la
+        stdlib jamás lancen. Simula un fallo inesperado de glob.glob y
+        confirma que _ensure_cuda_on_path lo atrapa sin propagar."""
+        monkeypatch.setenv("PATH", r"C:\some\unrelated\dir")
+
+        def _boom(*_args, **_kwargs):
+            raise OSError("fallo simulado de glob.glob")
+
+        monkeypatch.setattr(local_backend.glob, "glob", _boom)
+
+        _ensure_cuda_on_path(search_bases=["cualquier-cosa"])  # no debe lanzar
+
+        assert os.environ["PATH"] == r"C:\some\unrelated\dir"  # sin cambios
+
+
+# ---------------------------------------------------------------------------
+# Fallback de INFERENCIA (fix del verificador independiente, 2026-08-01): un
+# modelo que carga bien en CUDA y falla DESPUÉS, a media sesión, al llamar
+# model.transcribe() (VRAM tomada por otra app, reset de driver). Distinto
+# del fallback de CARGA que ya cubre TestLoadModelDeviceResolution.
+# ---------------------------------------------------------------------------
+
+class TestInferenceFallback:
+    def test_cuda_inference_failure_retries_on_cpu_and_succeeds(
+        self, monkeypatch, backend, fake_whisper, stub_cuda_path_search
+    ):
+        """El caso central del hueco: la carga en CUDA fue perfecta, pero
+        model.transcribe() revienta (p. ej. VRAM tomada por OBS a mitad de
+        sesión). No debe perderse el audio: se reintenta en CPU."""
+        monkeypatch.setenv("LOCAL_DEVICE", "cuda")
+        fake_whisper.fail_transcribe_on.add("cuda")
+        fake_whisper.text_for_device["cpu"] = "recuperado en cpu"
+
+        wav = io.BytesIO(b"contenido-wav-de-prueba")
+        text = backend.transcribe(wav, language="es")
+
+        assert text == "recuperado en cpu"
+        assert [c["device"] for c in fake_whisper.transcribe_calls] == ["cuda", "cpu"]
+        # El modelo CUDA roto quedó liberado (release() diferido se ejecuta
+        # al salir de _exit_inflight, sin más trabajos en curso).
+        assert backend.get_device() is None
+
+    def test_cpu_inference_failure_propagates_unchanged(
+        self, monkeypatch, backend, fake_whisper, stub_cuda_path_search
+    ):
+        """Si el device en uso YA era CPU, el fallo se propaga tal cual: no
+        hay una tercera vía, y este comportamiento NO debe cambiar."""
+        monkeypatch.setenv("LOCAL_DEVICE", "cpu")
+        fake_whisper.fail_transcribe_on.add("cpu")
+
+        wav = io.BytesIO(b"contenido-wav-de-prueba")
+        with pytest.raises(RuntimeError, match="fallo simulado de INFERENCIA en cpu"):
+            backend.transcribe(wav, language="es")
+
+        # Un solo intento: nunca hay "de dónde más" reintentar si ya era CPU.
+        assert [c["device"] for c in fake_whisper.transcribe_calls] == ["cpu"]
+
+    def test_cuda_inference_failure_and_cpu_retry_also_fails_propagates(
+        self, monkeypatch, backend, fake_whisper, stub_cuda_path_search
+    ):
+        """Si el reintento en CPU TAMBIÉN falla, es un fallo genuino: se
+        propaga (la excepción del reintento, no la original de CUDA)."""
+        monkeypatch.setenv("LOCAL_DEVICE", "cuda")
+        fake_whisper.fail_transcribe_on.update({"cuda", "cpu"})
+
+        wav = io.BytesIO(b"contenido-wav-de-prueba")
+        with pytest.raises(RuntimeError, match="fallo simulado de INFERENCIA en cpu"):
+            backend.transcribe(wav, language="es")
+
+        assert [c["device"] for c in fake_whisper.transcribe_calls] == ["cuda", "cpu"]
+
+    def test_translate_native_branch_cuda_failure_retries_on_cpu(
+        self, monkeypatch, backend, fake_whisper, stub_cuda_path_search
+    ):
+        """Mismo fallback en translate() (rama nativa task=translate)."""
+        monkeypatch.setenv("LOCAL_DEVICE", "cuda")
+        fake_whisper.fail_transcribe_on.add("cuda")
+        fake_whisper.text_for_device["cpu"] = "translated on cpu"
+
+        wav = io.BytesIO(b"contenido-wav-de-prueba")
+        text = backend.translate(wav, target_lang="en")
+
+        assert text == "translated on cpu"
+        assert [c["device"] for c in fake_whisper.transcribe_calls] == ["cuda", "cpu"]
+
+    def test_translate_non_en_branch_cuda_failure_retries_on_cpu(
+        self, monkeypatch, backend, fake_whisper, stub_cuda_path_search
+    ):
+        """Mismo fallback en translate() (rama target != "en", que degrada a
+        transcripción en idioma original sin traducir)."""
+        monkeypatch.setenv("LOCAL_DEVICE", "cuda")
+        fake_whisper.fail_transcribe_on.add("cuda")
+        fake_whisper.text_for_device["cpu"] = "transcrito en cpu"
+
+        wav = io.BytesIO(b"contenido-wav-de-prueba")
+        text = backend.translate(wav, target_lang="fr")
+
+        assert text == "transcrito en cpu"
+        assert [c["device"] for c in fake_whisper.transcribe_calls] == ["cuda", "cpu"]
+
+    def test_breaker_skips_cuda_on_next_load_after_inference_failure(
+        self, monkeypatch, backend, fake_whisper, stub_cuda_path_search
+    ):
+        """No repetir el fallo cada vez: tras un fallo de inferencia en CUDA,
+        la SIGUIENTE carga del modelo (p. ej. tras el release diferido) no
+        vuelve a intentar CUDA mientras el breaker esté abierto."""
+        monkeypatch.setenv("LOCAL_DEVICE", "auto")
+        fake_whisper.fail_transcribe_on.add("cuda")
+
+        wav = io.BytesIO(b"contenido-wav-de-prueba")
+        backend.transcribe(wav, language="es")  # dispara el fallback, abre el breaker
+        assert backend.get_device() is None  # modelo roto liberado
+
+        fake_whisper.calls.clear()  # medir SOLO la siguiente carga, limpia
+        backend._load_model()
+
+        assert backend.get_device() == "cpu"
+        assert [c["device"] for c in fake_whisper.calls] == ["cpu"]  # nunca intentó CUDA
+
+    def test_successful_cuda_inference_resets_open_breaker(
+        self, monkeypatch, backend, fake_whisper, stub_cuda_path_search
+    ):
+        """Un éxito de inferencia en CUDA resetea el breaker (mismo criterio
+        que Transcriber._run_net_fallback en core/transcriber.py)."""
+        monkeypatch.setenv("LOCAL_DEVICE", "cuda")
+        backend._load_model()
+        assert backend.get_device() == "cuda"
+
+        # Simula que un fallo anterior ya había abierto el breaker, sin
+        # destruir el modelo actualmente cargado (que sigue funcionando).
+        backend._cuda_breaker_trip()
+        assert backend._cuda_breaker_open() is True
+
+        wav = io.BytesIO(b"contenido-wav-de-prueba")
+        text = backend.transcribe(wav, language="es")
+
+        assert text  # la inferencia tuvo éxito
+        assert backend._cuda_breaker_open() is False  # y reseteó el breaker
+
+    def test_cuda_breaker_cooldown_reads_env_var(self, monkeypatch, backend):
+        monkeypatch.setenv("LOCAL_CUDA_FALLBACK_COOLDOWN", "45")
+        assert backend._cuda_retry_cooldown() == 45.0
+
+    def test_cuda_breaker_cooldown_default_is_300(self, monkeypatch, backend):
+        monkeypatch.delenv("LOCAL_CUDA_FALLBACK_COOLDOWN", raising=False)
+        assert backend._cuda_retry_cooldown() == 300.0

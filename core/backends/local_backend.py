@@ -130,22 +130,37 @@ def _ensure_cuda_on_path(*, search_bases: list[str] | None = None) -> None:
     siempre pasa ``None`` y usa las rutas reales del Toolkit): permite a los
     tests apuntar a un directorio temporal en vez de depender de si ESTA
     máquina tiene CUDA instalado en el Program Files real.
+
+    Todo el cuerpo va envuelto en ``try/except`` (hallazgo del verificador
+    independiente de la unidad 7b): la garantía de "nunca falla" no debía
+    descansar en que ``os.path.exists``/``glob.glob`` de la stdlib jamás
+    lancen (permisos del sistema de archivos, ruta con caracteres raros,
+    etc.), sino en el propio código. Si algo inesperado ocurre aquí, se
+    loguea y se sigue como si no se hubiera encontrado nada: el intento de
+    carga en CUDA de ``_load_model()`` fallará más abajo y el fallback a
+    CPU se hace cargo igual.
     """
-    already = any(
-        os.path.exists(os.path.join(d, "cublas64_12.dll"))
-        for d in os.environ.get("PATH", "").split(os.pathsep) if d
-    )
-    if already:
-        return
-    bases = search_bases if search_bases is not None else [
-        r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA",
-        os.path.expandvars(r"%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA"),
-    ]
-    for base in bases:
-        for bin_dir in sorted(glob.glob(os.path.join(base, "v12.*", "bin"))):
-            if os.path.exists(os.path.join(bin_dir, "cublas64_12.dll")):
-                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
-                return
+    try:
+        already = any(
+            os.path.exists(os.path.join(d, "cublas64_12.dll"))
+            for d in os.environ.get("PATH", "").split(os.pathsep) if d
+        )
+        if already:
+            return
+        bases = search_bases if search_bases is not None else [
+            r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA",
+            os.path.expandvars(r"%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA"),
+        ]
+        for base in bases:
+            for bin_dir in sorted(glob.glob(os.path.join(base, "v12.*", "bin"))):
+                if os.path.exists(os.path.join(bin_dir, "cublas64_12.dll")):
+                    os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+                    return
+    except Exception as exc:
+        logger.warning(
+            "LocalBackend: _ensure_cuda_on_path() fallo inesperado (%s), "
+            "se continua sin blindar el PATH.", exc,
+        )
 
 
 def _import_whisper_model():
@@ -190,6 +205,11 @@ class LocalBackend(TranscriptionBackend):
         # de LOCAL_DEVICE (lo pedido): None hasta la primera carga. Expuesto vía
         # get_device() para diagnóstico/tests.
         self._device_used: str | None = None
+        # Breaker de fallos de INFERENCIA en CUDA (distinto del fallback de CARGA
+        # de _load_model()): time.monotonic() del último fallo de
+        # model.transcribe() en CUDA, o None si nunca falló / ya se reseteó.
+        # Mismo patrón que Transcriber._net_breaker_failed_at en core/transcriber.py.
+        self._cuda_breaker_tripped_at: float | None = None
 
     # ------------------------------------------------------------------
     # Interfaz pública de TranscriptionBackend
@@ -277,10 +297,9 @@ class LocalBackend(TranscriptionBackend):
             RuntimeError: Si el modelo no está descargado en disco.
         """
         self._require_model_downloaded()
-        model = self._load_model()
+        self._load_model()
         self._enter_inflight()
         try:
-            wav_buffer.seek(0)
             lang = None if (not language or language == "auto") else language
             kwargs = dict(
                 language=lang,
@@ -290,9 +309,16 @@ class LocalBackend(TranscriptionBackend):
             if prompt:
                 kwargs["initial_prompt"] = prompt
 
-            segments, _ = model.transcribe(wav_buffer, **kwargs)
-            text = " ".join(seg.text for seg in segments).strip()
-            return text
+            def _do(model):
+                # seek(0) en CADA intento: el reintento de _run_inference tras
+                # un fallo de inferencia en CUDA reusa el MISMO wav_buffer, y
+                # el primer intento pudo haber avanzado el cursor al iterar
+                # los segmentos antes de fallar.
+                wav_buffer.seek(0)
+                segments, _ = model.transcribe(wav_buffer, **kwargs)
+                return " ".join(seg.text for seg in segments).strip()
+
+            return self._run_inference(_do)
         finally:
             self._exit_inflight()
 
@@ -315,10 +341,9 @@ class LocalBackend(TranscriptionBackend):
             RuntimeError: Si el modelo no está descargado en disco.
         """
         self._require_model_downloaded()
-        model = self._load_model()
+        self._load_model()
         self._enter_inflight()
         try:
-            wav_buffer.seek(0)
             if target_lang != "en":
                 logger.warning(
                     "LocalBackend: traducción a '%s' no soportada localmente — "
@@ -328,22 +353,31 @@ class LocalBackend(TranscriptionBackend):
                 )
                 # Transcribir en idioma original
                 lang = os.getenv("WHISPER_LANGUAGE", "es")
+
+                def _do(model):
+                    wav_buffer.seek(0)  # ver nota de seek en transcribe()
+                    segments, _ = model.transcribe(
+                        wav_buffer,
+                        language=lang,
+                        vad_filter=True,
+                        vad_parameters={"min_silence_duration_ms": 500},
+                    )
+                    return " ".join(seg.text for seg in segments).strip()
+
+                return self._run_inference(_do)
+
+            # Traducción nativa Whisper → inglés
+            def _do_translate(model):
+                wav_buffer.seek(0)  # ver nota de seek en transcribe()
                 segments, _ = model.transcribe(
                     wav_buffer,
-                    language=lang,
+                    task="translate",
                     vad_filter=True,
                     vad_parameters={"min_silence_duration_ms": 500},
                 )
                 return " ".join(seg.text for seg in segments).strip()
 
-            # Traducción nativa Whisper → inglés
-            segments, _ = model.transcribe(
-                wav_buffer,
-                task="translate",
-                vad_filter=True,
-                vad_parameters={"min_silence_duration_ms": 500},
-            )
-            return " ".join(seg.text for seg in segments).strip()
+            return self._run_inference(_do_translate)
         finally:
             self._exit_inflight()
 
@@ -368,7 +402,11 @@ class LocalBackend(TranscriptionBackend):
         PATH), cae a CPU SIEMPRE, incluso si el usuario pidió "cuda"
         explícito, porque un fallo de GPU no puede dejar al usuario sin
         dictado (fail-open deliberado, ver docstring del módulo). Con "cpu"
-        nunca se intenta CUDA.
+        nunca se intenta CUDA. Con el breaker de CUDA ABIERTO (fallo de
+        INFERENCIA reciente, ver ``_run_inference``) tampoco se intenta,
+        aunque el device pedido sea "auto" o "cuda": reintentar CUDA de cero
+        en cada carga tras un problema persistente (VRAM ocupada, driver con
+        TDR) es pagar el mismo fallo una y otra vez.
 
         ``compute_type`` va acoplado al device resuelto, no es una variable
         de entorno aparte: "int8" en los dos casos (recomendación medida en
@@ -400,7 +438,14 @@ class LocalBackend(TranscriptionBackend):
                     model = None
                     device_used = None
 
-                    if requested in ("auto", "cuda"):
+                    if requested in ("auto", "cuda") and self._cuda_breaker_open():
+                        logger.info(
+                            "LocalBackend: breaker de CUDA abierto (fallo de "
+                            "inferencia reciente, cooldown %.0fs) - cargando "
+                            "directo en CPU sin reintentar CUDA.",
+                            self._cuda_retry_cooldown(),
+                        )
+                    elif requested in ("auto", "cuda"):
                         _ensure_cuda_on_path()
                         try:
                             logger.info(
@@ -437,14 +482,7 @@ class LocalBackend(TranscriptionBackend):
                             "(device=cpu, compute_type=int8, cpu_threads=%d)",
                             self._model_name, models_dir, cpu_threads,
                         )
-                        model = WhisperModel(
-                            self._model_name,
-                            device="cpu",
-                            compute_type="int8",
-                            download_root=models_dir,
-                            cpu_threads=cpu_threads,
-                            local_files_only=True,
-                        )
+                        model = self._build_cpu_model(WhisperModel, models_dir, cpu_threads)
                         device_used = "cpu"
 
                     self._model = model
@@ -454,6 +492,110 @@ class LocalBackend(TranscriptionBackend):
                         device_used,
                     )
         return self._model
+
+    def _build_cpu_model(self, WhisperModel, models_dir: str, cpu_threads: int):
+        """Construye un ``WhisperModel`` en CPU con la configuración de
+        producción. Extraído de ``_load_model()`` para que ``_run_inference``
+        (reintento tras un fallo de INFERENCIA en CUDA) use exactamente la
+        misma configuración sin duplicar los kwargs en dos sitios."""
+        return WhisperModel(
+            self._model_name,
+            device="cpu",
+            compute_type="int8",
+            download_root=models_dir,
+            cpu_threads=cpu_threads,
+            local_files_only=True,
+        )
+
+    def _build_ephemeral_cpu_model(self):
+        """Construye un modelo CPU de UN SOLO USO para el reintento inmediato
+        de ``_run_inference`` tras un fallo de inferencia en CUDA.
+
+        No toca ``self._model``: el modelo CUDA roto compartido se libera
+        por separado vía ``release()`` (que respeta ``_inflight`` y nunca
+        destruye un modelo mientras otro hilo lo esté usando), y esta
+        instancia efímera solo sirve para no perder el audio que el usuario
+        ya grabó mientras esa liberación ocurre en su momento seguro."""
+        WhisperModel = _import_whisper_model()
+        models_dir = _get_models_dir()
+        cpu_threads = max(4, (os.cpu_count() or 4) // 2)
+        logger.info(
+            "LocalBackend: cargando modelo CPU efímero '%s' para el reintento "
+            "tras fallo de inferencia en CUDA (compute_type=int8, cpu_threads=%d)",
+            self._model_name, cpu_threads,
+        )
+        return self._build_cpu_model(WhisperModel, models_dir, cpu_threads)
+
+    # ------------------------------------------------------------------
+    # Breaker de fallos de INFERENCIA en CUDA (distinto del fallback de CARGA
+    # de _load_model(): este cubre un modelo que cargó bien y luego falla al
+    # transcribir, típicamente por VRAM ocupada por otra app o un reset de
+    # driver a mitad de sesión). Mismo patrón que
+    # Transcriber._net_breaker_* en core/transcriber.py.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _cuda_retry_cooldown() -> float:
+        """Segundos que el breaker evita reintentar CUDA tras un fallo de
+        INFERENCIA (``LOCAL_CUDA_FALLBACK_COOLDOWN``, default 300, lazy,
+        mismo patrón que ``TRANSCRIPTION_FALLBACK_COOLDOWN``/
+        ``INSIGHTS_FALLBACK_COOLDOWN`` en core/transcriber.py e insights.py)."""
+        try:
+            return float(os.getenv("LOCAL_CUDA_FALLBACK_COOLDOWN", "300") or 300)
+        except ValueError:
+            return 300.0
+
+    def _cuda_breaker_open(self) -> bool:
+        """¿El breaker sigue abierto (un fallo de inferencia en CUDA ocurrió
+        hace menos del cooldown)?"""
+        if self._cuda_breaker_tripped_at is None:
+            return False
+        return (time.monotonic() - self._cuda_breaker_tripped_at) < self._cuda_retry_cooldown()
+
+    def _cuda_breaker_trip(self) -> None:
+        """Abre el breaker: registra el timestamp del fallo de inferencia."""
+        self._cuda_breaker_tripped_at = time.monotonic()
+
+    def _cuda_breaker_reset(self) -> None:
+        """Cierra el breaker (una inferencia en CUDA volvió a tener éxito)."""
+        if self._cuda_breaker_tripped_at is not None:
+            logger.info("LocalBackend: inferencia en CUDA exitosa, breaker reseteado")
+        self._cuda_breaker_tripped_at = None
+
+    def _run_inference(self, call_fn):
+        """Ejecuta ``call_fn(model)`` sobre ``self._model`` (ya resuelto por
+        ``_load_model()``). Si el device en uso es CUDA y la llamada de
+        INFERENCIA falla (a diferencia de un fallo de CARGA, que ya maneja
+        ``_load_model()``/el bloque try/except de arriba), libera el modelo
+        roto compartido de forma SEGURA (``release()``, que respeta
+        ``_inflight`` y difiere la destrucción si otro hilo sigue usándolo) y
+        reintenta la MISMA llamada con un modelo CPU efímero, para no perder
+        el audio que el usuario ya grabó: tardar el doble es mejor que
+        perder el dictado. Si el device en uso YA era CPU, o el reintento en
+        CPU TAMBIÉN falla, la excepción se propaga tal cual: es un fallo
+        genuino y no hay una tercera vía.
+
+        Un éxito de inferencia en CUDA resetea el breaker (mismo criterio que
+        ``Transcriber._run_net_fallback`` en core/transcriber.py: el breaker
+        se cierra cuando el camino primario vuelve a funcionar).
+        """
+        try:
+            result = call_fn(self._model)
+            if self._device_used == "cuda":
+                self._cuda_breaker_reset()
+            return result
+        except Exception as exc:
+            if self._device_used != "cuda":
+                raise  # CPU ya era el camino: fallo genuino, sin cambio de comportamiento
+            logger.warning(
+                "LocalBackend: fallo de INFERENCIA en CUDA (%s), liberando el "
+                "modelo roto y reintentando en CPU para no perder el audio ya "
+                "grabado.", exc,
+            )
+            self._cuda_breaker_trip()
+            self.release()  # deferred-safe: no interrumpe otros trabajos en curso
+            cpu_model = self._build_ephemeral_cpu_model()
+            return call_fn(cpu_model)  # si esto también falla, propaga: fallo genuino
 
     # ------------------------------------------------------------------
     # Gestión del contador de trabajos en vuelo (anti-carrera)
