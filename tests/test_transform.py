@@ -172,6 +172,54 @@ class TestPortapapeles:
         assert len(text) == clipboard.CAPTURE_MAX_CHARS
 
 
+class TestModificadoresFisicos:
+    """El fallo REAL en producción del primer uso (2026-08-01, Johann con Chrome).
+
+    Había texto seleccionado y salió "No hay texto seleccionado". Causa MEDIDA con
+    un banco (Notepad + selección real): con los modificadores libres la captura
+    devuelve `ok`, y con AltGr presionado devuelve `empty`. El repo ya lo decía en
+    `core/hotkey.py`: en Windows AltGr genera Ctrl+Alt, y como el atajo dispara en el
+    PRESS, el Ctrl+C sintético le llega a la app como Ctrl+Alt+C.
+    """
+
+    def test_espera_a_que_suelten_los_modificadores_antes_del_ctrl_c(self, fake, monkeypatch):
+        orden = []
+        monkeypatch.setattr(clipboard, "_wait_modifiers_released",
+                            lambda timeout=0.6: (orden.append("espera"), [])[1])
+        original = fake.send_ctrl_c
+
+        def _ctrl_c():
+            orden.append("ctrl_c")
+            return original()
+
+        monkeypatch.setattr(clipboard, "_send_ctrl_c", _ctrl_c)
+        fake.selection_is("la selección")
+        clipboard.capture_selection()
+        assert orden == ["espera", "ctrl_c"]
+
+    def test_si_no_los_sueltan_los_fuerza_y_sigue(self, fake, monkeypatch):
+        forzado = []
+        monkeypatch.setattr(clipboard, "_wait_modifiers_released", lambda timeout=0.6: ["ctrl", "alt"])
+        monkeypatch.setattr(clipboard, "_force_release_modifiers", lambda: forzado.append(1))
+        fake.selection_is("la selección")
+        texto, status = clipboard.capture_selection()
+        assert forzado == [1], "sin el respaldo, quien sostenga el atajo se queda sin captura"
+        assert (texto, status) == ("la selección", "ok")
+
+    def test_no_fuerza_nada_si_ya_estaban_libres(self, fake, monkeypatch):
+        forzado = []
+        monkeypatch.setattr(clipboard, "_wait_modifiers_released", lambda timeout=0.6: [])
+        monkeypatch.setattr(clipboard, "_force_release_modifiers", lambda: forzado.append(1))
+        fake.selection_is("x")
+        clipboard.capture_selection()
+        assert forzado == []
+
+    def test_los_modificadores_que_se_vigilan_incluyen_alt_y_ctrl(self):
+        """AltGr entra por `alt` (0x12): en Windows es Alt derecho + Ctrl."""
+        assert clipboard._MODIFIER_VKS["alt"] == 0x12
+        assert clipboard._MODIFIER_VKS["ctrl"] == 0x11
+
+
 class TestFallos:
     def test_ctrl_c_fallido_devuelve_failed(self, fake, monkeypatch):
         monkeypatch.setattr(clipboard, "_send_ctrl_c", lambda: False)

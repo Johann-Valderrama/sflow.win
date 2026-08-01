@@ -45,6 +45,11 @@ _kernel32.GlobalFree.restype = ctypes.wintypes.HGLOBAL
 # Unidad 3a: detectar si un Ctrl+C copió algo, sin comparar contenidos.
 _user32.GetClipboardSequenceNumber.restype = ctypes.wintypes.DWORD
 
+# Estado físico de los modificadores (3a-fix): sin esto, el Ctrl+C sintético sale
+# como Ctrl+Alt+C mientras el usuario sostiene el AltGr de su atajo.
+_user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+_user32.GetAsyncKeyState.restype = ctypes.c_short
+
 # Tope DURO de la captura de selección (unidad 3a). No es el presupuesto del
 # modelo (ese vive en core/transform.py con budget_chars): es la guarda de
 # cordura para que un Ctrl+A sobre un documento gigante no entre a memoria.
@@ -239,6 +244,63 @@ def _send_ctrl_c() -> bool:
         return False
 
 
+# Modificadores que hay que ver ARRIBA antes de mandar un Ctrl+C sintético.
+_MODIFIER_VKS = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10, "win_izq": 0x5B, "win_der": 0x5C}
+
+
+def _modifiers_down() -> list:
+    """Nombres de los modificadores que están físicamente presionados ahora mismo."""
+    abajo = []
+    for nombre, vk in _MODIFIER_VKS.items():
+        try:
+            if _user32.GetAsyncKeyState(vk) & 0x8000:
+                abajo.append(nombre)
+        except Exception:  # noqa: BLE001 — si la API falla, se asume libre y se sigue
+            pass
+    return abajo
+
+
+def _wait_modifiers_released(timeout: float = 0.6) -> list:
+    """Espera a que el usuario suelte los modificadores. Devuelve los que sigan abajo.
+
+    **Esto es lo que hace que la captura funcione con un atajo que usa AltGr**, y la
+    causa está MEDIDA, no supuesta (2026-08-01, banco en el scratchpad de la sesión:
+    con los modificadores libres `capture_selection` devuelve `ok`; con AltGr
+    presionado devuelve `empty`). El motivo lo dice el propio repo en
+    ``core/hotkey.py``: *"En Windows, AltGr genera internamente Ctrl+Alt"*. Como el
+    atajo dispara en el PRESS, en ese instante el usuario todavía tiene AltGr abajo,
+    así que el Ctrl+C sintético le llega a la aplicación como **Ctrl+Alt+C**, que no
+    copia nada. La captura abortaba con "no hay texto seleccionado" teniéndolo.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pendientes = _modifiers_down()
+        if not pendientes:
+            return []
+        time.sleep(0.02)
+    return _modifiers_down()
+
+
+def _force_release_modifiers():
+    """Suelta los modificadores a la fuerza (respaldo si el usuario no los suelta).
+
+    Soltar una tecla que no estaba pulsada es inofensivo, y cuando el usuario suelte
+    la suya de verdad el evento extra tampoco hace daño. Es preferible a quedarse
+    esperando: sin esto, alguien que mantenga AltGr pulsado un segundo de más se
+    queda sin captura y lee "no hay texto seleccionado" con el texto seleccionado.
+    """
+    try:
+        ctrl = Controller()
+        for tecla in (Key.alt_gr, Key.alt_r, Key.alt_l, Key.alt,
+                      Key.ctrl_r, Key.ctrl_l, Key.ctrl, Key.shift, Key.cmd):
+            try:
+                ctrl.release(tecla)
+            except Exception:  # noqa: BLE001 — best-effort por tecla
+                pass
+    except Exception as e:  # noqa: BLE001
+        logger.warning("capture_selection: no se pudieron soltar los modificadores: %s", e)
+
+
 def capture_selection(timeout: float = 0.8) -> "tuple[str | None, str]":
     """Captura el texto SELECCIONADO en la app en foco vía portapapeles (unidad 3a).
 
@@ -272,6 +334,15 @@ def capture_selection(timeout: float = 0.8) -> "tuple[str | None, str]":
         ``(None, "failed")``     — no se pudo simular Ctrl+C.
     """
     save_frontmost_app()
+
+    # ANTES de nada: el Ctrl+C no sirve mientras el usuario tenga abajo el
+    # modificador de su propio atajo (ver _wait_modifiers_released, con la medición).
+    pendientes = _wait_modifiers_released()
+    if pendientes:
+        logger.info("capture_selection: modificadores aún abajo (%s), se sueltan a la fuerza",
+                    ", ".join(pendientes))
+        _force_release_modifiers()
+        time.sleep(0.05)
 
     prev_text = _get_clipboard_text()
     seq_before = _clipboard_sequence()
