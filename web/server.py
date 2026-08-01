@@ -4,7 +4,7 @@
 blueprint bajo ``web/blueprints/`` y el estado compartido (DB única, singletons,
 helpers transversales de CSRF/settings) vive en ``web/state.py``. Este módulo
 solo ensambla la app Flask (``create_app()``), registra el hook de CSRF una
-única vez a nivel de aplicación, registra los 8 blueprints, y RE-EXPORTA los
+única vez a nivel de aplicación, registra los 9 blueprints, y RE-EXPORTA los
 nombres que la suite de tests importa directamente de ``web.server`` (compat
 hacia atrás; ver imports abajo).
 """
@@ -23,6 +23,7 @@ from web.blueprints import meeting as _bp_meeting
 from web.blueprints import meetings as _bp_meetings
 from web.blueprints import pages as _bp_pages
 from web.blueprints import settings as _bp_settings
+from web.blueprints import snippets as _bp_snippets
 from web.blueprints import transcriptions as _bp_transcriptions
 from web.blueprints import url_queue as _bp_url_queue
 from web.blueprints.url_queue import _process_next_url_item  # noqa: F401 — re-exportado (test)
@@ -38,7 +39,7 @@ from web.state import (  # noqa: F401 — MEETING/PROACTIVE/_db/_validate_* re-e
 
 
 def create_app() -> Flask:
-    """Ensambla la app Flask: config, hook de CSRF único, y los 8 blueprints por feature."""
+    """Ensambla la app Flask: config, hook de CSRF único, y los 9 blueprints por feature."""
     import secrets as _secrets
 
     flask_app = Flask(
@@ -63,6 +64,7 @@ def create_app() -> Flask:
     flask_app.register_blueprint(_bp_transcriptions.bp)
     flask_app.register_blueprint(_bp_settings.bp)
     flask_app.register_blueprint(_bp_dictionary.bp)
+    flask_app.register_blueprint(_bp_snippets.bp)
     flask_app.register_blueprint(_bp_url_queue.bp)
     flask_app.register_blueprint(_bp_meeting.bp)
     flask_app.register_blueprint(_bp_meetings.bp)

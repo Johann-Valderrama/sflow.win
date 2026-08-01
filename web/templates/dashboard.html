@@ -214,6 +214,7 @@
             <a href="#/dictados" class="nav-item" data-view="dictados" data-icon="mic"><span class="nav-label">Dictados</span></a>
             <a href="#/reunion" class="nav-item" data-view="reunion" data-icon="chat"><span class="nav-label">Reuniones</span></a>
             <a href="#/diccionario" class="nav-item" data-view="diccionario" data-icon="book"><span class="nav-label">Diccionario</span></a>
+            <a href="#/snippets" class="nav-item" data-view="snippets" data-icon="copy"><span class="nav-label">Snippets</span></a>
             <a href="#/url" class="nav-item" data-view="url" data-icon="play"><span class="nav-label">Desde URL</span></a>
             <a href="#/atajos" class="nav-item" data-view="atajos" data-icon="keyboard"><span class="nav-label">Atajos</span></a>
             <a href="#/ajustes" class="nav-item" data-view="ajustes" data-icon="settings"><span class="nav-label">Ajustes</span></a>
@@ -941,6 +942,44 @@
             </div>
         </div>
 
+        <!-- Snippets panel (unidad 4c de PLAN-DICTADO-2026-07-31, Ola 4) -->
+        <div id="snippets-panel" class="glass rounded-xl p-5 mb-6 hidden">
+            <div class="text-sm font-medium text-white/60 mb-1">Snippets</div>
+            <p class="text-xs text-white/55 mb-1">Dicta el disparador y se pega el contenido que guardaste. No corrige lo que Whisper oyó (eso es el Diccionario): sustituye una frase corta por un texto que tú redactaste antes, como una firma de correo o una plantilla. Solo funciona dictando, nunca en reuniones ni en URLs.</p>
+            <p class="text-xs text-amber-300/80 mb-3">⚠️ El disparador no lleva un prefijo obligatorio, así que elige una frase que <strong>no digas por accidente</strong> en una conversación normal. «firma» se te va a expandir dentro de «firmamos el contrato»; algo como «pega firma correo» casi nunca aparece sin querer.</p>
+            <form id="snippet-form" onsubmit="submitSnippetForm(event)" class="mb-4">
+                <input type="hidden" id="snippet-edit-id" value="">
+                <div class="flex flex-wrap gap-2 items-end mb-1">
+                    <div>
+                        <label for="snippet-trigger" class="text-xs text-white/55 block mb-1">Disparador (lo que dictas) <span class="text-red-400">*</span></label>
+                        <input type="text" id="snippet-trigger" placeholder="pega firma correo" oninput="checkSnippetTriggerDuplicate()"
+                            class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80
+                            placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/45 w-56" required>
+                    </div>
+                    <button type="submit" id="snippet-submit-btn"
+                        class="text-xs px-3 py-1.5 rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 focus:outline-none focus:ring-2 focus:ring-purple-500/60">
+                        Añadir
+                    </button>
+                    <button type="button" id="snippet-cancel-btn" onclick="cancelSnippetEdit()"
+                        class="text-xs px-3 py-1.5 rounded text-white/40 hover:text-white/60 hover:bg-white/5 hidden">
+                        Cancelar edición
+                    </button>
+                </div>
+                <div id="snippet-trigger-warning" role="alert" class="text-xs text-amber-300 mb-2 hidden"></div>
+                <div>
+                    <label for="snippet-body" class="text-xs text-white/55 block mb-1">Contenido a pegar <span class="text-red-400">*</span></label>
+                    <textarea id="snippet-body" rows="3" placeholder="Saludos,&#10;Johann Valderrama"
+                        class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80
+                        placeholder-white/45 focus:outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-white/45 w-full" required></textarea>
+                </div>
+            </form>
+            <div id="snippet-form-error" role="alert" aria-live="assertive" class="text-xs text-red-300 mb-3 hidden"></div>
+
+            <div id="snippet-list" class="space-y-1">
+                <div class="text-xs text-white/20">Cargando...</div>
+            </div>
+        </div>
+
         <!-- Vista Dictados (home) -->
         <div id="dictados-view">
         <div class="grid gap-3 mb-4" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))" id="stats-row">
@@ -1498,12 +1537,13 @@
             dictados: 'dictados-view',
             reunion: 'meeting-panel',
             diccionario: 'dictionary-panel',
+            snippets: 'snippets-panel',
             url: 'url-queue-panel',
             atajos: 'shortcuts-panel',
             ajustes: 'settings-panel',
         };
         const _VIEW_TITLES = {
-            dictados: 'Dictados', reunion: 'Reunión', diccionario: 'Diccionario',
+            dictados: 'Dictados', reunion: 'Reunión', diccionario: 'Diccionario', snippets: 'Snippets',
             url: 'Transcribir desde URL', atajos: 'Atajos de teclado', ajustes: 'Ajustes',
         };
         let _route = 'dictados';
@@ -1534,6 +1574,7 @@
             // Entrada de vista: hooks de montaje
             if (route === 'ajustes') loadSettings();
             if (route === 'diccionario') { loadDictionary().then(() => _applyPendingDictPrefill()); }
+            if (route === 'snippets') loadSnippets();
             if (route === 'url') {
                 loadUrlQueue().then(summary => {
                     if (summary && (summary.pending > 0 || summary.processing > 0)) _startUqPoll();
@@ -1554,6 +1595,7 @@
             { label: 'Ir a Dictados', icon: 'mic', run: () => navigate('dictados') },
             { label: 'Ir a Reuniones', icon: 'chat', run: () => navigate('reunion') },
             { label: 'Ir a Diccionario', icon: 'book', run: () => navigate('diccionario') },
+            { label: 'Ir a Snippets', icon: 'copy', run: () => navigate('snippets') },
             { label: 'Ir a Transcribir desde URL', icon: 'play', run: () => navigate('url') },
             { label: 'Ir a Atajos de teclado', icon: 'keyboard', run: () => navigate('atajos') },
             { label: 'Ir a Ajustes', icon: 'settings', run: () => navigate('ajustes') },
@@ -2526,6 +2568,177 @@
             input.value = '';
             setTimeout(() => resultEl.classList.add('hidden'), 5000);
             await loadDictionary();
+        }
+
+        // ---------------------------------------------------------------
+        // Snippets (unidad 4c de PLAN-DICTADO-2026-07-31, Ola 4)
+        // Copia deliberada del patrón del panel Diccionario (loadX/renderX/
+        // toggleX/deleteX + _showXError). La edición in-place (startEdit/
+        // cancelEdit) sí hace falta aquí: el Diccionario no permite editar
+        // una entrada existente, solo añadir o borrar, y el encargo de esta
+        // unidad pide alta/edición/borrado/activar-desactivar/listado.
+        // ---------------------------------------------------------------
+        let _snippets = [];
+        let _snippetEditingId = null;
+
+        // Espejo en JS de db.database.normalize_trigger. Python (el CRUD) es
+        // la única fuente de verdad para la unicidad real; esto es SOLO para
+        // avisar de un choque de disparador ANTES del submit — el servidor
+        // vuelve a validar siempre y su 409 manda si este aviso se equivoca.
+        // toLowerCase() en vez de casefold() real es una aproximación
+        // aceptable para un aviso temprano, no para la decisión final.
+        function _normalizeTriggerJs(text) {
+            return (text || '')
+                .normalize('NFKD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase()
+                .trim()
+                .replace(/\s+/g, ' ');
+        }
+
+        function checkSnippetTriggerDuplicate() {
+            const input = document.getElementById('snippet-trigger');
+            const warning = document.getElementById('snippet-trigger-warning');
+            const btn = document.getElementById('snippet-submit-btn');
+            if (!input || !warning || !btn) return;
+            const key = _normalizeTriggerJs(input.value);
+            const clash = !!key && _snippets.some(s => s.trigger_key === key && s.id !== _snippetEditingId);
+            warning.classList.toggle('hidden', !clash);
+            if (clash) warning.textContent = 'Ya existe un snippet con este disparador (mayúsculas y acentos no cuentan como distintos). Elige otra frase.';
+            btn.disabled = clash;
+        }
+
+        async function loadSnippets() {
+            try {
+                const res = await fetch('/api/snippets');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                _snippets = data.snippets || [];
+                renderSnippetList(_snippets);
+            } catch (ex) {
+                _showSnippetError('No se pudo cargar la lista de snippets');
+            }
+        }
+
+        function renderSnippetList(list) {
+            const container = document.getElementById('snippet-list');
+            if (!container) return;
+            if (!list.length) {
+                container.innerHTML = '<div class="text-xs text-white/55 py-2">Aún no hay snippets. Escribe un disparador y el texto a pegar arriba, y pulsa Añadir.</div>';
+                return;
+            }
+            container.innerHTML = list.map(s => {
+                const checked = s.enabled ? 'checked' : '';
+                const hitBadge = (s.hit_count > 0)
+                    ? `<span class="text-white/55 text-xs ml-1" title="Veces que se expandió en un dictado">×${s.hit_count}</span>`
+                    : '';
+                return `
+                <div class="py-1.5 border-b border-white/[0.04]" data-snippet-id="${s.id}">
+                    <div class="flex items-center gap-3">
+                        <label class="toggle-switch flex-shrink-0">
+                            <input type="checkbox" ${checked} aria-label="Activar o desactivar este snippet" onchange="toggleSnippetEnabled(${s.id}, this.checked)">
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span class="text-sm flex-1 cursor-pointer text-preview" onclick="this.classList.toggle('expanded')" title="Clic para ver el contenido completo">
+                            <span class="text-purple-300">${escapeHtml(s.trigger)}</span>${hitBadge}
+                            <span class="text-white/40 mx-1">→</span>
+                            <span class="text-white/70">${escapeHtml(s.body)}</span>
+                        </span>
+                        <button onclick="startSnippetEdit(${s.id})" aria-label="Editar"
+                            class="text-white/45 hover:text-white/70 text-xs p-2 rounded hover:bg-white/5" title="Editar">${ICONS.pencil}</button>
+                        <button onclick="deleteSnippet(${s.id})" aria-label="Eliminar"
+                            class="text-white/55 hover:text-red-400 text-xs p-2 rounded hover:bg-red-500/10" title="Eliminar">${ICONS.close}</button>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function _showSnippetError(msg) {
+            const el = document.getElementById('snippet-form-error');
+            if (!el) { alert(msg); return; }
+            el.textContent = msg;
+            el.classList.remove('hidden');
+            setTimeout(() => el.classList.add('hidden'), 6000);
+        }
+
+        function startSnippetEdit(id) {
+            const s = _snippets.find(x => x.id === id);
+            if (!s) return;
+            _snippetEditingId = id;
+            document.getElementById('snippet-edit-id').value = id;
+            document.getElementById('snippet-trigger').value = s.trigger;
+            document.getElementById('snippet-body').value = s.body;
+            document.getElementById('snippet-submit-btn').textContent = 'Guardar cambios';
+            document.getElementById('snippet-cancel-btn').classList.remove('hidden');
+            checkSnippetTriggerDuplicate();
+            document.getElementById('snippet-trigger').focus();
+        }
+
+        function cancelSnippetEdit() {
+            _snippetEditingId = null;
+            document.getElementById('snippet-edit-id').value = '';
+            document.getElementById('snippet-form').reset();
+            document.getElementById('snippet-submit-btn').textContent = 'Añadir';
+            document.getElementById('snippet-submit-btn').disabled = false;
+            document.getElementById('snippet-cancel-btn').classList.add('hidden');
+            document.getElementById('snippet-trigger-warning').classList.add('hidden');
+        }
+
+        async function submitSnippetForm(e) {
+            e.preventDefault();
+            const trigger = document.getElementById('snippet-trigger').value.trim();
+            const body = document.getElementById('snippet-body').value;
+            if (!trigger || !body.trim()) return;
+            const editId = _snippetEditingId;
+            const url = editId ? ('/api/snippets/' + editId) : '/api/snippets';
+            const method = editId ? 'PUT' : 'POST';
+            try {
+                const res = await fetch(url, {
+                    method,
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({trigger, body}),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    _showSnippetError(err.error || ('Error ' + res.status));
+                    return;
+                }
+            } catch (ex) {
+                _showSnippetError('Error de red: ' + ex);
+                return;
+            }
+            cancelSnippetEdit();
+            await loadSnippets();
+        }
+
+        async function deleteSnippet(id) {
+            if (!confirm('¿Eliminar este snippet?')) return;
+            try {
+                const res = await fetch('/api/snippets/' + id, {method: 'DELETE'});
+                if (!res.ok && res.status !== 204) {
+                    const err = await res.json().catch(() => ({}));
+                    _showSnippetError(err.error || ('Error ' + res.status));
+                    return;
+                }
+            } catch (ex) {
+                _showSnippetError('Error de red: ' + ex);
+                return;
+            }
+            if (_snippetEditingId === id) cancelSnippetEdit();
+            await loadSnippets();
+        }
+
+        async function toggleSnippetEnabled(id, enabled) {
+            try {
+                await fetch('/api/snippets/' + id, {
+                    method: 'PATCH',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled}),
+                });
+            } catch (ex) {
+                _showSnippetError('Error de red: ' + ex);
+            }
+            await loadSnippets();
         }
 
         // --- Añadir al diccionario desde historial (selección de texto) ---
