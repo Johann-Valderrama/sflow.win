@@ -270,8 +270,33 @@ un ojo; el estado computado sí se verificó.
   - **Sin ojo humano encima todavía:** el panel de Transform (Qt) y la sección nueva de Ajustes se
     verificaron con widget real y tests, no con captura. Mismo límite del entorno declarado en la
     Ola 2/4.
+  - **CINCO ARREGLOS TRAS EL PRIMER USO REAL** (`323a951`, `23bc8e8`, `341e046`, `5f76809`,
+    `5342a0d`, `ac0f055`), todos de fallos que Johann encontró usando la app y que las cuatro capas
+    de verificación no podían ver: (1) el Ctrl+C no copiaba con AltGr aún sostenido; (2) el arreglo
+    de eso desincronizaba el propio listener y se retiró entero; (3) reentrada y ventana destino sin
+    identificador de solicitud; (4) **el panel no tenía foco, así que pulsar el número del prompt le
+    BORRABA el texto seleccionado** (era un modo del HUD, que lleva `WindowDoesNotAcceptFocus`
+    permanente; nace `ui/transform_panel.py` como ventana propia); (5) el atajo pasa a
+    `RegisterHotKey` de Win32 (`core/global_hotkey.py`), que hace que Windows lo CONSUMA y la app en
+    foco no lo reciba. **Johann confirmó el 2026-08-01 que AltGr+X funciona end-to-end.**
+  - **LO QUE LO CERRÓ FUE UNA PREGUNTA SUYA: "¿no hiciste test e2e?".** No lo había, y ese era el
+    problema entero: tests herméticos, guardianes estructurales, mutaciones y cuatro auditores, y
+    **todas las capas sustituían justo la pieza que fallaba**. En una feature que vive de inyectar y
+    recibir teclas del sistema, un doble de la capa de teclado no verifica nada. Nace
+    `test_transform_e2e.py` (raíz, fuera de la suite, como `test_loopback.py`), que corre el flujo
+    completo con teclas y ventanas reales y solo finge el LLM. Encontró un fallo destructivo en su
+    primera corrida útil. **Sus tres candados existen porque su primera versión escribió dentro de
+    una nota sin guardar de Johann**: Notepad 11 es de pestañas, así que lanzarlo se lo entrega a la
+    instancia abierta y `GetForegroundWindow` devolvió una ventana ajena, cosa que nunca se comprobó.
+  - **Cambio de EJE, no un sexto intento:** cinco veces falló "buscar una combinación que la app no
+    interprete"; la respuesta depende de cada aplicación y no se puede cerrar por búsqueda. Con
+    `RegisterHotKey` deja de importar. Corolario caro: cambiarle el atajo a Johann fue un arreglo
+    correcto a un problema que NO era el suyo, y le rompió lo que le funcionaba. **Antes de cambiar
+    algo que el usuario ya usa, confirmar que el fallo que se arregla es EL SUYO.**
   - **Next action:** ventana nueva con `Lee docs/PLAN-DICTADO-2026-07-31.md y ejecuta el Kickoff
-    Ola 5.` Modelo: `Opus.H` o `Fable.H`. Queda solo la **Ola 5** (Command Mode: voz + selección),
+    Ola 5.` Modelo: `Opus.H` o `Fable.H`. **Antes de dar por buena cualquier unidad de la Ola 5, correr
+    `venv\Scripts\python.exe test_transform_e2e.py`**: Command Mode reusa exactamente las piezas que
+    fallaron aquí (captura, atajo, panel, pegado). Queda solo la **Ola 5** (Command Mode: voz + selección),
     que reusa TODO lo de la Ola 3 y solo agrega transcribir la orden hablada. Ojo: la regla durable
     de `3z` le aplica igual, y el identificador de solicitud de `866af43` también.
   - (Referencia histórica, la Next action que abrió esta ola:) ventana nueva con `Lee

@@ -616,6 +616,27 @@ esto), el saldo son tres lecciones que ninguna verificación previa había podid
    Más dos hilos de captura compitiendo por el estado global, y el prompt elegido viviendo en un
    atributo compartido.
 
+4. **Y el que lo cerró todo, que fue una PREGUNTA de Johann: "¿no hiciste test e2e?".** No lo había.
+   Cuatro capas de verificación (tests herméticos, guardianes estructurales, mutaciones, cuatro
+   auditores) y ninguna podía ver los fallos, porque **todas sustituían justo la pieza que fallaba**:
+   los tests reemplazaban `_send_ctrl_c`, reemplazaban el forzado de teclas, y llamaban
+   `keyPressEvent` a mano en vez de pulsar la tecla. **En una feature que vive de INYECTAR y RECIBIR
+   teclas del sistema, un doble de la capa de teclado no verifica nada.** Nace
+   `test_transform_e2e.py`, que corre el flujo completo con teclas, ventanas y portapapeles reales y
+   solo finge el LLM. En su primera corrida útil encontró que el propio atajo insertaba una "X" sobre
+   la selección.
+5. **El atajo terminó en `RegisterHotKey` de Win32, y ese fue un cambio de EJE, no otro intento.**
+   Cinco veces falló lo mismo: buscar una combinación que la aplicación de abajo no interpretara
+   (medido: `AltGr+X` y `Ctrl+Alt+X` insertan; `Ctrl+Shift+X` no lo hace en un `QTextEdit` pero sí
+   destruía la selección en la app real de Johann). La búsqueda no se podía cerrar porque la respuesta
+   depende de cada aplicación. Con `RegisterHotKey`, Windows le entrega la combinación a Vflow y **no
+   la propaga**: deja de importar qué hace esa tecla, porque la app no la recibe. Y así el atajo pudo
+   volver a ser `AltGr+X`, que es el que Johann ya tenía en la mano.
+   > **Corolario que se paga caro:** cambiarle el atajo fue un arreglo correcto a un problema que NO
+   > era el suyo. El suyo (el panel sin foco) ya estaba arreglado, y el cambio le rompió lo que le
+   > funcionaba. Antes de cambiar algo que el usuario ya usa, confirmar que el fallo que se está
+   > arreglando es EL SUYO.
+
 **Y la lección de método, que es la que se repite:** en esta ola pasó TRES veces que algo parecía un
 guardián y no lo era. Un test de las dos piezas que no comprueba que alguien las conecte; un test
 que parcheaba la clase cuando el objeto ya había atado sus métodos; y un script de mutación que
