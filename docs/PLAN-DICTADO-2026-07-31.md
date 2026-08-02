@@ -763,6 +763,60 @@ Verificación de la ola: la misma de la Ola 3, dos `verificador-qa` read-only co
 ortogonales, más el E2E.
 ```
 
+### Ola 5 EJECUTADA (2026-08-01)
+
+Dos commits: `4ef30d8` (la ola) y `a2ac38e` (el E2E), más `e0e5290` (documentación). Dirigió y
+ejecutó `Opus.H` inline. Suite 1136 → **1196 pass, 0 fail**. La ola resultó pequeña, que es lo que
+el plan predijo: casi todo el trabajo estaba hecho y lo nuevo son ~90 líneas de `main.py` y una
+función en `core/transform.py`.
+
+**Las cinco cosas que el kickoff mandó no re-aprender se respetaron, y tres decidieron diseño:**
+
+- **El atajo va por `RegisterHotKey`** (punto 4 del kickoff), AltGr+V, id propio. Consecuencia que
+  el kickoff no anticipaba y que decidió la forma entera de la interacción: **`RegisterHotKey`
+  solo avisa del PRESS**, no hay evento de "soltar". Así que hold-to-talk (hablar mientras se
+  sostiene el atajo, que es lo que hace el dictado con Ctrl+Alt) **no es construible por esta
+  vía**, y la escucha tuvo que ser un toggle. Enter en el panel cierra la escucha, que además es
+  mejor que la segunda pulsación: no obliga a volver a sostener AltGr, que es justo lo que rompía
+  la captura en la Ola 3.
+- **La regla durable de `3z` aplicó tal cual** (punto 3): no se persiste nada, y la orden hablada
+  es la tentación nueva porque se parece a un dictado. No crea fila, no tiene `raw_text`, y su
+  transcripción no pide crudo.
+- **Los dos mensajes separados** (punto 2) se resolvieron extrayendo `_wrap_selected_text`, para
+  que los delimitadores del texto ajeno los arme UNA sola función en los dos caminos. Con dos
+  copias del formato, un cambio en una dejaría al otro camino con otro blindaje sin que nada lo
+  delatara.
+- **El E2E se extendió y se corrió** (punto 1), y encontró un obstáculo real de método: **con
+  Vflow corriendo, Windows le niega el atajo al script**, porque es el mismo mecanismo que hace
+  que la feature funcione. Se resolvió pudiendo correr un escenario suelto en vez de cerrarle la
+  aplicación al usuario. El escenario nuevo pasa: el atajo no llegó a la aplicación, la captura
+  devolvió `ok`, el panel recibió los dos Enter y el texto quedó reemplazado.
+
+**Lo que NO estaba en el plan y hubo que decidir:**
+
+- **El `recorder` es el MISMO objeto que usa el dictado**, y AltGr ES Ctrl+Alt, así que el propio
+  atajo de Command Mode puede armar un dictado (`ARMING_DELAY`) encima de la instrucción que el
+  usuario está hablando. `_on_hotkey_pressed`, `_on_translate_pressed` y AltGr+X lo rechazan
+  mientras Command Mode escucha. Se evaluó un segundo `AudioRecorder` y se descartó: dos flujos
+  peleándose el micrófono es peor que una guarda explícita.
+- **La pill vuelve a IDLE al terminar de hablar, no a PROCESSING.** Poner PROCESSING parecía lo
+  natural (es lo que hace el dictado), pero se queda pegada cuando el usuario descarta con Esc, y
+  descartar es un final legítimo y frecuente aquí: es el control de G1-A. El que informa de la
+  espera es el panel, que está delante y con el foco.
+- **Se muestra la instrucción ENTENDIDA antes de esperar al modelo.** Habilita una decisión
+  concreta: si Whisper oyó otra cosa, se descarta en el acto en vez de esperar un resultado que
+  ya se sabe malo.
+
+**Lección de método, y es la misma que esta ola ya había pagado dos veces:** de cuatro mutaciones
+deliberadas, **una no tumbó nada**. El guardián que debía vigilar que un dictado no arranque sobre
+la instrucción comprobaba que el string `self._command_listening` estuviera en el fuente del
+método, así que `if False and self._command_listening:` pasaba tranquilo. Se reescribió como test
+de comportamiento **con su control** (sin Command Mode, el dictado SÍ arranca), porque esos dos
+métodos envuelven el cuerpo en un `try/except` que se traga todo: sin el control, un doble
+incompleto haría pasar el test por la razón equivocada (el recorder no arranca porque algo reventó
+antes, no porque la guarda funcione). Las mutaciones se revirtieron a mano, nunca con
+`git checkout`.
+
 ---
 
 ## La Ola 6 SE ELIMINÓ (G2-C: el dashboard se queda en el navegador)
