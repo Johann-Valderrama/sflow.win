@@ -231,6 +231,56 @@ un ojo; el estado computado sí se verificó.
   - **🙋 QUEDA UNA DECISIÓN DE JOHANN, sin bloquear nada:** ¿el default de `LOCAL_WHISPER_MODEL` pasa
     de `small` a `medium`, ahora que la GPU lo vuelve viable? Está escrita con su tradeoff en
     `docs/PENDIENTES.md` §3. El default sigue en `small` hasta que él decida.
+- **OLA 5 COMPLETA (2026-08-01), Command Mode: 6 commits** `4ef30d8` (la ola) → `a2ac38e` (E2E) →
+  `e0e5290` (CLAUDE.md §24) → `f73eda2` (plan) → `ebfdbb4` (test que pidió un verificador).
+  Suite 1136 → **1197 pass, 0 fail**. Dirigió y ejecutó `Opus.H` inline; verificaron 2
+  `verificador-qa` read-only con lentes ortogonales (`@sonnet-5` y `@haiku-4.5`), **los dos PASS**.
+  **Con esto el plan PLAN-DICTADO queda AGOTADO: sus siete olas ejecutables están cerradas.**
+  - **Qué es:** seleccionas texto en cualquier app, pulsas **AltGr+V**, DICES qué hacer con él,
+    Enter cierra la escucha y el resultado aparece en el mismo panel de la Ola 3 (Enter aplica,
+    Esc descarta). Salió pequeña, como el plan predijo: ~90 líneas de `main.py` y una función en
+    `core/transform.py`; todo lo demás se reusó.
+  - **Lo que decidió la forma de la interacción, y no estaba previsto:** `RegisterHotKey` solo
+    avisa del PRESS, **no existe evento de soltar**, así que hold-to-talk (hablar mientras se
+    sostiene el atajo, como hace el dictado con Ctrl+Alt) NO es construible por esa vía. La
+    escucha tuvo que ser un toggle, con Enter en el panel como cierre principal, que además evita
+    que el usuario vuelva a sostener AltGr (sostenerlo era justo lo que rompía la captura en la
+    Ola 3). Cosechado a la memoria de OPS: `gotchas-tecnicos-hijos.md`.
+  - **Guarda nueva y necesaria:** el `recorder` es el MISMO objeto que usa el dictado, y AltGr ES
+    Ctrl+Alt, así que el propio atajo podía armar un dictado encima de la instrucción hablada.
+    `_on_hotkey_pressed`, `_on_translate_pressed` y AltGr+X lo rechazan mientras escucha.
+  - **El CUARTO flujo del contrato de texto (CLAUDE.md §19) nació, y su eje de ALCANCE lo resolvió
+    sin discusión:** las pasadas 3-5 (smart commands, snippets, reformateo) NO corren aquí, porque
+    el hablante es el usuario pero el destino de lo que dice no es la ventana en foco, es el
+    mensaje `system` de un modelo. Ese eje se escribió prediciendo que la tabla envejecería.
+  - **LO QUE ENCONTRÓ LA MUTACIÓN Y NO LOS TESTS:** de cuatro mutaciones deliberadas, **una no
+    tumbó nada**. El guardián del invariante más caro (que un dictado no arranque sobre la
+    grabación viva) comprobaba que el string `self._command_listening` estuviera en el fuente del
+    método, así que `if False and self._command_listening:` pasaba tranquilo. Se reescribió como
+    test de comportamiento **con su control** (sin Command Mode, el dictado SÍ arranca), porque
+    esos métodos envuelven el cuerpo en un `try/except` que se traga todo: sin el control, un doble
+    incompleto haría pasar el test por la razón equivocada. Es el tercer caso del repo de "algo que
+    parecía guardián y no lo era"; las tres veces lo cazó mutar, nunca leer.
+  - **Lo que encontró un verificador y los tests de la unidad no:** había test del fallo al
+    ARRANCAR el micrófono y ninguno del fallo al DETENERLO, siendo que ahí es donde el orden de
+    limpieza importa (si el estado no se limpiara antes del `try`, un fallo dejaría la app
+    creyendo que sigue escuchando y el atajo muerto para siempre). Cerrado en `ebfdbb4`.
+  - **Obstáculo de método que se resolvió sin tocar la app de Johann:** con Vflow CORRIENDO,
+    Windows le niega el atajo al script E2E, que es el mismo mecanismo que hace que la feature
+    funcione. El E2E acepta un escenario suelto
+    (`venv\Scripts\python.exe test_transform_e2e.py command`) y así se verificó el escenario nuevo
+    con su Vflow vivo. **El escenario nuevo PASA con teclas, ventanas y portapapeles reales**:
+    Windows consumió AltGr+V sin que llegara a la aplicación, y el panel recibió los dos Enter.
+  - **🙋 SIN OJO HUMANO todavía (async, no bloquea nada):** falta que Johann use Command Mode en su
+    app real. Los dos verificadores y el E2E cubren el mecanismo; lo que ninguno puede juzgar es si
+    Whisper entiende bien una instrucción corta dicha rápido, y si el toggle se siente natural
+    frente a un mantener-pulsado. Nota: para probarlo hay que REINICIAR Vflow (el atajo se registra
+    al arrancar). Pasos: selecciona un párrafo → AltGr+V → di "ponlo más corto" → Enter → revisa lo
+    que dice que entendió → Enter para aplicar, o Esc.
+  - **Next action:** el plan PLAN-DICTADO no tiene más olas ejecutables. Lo que queda vivo en el
+    repo son las **pruebas físicas pendientes** de la sección de arriba, la decisión abierta de
+    `LOCAL_WHISPER_MODEL` (`docs/PENDIENTES.md` §3), y el pendiente **SIN DISEÑAR** del Ctrl+V del
+    dictado (`docs/PENDIENTES.md` §5).
 - **OLA 3 COMPLETA (2026-08-01), Transform sobre selección: 6 commits** `9bde38e` (`3z`, diseño) →
   `ea0afb8` (`3a`) → `0cc26e1` (`3b`) → `bd22acc` (`3c`) → `6a07825` (`3d`) → `866af43` (`3d-fix`).
   Suite 1042 → **1125 pass, 0 fail**. Dirigió y ejecutó `Opus.H` inline; verificaron 2
@@ -293,7 +343,8 @@ un ojo; el estado computado sí se verificó.
     `RegisterHotKey` deja de importar. Corolario caro: cambiarle el atajo a Johann fue un arreglo
     correcto a un problema que NO era el suyo, y le rompió lo que le funcionaba. **Antes de cambiar
     algo que el usuario ya usa, confirmar que el fallo que se arregla es EL SUYO.**
-  - **Next action:** ventana nueva con `Lee docs/PLAN-DICTADO-2026-07-31.md y ejecuta el Kickoff
+  - **Next action (SUPERADA el 2026-08-01: la Ola 5 se ejecutó, ver su entrada arriba):** ventana
+    nueva con `Lee docs/PLAN-DICTADO-2026-07-31.md y ejecuta el Kickoff
     Ola 5 (esta al final de la seccion "Ola 5").` Modelo: `Opus.H` o `Fable.H`. Ese kickoff ya lleva
     dentro las CINCO cosas que esta ola pago y que un agente nuevo repetiria. **Antes de dar por buena cualquier unidad de la Ola 5, correr
     `venv\Scripts\python.exe test_transform_e2e.py`**: Command Mode reusa exactamente las piezas que
