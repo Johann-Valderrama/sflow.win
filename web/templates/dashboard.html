@@ -840,7 +840,7 @@
                     <span class="set-sec-toggle"><span class="set-sec-toggle-label">Mostrar</span></span>
                 </button>
                 <div id="sec-transform-body" class="set-sec-body space-y-3">
-                    <p class="text-xs text-white/55">Seleccionas texto en cualquier aplicación, pulsas <strong><span id="cfg-transform-hotkey">Ctrl+Shift+X</span></strong>, eliges qué hacer con el número, y el resultado <strong>aparece primero en un panel</strong>: se aplica con Enter y se descarta con Esc. Nunca reemplaza tu texto sin que lo hayas visto.</p>
+                    <p class="text-xs text-white/55">Seleccionas texto en cualquier aplicación, pulsas <strong><span id="cfg-transform-hotkey">AltGr+X</span></strong>, eliges qué hacer con el número, y el resultado <strong>aparece primero en un panel</strong>: se aplica con Enter y se descarta con Esc. Nunca reemplaza tu texto sin que lo hayas visto.</p>
 
                     <div id="cfg-transform-aviso" class="p-3 rounded-lg bg-amber-500/[0.06] border border-amber-500/20">
                         <p class="text-xs text-amber-300/80" id="cfg-transform-aviso-texto"></p>
@@ -2068,7 +2068,7 @@
                 const problema = document.getElementById('cfg-transform-aviso-problema');
                 problema.textContent = aviso.problema || '';
                 problema.classList.toggle('hidden', !aviso.problema);
-                document.getElementById('cfg-transform-hotkey').textContent = data.hotkey || 'Ctrl+Shift+X';
+                document.getElementById('cfg-transform-hotkey').textContent = data.hotkey || 'AltGr+X';
                 cont.innerHTML = (data.prompts || []).map((p, i) => `
                     <div class="p-2.5 rounded-lg bg-white/[0.02] border border-white/[0.06]">
                         <div class="flex items-center gap-2 mb-1">

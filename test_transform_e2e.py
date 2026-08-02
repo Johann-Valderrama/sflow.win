@@ -48,7 +48,7 @@ from PyQt6.QtWidgets import QApplication, QTextEdit
 from pynput.keyboard import Controller, Key
 
 from core import clipboard, transform
-from core.hotkey import HotkeyListener
+from core.global_hotkey import GlobalHotkey
 from ui.transform_panel import TransformPanel
 
 _user32 = ctypes.windll.user32
@@ -104,7 +104,7 @@ def main() -> int:
 
     panel = TransformPanel()
     estado = {"captura": None, "prompt": None, "pegado": None, "hwnd": None}
-    hotkey = HotkeyListener()
+    hotkey = GlobalHotkey()
 
     # La captura corre EN UN HILO, igual que main.py (unidad 3a-fix2). No es un
     # detalle del arnés: con `capture_selection` bloqueando el hilo de Qt, Qt no
@@ -145,10 +145,12 @@ def main() -> int:
     def _on_accept(texto):
         estado["pegado"] = clipboard.paste_text(texto, hwnd=estado.get("hwnd"))
 
-    hotkey.transform_pressed.connect(_on_hotkey, Qt.ConnectionType.QueuedConnection)
+    hotkey.activated.connect(_on_hotkey, Qt.ConnectionType.QueuedConnection)
     panel.prompt_chosen.connect(_on_prompt)
     panel.accepted.connect(_on_accept)
-    hotkey.start()
+    if not hotkey.register(app):
+        print("FALLO: Windows negó el registro del atajo (otra app lo tiene tomado)")
+        return 1
 
     try:
         _exigir_foco_propio(hwnd_editor, "escribir la frase")
@@ -161,16 +163,22 @@ def main() -> int:
         _esperar(app, 0.4)
         print(f"2. texto seleccionado en la ventana de prueba: {FRASE!r}")
 
-        _exigir_foco_propio(hwnd_editor, "atajo Ctrl+Shift+X")
-        print("3. pulsando Ctrl+Shift+X DE VERDAD")
-        kb.press(Key.ctrl)
-        kb.press(Key.shift)
+        _exigir_foco_propio(hwnd_editor, "atajo AltGr+X")
+        print("3. pulsando AltGr+X DE VERDAD")
+        kb.press(Key.alt_gr)
         kb.press("x")
         time.sleep(0.08)
         kb.release("x")
-        kb.release(Key.shift)
-        kb.release(Key.ctrl)        # el usuario suelta, como en el uso real
+        kb.release(Key.alt_gr)      # el usuario suelta, como en el uso real
         _esperar(app, 2.5)
+        # LA comprobación que motivó RegisterHotKey: Windows tiene que haberse
+        # QUEDADO la tecla. Si el texto cambió, la "X" llegó a la aplicación y le
+        # destruyó la selección al usuario, que es el fallo que se está cerrando.
+        tras_atajo = editor.toPlainText()
+        if tras_atajo != FRASE:
+            print(f"   FALLO: el atajo llegó a la app y alteró el texto -> {tras_atajo!r}")
+            return 1
+        print("   el atajo NO llegó a la aplicación: el texto sigue intacto")
         print(f"   captura: {estado['captura']}")
         if not panel.is_open():
             print("   FALLO: el panel no se abrió")
@@ -194,7 +202,7 @@ def main() -> int:
         print(f"\nABORTADO POR CANDADO: {exc}")
         return 2
     finally:
-        hotkey.stop()
+        hotkey.unregister()
         panel.close_panel()
 
     _esperar(app, 0.5)

@@ -782,79 +782,75 @@ class TestNoHayCaminoAlternativo:
 # Unidad 3d: atajo y panel del dashboard
 # ---------------------------------------------------------------------------
 class TestAtajo:
-    """Ctrl+Shift+X, no AltGr+X. El cambio salió del E2E y está MEDIDO: AltGr+X
-    INSERTA una "X" en la app en foco, así que sobre un campo editable el propio
-    atajo reemplaza el texto seleccionado antes de poder copiarlo. Ctrl+Alt+X falla
-    igual (Windows lo trata como AltGr); Ctrl+Shift+X no inserta nada."""
+    """El atajo lo registra Windows con `RegisterHotKey`, no lo observa pynput.
 
-    def _listener(self):
+    Cinco intentos fallaron sobre el mismo eje ("elegir una combinación que la app
+    no interprete") antes de cambiar de eje. Medido en el camino: AltGr+X y
+    Ctrl+Alt+X insertan una "X" sobre la selección; Ctrl+Shift+X no lo hace en un
+    QTextEdit pero sí destruía la selección en la app real de Johann. Con
+    RegisterHotKey deja de importar: Windows entrega la combinación a Vflow y NO la
+    propaga, así que la app de abajo nunca la ve.
+    """
+
+    def test_es_altgr_x_o_sea_ctrl_alt_x(self):
+        from core import global_hotkey as gh
+
+        assert gh.TRANSFORM_VK == 0x58                       # 'X'
+        assert gh.TRANSFORM_MODS & gh.MOD_CONTROL
+        assert gh.TRANSFORM_MODS & gh.MOD_ALT
+        assert gh.TRANSFORM_MODS & gh.MOD_NOREPEAT, "sin NOREPEAT, mantenerlo pulsado dispara en bucle"
+        assert gh.TRANSFORM_LABEL == "AltGr+X"
+
+    def test_el_filtro_NO_hereda_de_QObject(self):
+        """El guardián de un fallo MUDO ya pagado: con
+        `class X(QObject, QAbstractNativeEventFilter)`, `installNativeEventFilter`
+        no se queja y `nativeEventFilter` NO SE LLAMA NUNCA (medido: 0 llamadas
+        contra 162 mensajes). El síntoma es "el atajo no hace nada"."""
+        from PyQt6.QtCore import QAbstractNativeEventFilter, QObject
+
+        from core import global_hotkey as gh
+
+        assert issubclass(gh._MessageFilter, QAbstractNativeEventFilter)
+        assert not issubclass(gh._MessageFilter, QObject)
+        assert not issubclass(gh.GlobalHotkey, QAbstractNativeEventFilter)
+
+    def test_el_filtro_solo_reacciona_a_SU_id(self, qapp):
+        import ctypes
+        import ctypes.wintypes
+
+        from core import global_hotkey as gh
+
+        disparos = []
+        filtro = gh._MessageFilter(0xB001, lambda: disparos.append(1))
+
+        def _mensaje(message, wparam):
+            msg = ctypes.wintypes.MSG()
+            msg.message = message
+            msg.wParam = wparam
+            return filtro.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(msg))
+
+        assert _mensaje(gh.WM_HOTKEY, 0xB001) == (True, 0)   # el suyo: consumido
+        assert disparos == [1]
+        assert _mensaje(gh.WM_HOTKEY, 0xB002) == (False, 0)  # de otro: se deja pasar
+        assert _mensaje(0x0100, 0xB001) == (False, 0)        # WM_KEYDOWN: no es lo suyo
+        assert disparos == [1]
+
+    def test_el_registro_negado_se_reporta_no_se_traga(self, qapp, monkeypatch):
+        """Si otra app ya tiene el atajo, Windows lo niega y el usuario tiene que
+        enterarse: un atajo que calladamente no hace nada es indistinguible de un bug."""
+        from core import global_hotkey as gh
+
+        monkeypatch.setattr(gh._user32, "RegisterHotKey", lambda *a: 0)
+        hk = gh.GlobalHotkey()
+        assert hk.register(qapp) is False
+        assert hk.is_registered() is False
+
+    def test_transform_pressed_ya_no_vive_en_el_listener_de_pynput(self):
+        """pynput OBSERVA las teclas pero no se las queda, así que no puede ser el
+        dueño de este atajo."""
         from core.hotkey import HotkeyListener
 
-        hk = HotkeyListener()
-        hk._ctrl_held = True
-        hk._shift_held = True
-        return hk
-
-    @staticmethod
-    def _tecla_x():
-        from unittest.mock import MagicMock
-
-        tecla = MagicMock()
-        tecla.vk = 0x58
-        return tecla
-
-    def test_ctrl_shift_x_emite_transform_pressed(self):
-        hk = self._listener()
-        recibido = []
-        hk.transform_pressed.connect(lambda: recibido.append(1))
-        hk._on_press(self._tecla_x())
-        assert recibido == [1]
-
-    def test_altgr_x_ya_NO_dispara(self):
-        """El atajo viejo destruía la selección del usuario: no puede seguir vivo."""
-        from core.hotkey import HotkeyListener
-
-        hk = HotkeyListener()
-        hk._alt_gr_held = True
-        recibido = []
-        hk.transform_pressed.connect(lambda: recibido.append(1))
-        hk._on_press(self._tecla_x())
-        assert recibido == []
-
-    def test_ctrl_alt_x_tampoco_dispara(self):
-        """Windows trata Ctrl+Alt como AltGr, así que insertaría igual."""
-        from core.hotkey import HotkeyListener
-
-        hk = HotkeyListener()
-        hk._ctrl_held = True
-        hk._alt_held = True
-        recibido = []
-        hk.transform_pressed.connect(lambda: recibido.append(1))
-        hk._on_press(self._tecla_x())
-        assert recibido == []
-
-    def test_el_auto_repeat_no_dispara_ocho_transforms(self):
-        """Windows repite on_press mientras la tecla sigue abajo: sin la supresión,
-        dejar X pulsada mandaría el texto al modelo decenas de veces."""
-        hk = self._listener()
-        recibido = []
-        hk.transform_pressed.connect(lambda: recibido.append(1))
-        tecla = self._tecla_x()
-        for _ in range(30):
-            hk._on_press(tecla)
-        assert recibido == [1]
-        hk._on_release(tecla)
-        hk._on_press(tecla)
-        assert recibido == [1, 1]
-
-    def test_la_x_sola_no_dispara_nada(self):
-        from core.hotkey import HotkeyListener
-
-        hk = HotkeyListener()
-        recibido = []
-        hk.transform_pressed.connect(lambda: recibido.append(1))
-        hk._on_press(self._tecla_x())
-        assert recibido == []
+        assert not hasattr(HotkeyListener, "transform_pressed")
 
 
 class TestReentrada:

@@ -792,12 +792,12 @@ referencia contra `large-v3-turbo`).
 
 ### 23. Transform sobre selección: el resultado se previsualiza, y nada se guarda (Ola 3 de PLAN-DICTADO, 2026-08-01)
 
-Seleccionas texto en cualquier aplicación, pulsas **Ctrl+Shift+X**, eliges uno de 8 prompts con su
+Seleccionas texto en cualquier aplicación, pulsas **AltGr+X**, eliges uno de 8 prompts con su
 número, y el resultado del modelo **aparece en un panel**: se aplica con Enter y se descarta con
 Esc. Es la decisión G1-A del plan, y el panel no es cosmético: es el control de seguridad de la
 feature, porque el insumo es texto que Vflow no produjo.
 
-> **CAMBIO DE COMPORTAMIENTO menor:** Ctrl+Shift+X pasa a estar tomado por Vflow. Se anuncia aquí en vez
+> **CAMBIO DE COMPORTAMIENTO menor:** AltGr+X pasa a estar tomado por Vflow, y de forma EXCLUSIVA (`RegisterHotKey`): la aplicación en foco ya no recibe esa combinación. Se anuncia aquí en vez
 > de colarse, mismo criterio que `SMART_COMMANDS_ENABLED` (sección 20) y `LOCAL_DEVICE` (sección 22).
 
 **Lo que NO hace, y es la decisión más importante de la ola (unidad `3z`):** un Transform **no crea
@@ -843,7 +843,7 @@ no tenga un deshacer decente.
   forma de que `main.py` pegue algo que el usuario no aceptó. El gate `silent` del modo proactivo **no
   aplica** a este panel: lo que muestra ya está en la pantalla del usuario, y se apaga en `silent` lo
   que Vflow empuja por su cuenta, no lo que el usuario acaba de pedir con un atajo.
-- **Un solo atajo para los 8**: Ctrl+Shift+X abre el panel con la lista numerada y se elige con 1-8. Ocho
+- **Un solo atajo para los 8**: AltGr+X abre el panel con la lista numerada y se elige con 1-8. Ocho
   atajos habrían sido ocho colisiones nuevas con IDEs y navegadores (historia ya pagada en este repo),
   y dejarlo solo en la bandeja habría contradicho la meta del plan de no tocar el mouse. En el
   selector, Enter no hace nada a propósito: no hay resultado que aplicar y un Enter perdido no debe
@@ -903,7 +903,7 @@ Edit `core/hotkey.py`:
 - **Mode 4 (AltGr+T toggle)**: Press AltGr+T once to start translation hands-free; press again to stop.
 - **AltGr+A (HUD proactivo, Ola 5)**: toggles the floating proactive HUD open/closed (same action as a right-click on the pill). Auto-repeat suppressed.
 - **AltGr+M ("me perdí", Ola 5)**: opens the HUD if closed and triggers an instant summary of the last ~2 minutes via `answer_live` (worker thread, non-blocking). Auto-repeat suppressed.
-- **Ctrl+Shift+X (Transform sobre selección, Ola 3 de PLAN-DICTADO)**: captura el texto seleccionado en la app en foco y abre el panel para elegir uno de los 8 prompts con su número (1-8); el resultado se previsualiza y se aplica con Enter o se descarta con Esc. Auto-repeat suprimido. Ver la sección 23.
+- **AltGr+X (Transform sobre selección, Ola 3 de PLAN-DICTADO)**: captura el texto seleccionado en la app en foco y abre el panel para elegir uno de los 8 prompts con su número (1-8); el resultado se previsualiza y se aplica con Enter o se descarta con Esc. Auto-repeat suprimido. Ver la sección 23.
 - To customize intervals, edit `DOUBLE_TAP_INTERVAL` in `config.py`.
 - **Arming Delay** — Edit `ARMING_DELAY` in `config.py` (default: 0.15s). Modes 1 and 3 (hold keys) require the hotkey combination to be pressed for this duration *without other keys* before recording starts. This prevents accidental triggers when using IDE shortcuts like Ctrl+Alt+L. Set to 0 for immediate activation (at the cost of possible misfires).
 

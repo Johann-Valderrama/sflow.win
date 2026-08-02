@@ -51,6 +51,7 @@ from PyQt6.QtGui import QIcon, QPixmap, QAction, QActionGroup
 
 from dotenv import set_key, unset_key
 from ui.pill_widget import PillWidget
+from core.global_hotkey import GlobalHotkey, TRANSFORM_LABEL
 from ui.hud_widget import HudWidget
 from ui.transform_panel import TransformPanel
 from core.recorder import AudioRecorder
@@ -673,6 +674,7 @@ class VflowApp(QObject):
         self.pill = PillWidget()
         self.hud = HudWidget()
         self.transform_panel = TransformPanel()
+        self.transform_hotkey = GlobalHotkey()
         # Indicador de captura en vivo del HUD (¿me está escuchando?): el HUD lee
         # los niveles por canal lock-free con su propio timer. get_levels() no toca
         # el lock de MEETING (floats atómicos), así que el VU no genera contención.
@@ -750,7 +752,7 @@ class VflowApp(QObject):
         self.hotkey.meeting_toggle.connect(self._on_meeting_toggle, Qt.ConnectionType.QueuedConnection)
         self.hotkey.highlight_pressed.connect(self._on_highlight, Qt.ConnectionType.QueuedConnection)
         self.hotkey.hud_toggle.connect(self._on_hud_toggle, Qt.ConnectionType.QueuedConnection)
-        self.hotkey.transform_pressed.connect(
+        self.transform_hotkey.activated.connect(
             self._on_transform_hotkey, Qt.ConnectionType.QueuedConnection
         )
         self.hotkey.lost_pressed.connect(self._on_lost_pressed, Qt.ConnectionType.QueuedConnection)
@@ -782,6 +784,18 @@ class VflowApp(QObject):
     def start(self):
         """Inicia el listener de hotkeys y muestra la pill en estado idle."""
         self.hotkey.start()
+        # Transform va por RegisterHotKey (Windows CONSUME la combinación, así que
+        # la app en foco no la recibe y no puede destruir la selección). Si Windows
+        # lo niega, otra aplicación lo tiene tomado: se AVISA, porque un atajo que
+        # calladamente no hace nada es indistinguible de un bug.
+        if not self.transform_hotkey.register(QApplication.instance()) and self.tray:
+            self.tray.showMessage(
+                "Vflow",
+                f"No se pudo registrar {TRANSFORM_LABEL} para Transform: otra "
+                f"aplicación ya lo tiene tomado.",
+                QSystemTrayIcon.MessageIcon.Warning,
+                6000,
+            )
         self.pill.show()
         self.pill.set_state(PillWidget.STATE_IDLE)
         self._meeting_sync_timer.start()
@@ -1430,7 +1444,7 @@ class VflowApp(QObject):
 
     @pyqtSlot()
     def _on_transform_hotkey(self):
-        """Ctrl+Shift+X: captura la selección y abre el panel para elegir qué hacer.
+        """AltGr+X: captura la selección y abre el panel para elegir qué hacer.
 
         Un solo atajo para los 8 prompts (unidad 3d). La captura ocurre AQUÍ y no
         después de elegir: para cuando el usuario lea la lista, el foco ya estará
@@ -1932,6 +1946,7 @@ def main():
 
     # Limpiar listener de hotkeys al salir
     app.aboutToQuit.connect(vflow.hotkey.stop)
+    app.aboutToQuit.connect(vflow.transform_hotkey.unregister)
 
     # Icono de bandeja del sistema
     tray = _setup_tray(app, port, vflow)  # noqa: F841 — debe mantenerse la referencia viva
