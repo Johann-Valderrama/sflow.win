@@ -95,6 +95,34 @@ venv\Scripts\python.exe test_loopback.py
 venv\Scripts\python.exe test_dual_capture.py
 ```
 
+## Trabajo en PARALELO: dos ventanas sobre el mismo checkout se pisan
+
+Este repo se trabaja a menudo con varias ventanas de Claude a la vez, y **dos sesiones sobre el
+MISMO working tree se revierten el árbol entre sí**: lo commiteado es inmune, lo que está sin
+commitear es lo único en riesgo. Pasó el 2026-08-01 (una ventana cerrando la Ola 3 y otra abriendo
+la Ola 5 con `main.py`, `core/` y `ui/` modificados a la vez).
+
+**Antes de editar nada, mira `git status`.** Si hay archivos modificados que NO son tuyos:
+
+1. **No los toques y no los commitees.** Commitea SIEMPRE por pathspec explícito
+   (`git commit -m msg -- <archivos>`): un `git commit -m msg` a secas se lleva todo el índice,
+   incluido el trabajo ajeno, dentro de un commit con tu mensaje.
+2. **Si necesitas editar un archivo que el otro tiene tomado, no lo hagas**: avisa y espera, o
+   trabaja en el worktree de abajo.
+3. **Nunca** `git checkout` sobre un archivo con trabajo sin commitear (tuyo o ajeno).
+
+**Segundo checkout ya creado** (`git worktree`, comparte el mismo `.git`, no duplica el repo):
+
+```
+C:\OPS\_VelOS\proyectos\Sflow.Win-w2        rama: windows-variant-paralelo
+```
+
+> **Tradeoff declarado, léelo antes de usarlo:** git NO permite la misma rama en dos checkouts, así
+> que ese worktree va en una rama distinta y su trabajo hay que FUSIONAR después. Para dos agentes
+> en features SEPARADAS es una ganancia clara; para dos agentes en la MISMA feature, coordinarse
+> suele salir más barato que fusionar. Si no se usa, se retira con
+> `git worktree remove ../Sflow.Win-w2` y `git branch -d windows-variant-paralelo`.
+
 ## Permissions Required
 
 - **Administrator** (optional): May be needed for global hotkeys in some apps
