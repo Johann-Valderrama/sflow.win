@@ -24,7 +24,13 @@ resto de la ola: se prefiere el fallo que se ve.
 Tomar el foco aquí no rompe nada del flujo: la selección ya está capturada en
 memoria antes de abrir el panel, y el pegado vuelve a la ventana destino por su
 HWND guardado (`paste_text(hwnd=...)`), no por el foco.
+
+La Ola 5 (Command Mode) le agrega un estado, `open_listening`, mientras Vflow graba
+la instrucción hablada. Que el panel tenga foco es justo lo que permite terminar de
+hablar con Enter sin volver a tocar el atajo, y por tanto sin que el usuario tenga
+que sostener AltGr mientras habla.
 """
+import html
 import logging
 
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -38,6 +44,15 @@ logger = logging.getLogger(__name__)
 
 _WIDTH = 460
 _HEIGHT = 340
+_PREVIEW_CHARS = 400
+
+
+def _preview(texto: "str | None") -> str:
+    """Recorte para MIRAR, nunca para transformar: lo que se manda al modelo es el
+    texto entero, y si no cabe se rechaza (``core/transform.py``). Aquí solo se
+    evita que una selección larga empuje los botones fuera de la ventana."""
+    texto = texto or ""
+    return texto if len(texto) <= _PREVIEW_CHARS else texto[:_PREVIEW_CHARS] + "…"
 
 
 class TransformPanel(QWidget):
@@ -47,6 +62,7 @@ class TransformPanel(QWidget):
     discarded = pyqtSignal()
     copy_original_requested = pyqtSignal(str)
     prompt_chosen = pyqtSignal(str)
+    listening_finished = pyqtSignal()       # Ola 5: "ya terminé de hablar"
 
     def __init__(self):
         super().__init__()
@@ -63,6 +79,7 @@ class TransformPanel(QWidget):
         self._picker = []
         self._original = None
         self._result = None
+        self._listening = False
         self._drag_pos = None
 
         root = QVBoxLayout(self)
@@ -157,9 +174,33 @@ class TransformPanel(QWidget):
     # API pública (la llama main.py)
     # ------------------------------------------------------------------
 
+    def open_listening(self, original: str):
+        """Command Mode (Ola 5): Vflow está grabando la instrucción hablada.
+
+        Muestra un trozo del texto capturado a propósito: es lo que se va a
+        transformar, y verlo aquí es lo que le permite al usuario abortar con Esc
+        si el atajo capturó algo distinto de lo que creía tener seleccionado. No
+        filtra nada nuevo (ya está en su pantalla, decisión 6 de la unidad 3z).
+        """
+        self._picker = []
+        self._listening = True
+        self._original = original
+        self._result = None
+        self.title.setText("Command Mode · te escucho")
+        self.hint.setText("Di qué hacer con este texto · Enter cuando termines · Esc cancela")
+        self.body.setText(
+            "<span style='color:rgba(255,255,255,0.45)'>Texto seleccionado:</span><br>"
+            + html.escape(_preview(original)).replace("\n", "<br>")
+        )
+        self.status.setVisible(False)
+        self.apply_btn.setEnabled(False)
+        self.copy_btn.setVisible(False)
+        self._present()
+
     def open_picker(self, original: str, opciones: list):
         """Paso 1: elegir cuál de los prompts aplicar, con su número."""
         self._picker = list(opciones or [])[:9]
+        self._listening = False
         self._original = original
         self._result = None
         self.title.setText("Transform · elige qué hacer")
@@ -181,6 +222,7 @@ class TransformPanel(QWidget):
         selector): sin él, "copiar el texto original" no tendría qué copiar.
         """
         self._picker = []
+        self._listening = False
         self._result = None
         if original is not None:
             self._original = original
@@ -196,6 +238,7 @@ class TransformPanel(QWidget):
         """Paso 3: el resultado, que NO se aplica hasta que el usuario diga."""
         if not self.isVisible():
             return
+        self._listening = False
         self._result = text
         self.hint.setText("Revisa antes de aplicar")
         self.body.setText(text)
@@ -205,6 +248,7 @@ class TransformPanel(QWidget):
     def show_error(self, message: str):
         if not self.isVisible():
             return
+        self._listening = False
         self._result = None
         self.hint.setText("No se pudo transformar")
         self.status.setText(message)
@@ -214,6 +258,7 @@ class TransformPanel(QWidget):
     def close_panel(self):
         """Cierra y BORRA de memoria el original y el resultado (unidad 3z)."""
         self._picker = []
+        self._listening = False
         self._original = None
         self._result = None
         self.body.setText("")
@@ -225,6 +270,9 @@ class TransformPanel(QWidget):
 
     def is_picker(self) -> bool:
         return bool(self._picker)
+
+    def is_listening(self) -> bool:
+        return self._listening
 
     # ------------------------------------------------------------------
 
@@ -263,7 +311,17 @@ class TransformPanel(QWidget):
             self._on_discard()
             event.accept()
             return
-        if self._picker:
+        if self._listening:
+            # Enter aquí cierra la grabación de la instrucción, NO aplica nada: no
+            # hay resultado todavía. Es el mismo criterio que el Enter del selector
+            # (un Enter perdido nunca puede volverse una aplicación que el usuario
+            # no revisó), y por eso `accepted` sigue teniendo un solo emisor.
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._listening = False
+                self.listening_finished.emit()
+                event.accept()
+                return
+        elif self._picker:
             # Enter NO elige nada aquí a propósito: no hay resultado que aplicar y
             # un Enter perdido no debe volverse una elección que el usuario no hizo.
             indice = key - Qt.Key.Key_1

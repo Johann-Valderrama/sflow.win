@@ -973,6 +973,7 @@ class TestCapturaConcurrente:
 
             self._capture_lock = _th.Lock()
             self._recording_active = False
+            self._command_listening = False   # Ola 5: el atajo también lo consulta
             self._transform_gen = 0
             self._transform_hwnd = None
             self.emitido = []
@@ -1035,7 +1036,10 @@ class TestCapturaConcurrente:
         app = self._AppFalsa()
         app._capture_lock.acquire()          # lo toma _start_capture_worker en producción
         app._capture_worker("formal")
-        assert app.emitido == [{"text": "TEXTO", "status": "ok", "prompt": "formal", "hwnd": 777}]
+        assert app.emitido == [
+            {"text": "TEXTO", "status": "ok", "prompt": "formal", "hwnd": 777,
+             "command": False}
+        ]
 
     def test_no_captura_en_medio_de_un_dictado(self):
         """El doble se pone en la INSTANCIA, no en la clase: el objeto falso ata sus

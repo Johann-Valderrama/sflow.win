@@ -51,7 +51,10 @@ from PyQt6.QtGui import QIcon, QPixmap, QAction, QActionGroup
 
 from dotenv import set_key, unset_key
 from ui.pill_widget import PillWidget
-from core.global_hotkey import GlobalHotkey, TRANSFORM_LABEL
+from core.global_hotkey import (
+    GlobalHotkey, TRANSFORM_LABEL,
+    COMMAND_HOTKEY_ID, COMMAND_MODS, COMMAND_VK, COMMAND_LABEL,
+)
 from ui.hud_widget import HudWidget
 from ui.transform_panel import TransformPanel
 from core.recorder import AudioRecorder
@@ -634,6 +637,7 @@ class VflowApp(QObject):
     dictation_manual_preset_consumed = pyqtSignal()       # unidad 2b: el preset manual armado se acaba de gastar
     transform_ready = pyqtSignal(dict)                    # unidad 3c: resultado de core.transform.transform_text
     transform_capture_ready = pyqtSignal(dict)            # 3a-fix2: resultado de la captura en hilo
+    command_heard = pyqtSignal(dict)                      # Ola 5: la instrucción hablada, ya transcrita
 
     def __init__(self):
         """Inicializa componentes (recorder, transcriber, DB, hotkey, pill) y conecta señales."""
@@ -675,6 +679,13 @@ class VflowApp(QObject):
         self.hud = HudWidget()
         self.transform_panel = TransformPanel()
         self.transform_hotkey = GlobalHotkey()
+        # Command Mode (Ola 5): también por RegisterHotKey, y por la misma razón que
+        # Transform (actúa sobre una selección, así que la tecla no puede llegar a
+        # la aplicación de abajo). Ver core/global_hotkey.py.
+        self.command_hotkey = GlobalHotkey(
+            hotkey_id=COMMAND_HOTKEY_ID, mods=COMMAND_MODS, vk=COMMAND_VK,
+            label=COMMAND_LABEL,
+        )
         # Indicador de captura en vivo del HUD (¿me está escuchando?): el HUD lee
         # los niveles por canal lock-free con su propio timer. get_levels() no toca
         # el lock de MEETING (floats atómicos), así que el VU no genera contención.
@@ -694,6 +705,14 @@ class VflowApp(QObject):
         self._transform_gen = 0
         self._transform_hwnd = None
         self._capture_lock = threading.Lock()  # 3a-fix3: una sola captura a la vez
+        # Command Mode (Ola 5): True mientras se graba la instrucción hablada. Es
+        # estado propio y NO _recording_active, que es del dictado: compartirlo
+        # haría que el safety timer del dictado intentara "soltar el atajo" sobre
+        # una grabación que no es suya.
+        self._command_listening = False
+        self._command_safety_timer = QTimer()
+        self._command_safety_timer.setSingleShot(True)
+        self._command_safety_timer.timeout.connect(self._stop_command_listening)
 
         # Contador de generación y guard anti-duplicado
         self._generation = 0
@@ -755,6 +774,9 @@ class VflowApp(QObject):
         self.transform_hotkey.activated.connect(
             self._on_transform_hotkey, Qt.ConnectionType.QueuedConnection
         )
+        self.command_hotkey.activated.connect(
+            self._on_command_hotkey, Qt.ConnectionType.QueuedConnection
+        )
         self.hotkey.lost_pressed.connect(self._on_lost_pressed, Qt.ConnectionType.QueuedConnection)
         self.meeting_stopped.connect(self._on_meeting_stopped, Qt.ConnectionType.QueuedConnection)
         self.transcription_done.connect(self._on_transcription_done, Qt.ConnectionType.QueuedConnection)
@@ -776,10 +798,13 @@ class VflowApp(QObject):
         self.transform_panel.accepted.connect(self._on_transform_accepted)
         self.transform_panel.copy_original_requested.connect(self._on_transform_copy_original)
         self.transform_panel.prompt_chosen.connect(self._on_transform_prompt_chosen)
+        self.transform_panel.listening_finished.connect(self._on_command_listening_finished)
+        self.transform_panel.discarded.connect(self._on_transform_discarded)
         self.transform_ready.connect(self._on_transform_ready, Qt.ConnectionType.QueuedConnection)
         self.transform_capture_ready.connect(
             self._on_transform_capture_ready, Qt.ConnectionType.QueuedConnection
         )
+        self.command_heard.connect(self._on_command_heard, Qt.ConnectionType.QueuedConnection)
 
     def start(self):
         """Inicia el listener de hotkeys y muestra la pill en estado idle."""
@@ -792,6 +817,14 @@ class VflowApp(QObject):
             self.tray.showMessage(
                 "Vflow",
                 f"No se pudo registrar {TRANSFORM_LABEL} para Transform: otra "
+                f"aplicación ya lo tiene tomado.",
+                QSystemTrayIcon.MessageIcon.Warning,
+                6000,
+            )
+        if not self.command_hotkey.register(QApplication.instance()) and self.tray:
+            self.tray.showMessage(
+                "Vflow",
+                f"No se pudo registrar {COMMAND_LABEL} para Command Mode: otra "
                 f"aplicación ya lo tiene tomado.",
                 QSystemTrayIcon.MessageIcon.Warning,
                 6000,
@@ -810,6 +843,14 @@ class VflowApp(QObject):
         El try/except interno de recorder.start() se conserva íntegro con su return
         temprano para mantener la semántica de fallo puntual de micrófono.
         """
+        if self._command_listening:
+            # Ola 5: el micrófono ya está grabando la instrucción de Command Mode y
+            # es el MISMO objeto recorder. Sin esta guarda, un Ctrl+Alt sostenido
+            # (fácil de disparar sin querer: AltGr ES Ctrl+Alt, y el atajo de
+            # Command Mode lo usa) arrancaría un segundo start() sobre una
+            # grabación viva y se llevaría por delante la instrucción hablada.
+            logger.info("dictado: hay una instrucción de Command Mode grabándose, se ignora")
+            return
         try:
             # Unidad 1.7: el bump de generación va BAJO _chunk_state_lock, igual que
             # el check+escritura de _chunk_worker — sin esto quedaba una data race
@@ -854,6 +895,10 @@ class VflowApp(QObject):
         El try/except interno de recorder.start() se conserva con su return temprano
         y el reset de _translate_mode para dejar el estado limpio ante fallo de micrófono.
         """
+        if self._command_listening:
+            # Misma guarda que en _on_hotkey_pressed: un solo recorder.
+            logger.info("traducción: hay una instrucción de Command Mode grabándose, se ignora")
+            return
         try:
             # Unidad 1.7: bump bajo el lock (ver _on_hotkey_pressed).
             with self._chunk_state_lock:
@@ -1455,6 +1500,13 @@ class VflowApp(QObject):
         HUD y el resto de la interfaz hasta un segundo y medio. Lo encontró un
         auditor independiente, no los tests.
         """
+        if self._command_listening:
+            # Ola 5: con una instrucción grabándose, esta captura leería una
+            # selección que ya no está (el foco lo tiene el panel) y además
+            # invalidaría la generación de la solicitud viva dejando el micrófono
+            # abierto. Se ignora, igual que con un dictado en curso.
+            logger.info("transform: hay una instrucción de Command Mode en curso, se ignora el atajo")
+            return
         if self._recording_active:
             # Defensa en profundidad (3a-fix3): hoy la espera de modificadores ya
             # impediría capturar en medio de un dictado con Ctrl+Alt, pero eso deja
@@ -1464,8 +1516,11 @@ class VflowApp(QObject):
             return
         self._start_capture_worker(None)
 
-    def _start_capture_worker(self, prompt_key):
+    def _start_capture_worker(self, prompt_key, command: bool = False):
         """Lanza la captura en background. ``prompt_key`` None = abrir el selector.
+
+        ``command=True`` es Command Mode (Ola 5): la misma captura, pero después se
+        graba la instrucción hablada en vez de mostrar el selector de prompts.
 
         UNA captura a la vez (``_capture_lock``, sin bloquear): dos pulsaciones
         seguidas del atajo lanzaban dos hilos que competían por el mismo estado
@@ -1476,9 +1531,11 @@ class VflowApp(QObject):
         if not self._capture_lock.acquire(blocking=False):
             logger.info("transform: ya hay una captura en curso, se ignora la pulsación")
             return
-        threading.Thread(target=self._capture_worker, args=(prompt_key,), daemon=True).start()
+        threading.Thread(
+            target=self._capture_worker, args=(prompt_key, command), daemon=True
+        ).start()
 
-    def _capture_worker(self, prompt_key):
+    def _capture_worker(self, prompt_key, command: bool = False):
         """El prompt y la ventana destino VIAJAN con el resultado, no en atributos
         del objeto: con dos solicitudes solapadas, un atributo compartido podía
         aplicarle a un texto el prompt que el usuario eligió para el otro."""
@@ -1488,7 +1545,8 @@ class VflowApp(QObject):
         finally:
             self._capture_lock.release()
         self.transform_capture_ready.emit(
-            {"text": text, "status": status, "prompt": prompt_key, "hwnd": hwnd}
+            {"text": text, "status": status, "prompt": prompt_key, "hwnd": hwnd,
+             "command": command}
         )
 
     @pyqtSlot(dict)
@@ -1502,6 +1560,9 @@ class VflowApp(QObject):
         text = captura.get("text")
         prompt_key = captura.get("prompt")
         self._new_transform_generation(captura.get("hwnd"))
+        if captura.get("command"):
+            self._start_command_listening(text)
+            return
         if prompt_key is not None:
             self._start_transform(text, prompt_key)
             return
@@ -1627,6 +1688,163 @@ class VflowApp(QObject):
         """Tercera capa de reversión (unidad 3z): devolver el texto de antes al
         portapapeles, para cuando la app destino no tenga un deshacer decente."""
         copy_text(original)
+
+    @pyqtSlot()
+    def _on_transform_discarded(self):
+        """Esc en el panel. Si estaba grabando una instrucción, hay que soltar el
+        micrófono además de cerrar la ventana: sin esto el recorder se queda vivo y
+        el siguiente dictado arranca sobre una grabación que nadie detuvo."""
+        if self._command_listening:
+            self._stop_command_listening(cancel=True)
+
+    # ------------------------------------------------------------------
+    # Command Mode (Ola 5 de PLAN-DICTADO): la selección + una instrucción HABLADA
+    #
+    # Reusa entero el camino de la Ola 3 (captura, generación de solicitud, panel,
+    # pegado por HWND) y agrega un solo tramo: grabar la orden, transcribirla y
+    # pasarla como instrucción. Las tres reglas que hereda y que no se relajan:
+    #   - G1-A: el resultado solo llega a la ventana por `transform_accepted`.
+    #   - Unidad 3z: NO se persiste nada. Ni el texto seleccionado, ni la orden
+    #     hablada, ni el resultado. Esta grabación no es un dictado y no pasa por
+    #     `self.db` ni por `raw_text`.
+    #   - Las pasadas de texto del dictado (smart commands, snippets, reformateo)
+    #     NO corren aquí: lo hablado es una instrucción para el modelo, no texto
+    #     que el usuario quiera ver escrito (contrato de CLAUDE.md sección 19).
+    # ------------------------------------------------------------------
+
+    @pyqtSlot()
+    def _on_command_hotkey(self):
+        """AltGr+V: primera pulsación captura y escucha; la segunda cierra."""
+        if self._command_listening:
+            self._stop_command_listening()
+            return
+        if self._recording_active:
+            logger.info("command mode: hay un dictado en curso, se ignora el atajo")
+            return
+        self._start_capture_worker(None, command=True)
+
+    def _start_command_listening(self, seleccion: str):
+        """Abre el panel en modo escucha y arranca a grabar la instrucción."""
+        try:
+            self.recorder.start()
+        except Exception as e:  # noqa: BLE001 — mismo trato que el dictado
+            logger.error("command mode: no se pudo iniciar la grabación: %s", e)
+            self.pill.set_state(PillWidget.STATE_ERROR)
+            if self.tray:
+                self.tray.showMessage(
+                    "Vflow · Command Mode",
+                    "No se pudo acceder al micrófono para escuchar la instrucción.",
+                    QSystemTrayIcon.MessageIcon.Warning,
+                    3500,
+                )
+            return
+        self._command_listening = True
+        _play_sound(880)
+        self._command_safety_timer.start(MAX_RECORDING_SECONDS * 1000)
+        self.pill.set_state(PillWidget.STATE_RECORDING)
+        self.transform_panel.open_listening(seleccion)
+
+    @pyqtSlot()
+    def _on_command_listening_finished(self):
+        """Enter en el panel mientras escucha: el usuario terminó de hablar."""
+        self._stop_command_listening()
+
+    def _stop_command_listening(self, cancel: bool = False):
+        """Cierra la grabación de la instrucción. ``cancel`` = Esc, no se transcribe.
+
+        El estado se limpia ANTES de cualquier cosa que pueda lanzar (mismo orden
+        que ``_on_hotkey_released``): si algo falla después, el micrófono queda
+        libre y el próximo atajo funciona.
+        """
+        if not self._command_listening:
+            return
+        self._command_listening = False
+        self._command_safety_timer.stop()
+        try:
+            duration = self.recorder.stop()
+        except Exception as e:  # noqa: BLE001
+            logger.error("command mode: fallo al detener la grabación: %s", e)
+            self.pill.set_state(PillWidget.STATE_ERROR)
+            return
+
+        if cancel:
+            self.pill.set_state(PillWidget.STATE_IDLE)
+            return
+
+        seleccion = self.transform_panel._original
+        if not seleccion:
+            self.pill.set_state(PillWidget.STATE_IDLE)
+            return
+        if duration < 0.3:
+            # Mismo umbral que el dictado: por debajo es un roce del atajo, no una
+            # instrucción. Se dice en el panel en vez de mandar silencio al modelo.
+            self.pill.set_state(PillWidget.STATE_IDLE)
+            self.transform_panel.show_error(
+                "No se escuchó ninguna instrucción. Vuelve a intentarlo con "
+                f"{COMMAND_LABEL}."
+            )
+            return
+
+        _play_sound(660)
+        # La pill vuelve a IDLE y NO se queda en "procesando": aquí el que informa
+        # de la espera es el panel, que está delante del usuario y con el foco. Una
+        # pill en PROCESSING se quedaría pegada si el usuario descarta con Esc, que
+        # es un final legítimo de este flujo (y frecuente, es el control de G1-A).
+        self.pill.set_state(PillWidget.STATE_IDLE)
+        self.transform_panel.open_waiting("escuchando…")
+        threading.Thread(
+            target=self._command_worker,
+            args=(self.recorder.get_wav_buffer(), seleccion, self._transform_gen),
+            daemon=True,
+        ).start()
+
+    def _command_worker(self, wav_buffer, seleccion: str, gen: int):
+        """Hilo daemon: transcribe la orden y transforma con ella.
+
+        No pega ni copia NADA, igual que ``_transform_worker``: el resultado sale
+        por ``transform_ready`` hacia el panel, y de ahí solo lo mueve el Enter del
+        usuario. Tampoco guarda la transcripción en ninguna parte.
+        """
+        from core import transform as _transform  # noqa: PLC0415
+
+        try:
+            instruccion = self.transcriber.transcribe(wav_buffer, net_fallback=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("command mode: fallo al transcribir la instrucción: %s", exc)
+            self.transform_ready.emit(
+                {"ok": False, "error": f"No se pudo transcribir la instrucción: {exc}",
+                 "error_kind": "backend", "gen": gen}
+            )
+            return
+
+        instruccion = (instruccion or "").strip()
+        # La instrucción entendida se muestra ANTES de esperar al modelo: si Whisper
+        # oyó otra cosa, el usuario lo ve y descarta con Esc en el acto en vez de
+        # esperar un resultado que ya sabe que va a estar mal.
+        self.command_heard.emit({"instruction": instruccion, "gen": gen})
+        if not instruccion:
+            self.transform_ready.emit(
+                {"ok": False, "error": "No se entendió ninguna instrucción hablada.",
+                 "error_kind": "empty_instruction", "gen": gen}
+            )
+            return
+
+        try:
+            res = _transform.transform_with_instruction(seleccion, instruccion)
+        except Exception as exc:  # noqa: BLE001 — no debería lanzar
+            logger.error("command mode: fallo inesperado: %s", exc)
+            res = {"ok": False, "error": str(exc), "error_kind": "backend"}
+        res["gen"] = gen
+        self.transform_ready.emit(res)
+
+    @pyqtSlot(dict)
+    def _on_command_heard(self, payload: dict):
+        """Pinta en el panel la instrucción que se entendió. No aplica nada."""
+        if payload.get("gen") != self._transform_gen:
+            return
+        instruccion = payload.get("instruction") or ""
+        if instruccion and self.transform_panel.is_open():
+            self.transform_panel.open_waiting(f"«{instruccion}»")
 
     def _meeting_stop_worker(self):
         """Detiene la reunión en background (bloquea) y emite el resultado al hilo Qt."""
@@ -1947,6 +2165,7 @@ def main():
     # Limpiar listener de hotkeys al salir
     app.aboutToQuit.connect(vflow.hotkey.stop)
     app.aboutToQuit.connect(vflow.transform_hotkey.unregister)
+    app.aboutToQuit.connect(vflow.command_hotkey.unregister)
 
     # Icono de bandeja del sistema
     tray = _setup_tray(app, port, vflow)  # noqa: F841 — debe mantenerse la referencia viva

@@ -23,7 +23,8 @@ una sexta combinación.
 
 Convive con `core/hotkey.py` sin tocarlo: aquel sigue con todos los atajos de
 dictado y reunión (que no actúan sobre una selección, así que insertar un carácter
-les es inofensivo); este se usa SOLO para Transform.
+les es inofensivo); este se usa para los atajos que SÍ actúan sobre una selección:
+Transform (`AltGr+X`, Ola 3) y Command Mode (`AltGr+V`, Ola 5).
 """
 import ctypes
 import ctypes.wintypes
@@ -57,6 +58,15 @@ TRANSFORM_HOTKEY_ID = 0xB001
 TRANSFORM_MODS = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT
 TRANSFORM_VK = 0x58          # 'X'
 TRANSFORM_LABEL = "AltGr+X"
+
+#: Atajo de Command Mode (Ola 5): la misma selección, pero la instrucción se
+#: HABLA. Va por aquí y no por `core/hotkey.py` por la misma razón que Transform y
+#: no por simetría: actúa sobre texto SELECCIONADO, así que una tecla que la
+#: aplicación de abajo interprete destruye justo lo que se iba a transformar.
+COMMAND_HOTKEY_ID = 0xB002
+COMMAND_MODS = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT
+COMMAND_VK = 0x56            # 'V', de voz
+COMMAND_LABEL = "AltGr+V"
 
 
 class _MessageFilter(QAbstractNativeEventFilter):
@@ -97,12 +107,14 @@ class GlobalHotkey(QObject):
     activated = pyqtSignal()
 
     def __init__(self, hotkey_id: int = TRANSFORM_HOTKEY_ID,
-                 mods: int = TRANSFORM_MODS, vk: int = TRANSFORM_VK):
+                 mods: int = TRANSFORM_MODS, vk: int = TRANSFORM_VK,
+                 label: str = TRANSFORM_LABEL):
         super().__init__()
         self._id = hotkey_id
         self._filter = _MessageFilter(hotkey_id, self.activated.emit)
         self._mods = mods
         self._vk = vk
+        self._label = label
         self._registered = False
         self._app = None
 
@@ -121,13 +133,13 @@ class GlobalHotkey(QObject):
             logger.warning(
                 "global_hotkey: Windows negó el registro de %s (id=%s). "
                 "Lo más probable es que otra aplicación ya lo tenga tomado.",
-                TRANSFORM_LABEL, self._id,
+                self._label, self._id,
             )
             return False
         app.installNativeEventFilter(self._filter)
         self._app = app
         self._registered = True
-        logger.info("global_hotkey: %s registrado y CONSUMIDO por Vflow", TRANSFORM_LABEL)
+        logger.info("global_hotkey: %s registrado y CONSUMIDO por Vflow", self._label)
         return True
 
     def unregister(self):
