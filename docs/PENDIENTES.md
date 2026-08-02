@@ -91,6 +91,35 @@ sin romper el principio de autosuficiencia) antes de tocar `core/meeting.py`.
 en al menos una reunion real (ver `aprendizajes.md` de esa skill). Decision registrada
 2026-07-16 (chat): opcion elegida fue "esperar el resultado de hoy" antes de redactar el spec.
 
+## 5. El Ctrl+V del DICTADO puede matar en silencio una grabación en curso (SIN DISEÑAR)
+
+**Qué es (medido, no supuesto).** Un auditor independiente lo reprodujo con el `HotkeyListener`
+REAL durante la Ola 3 de `PLAN-DICTADO`: el Ctrl+V sintético de `core/clipboard.paste_text` limpia
+`_ctrl_held` mientras el Alt físico sigue abajo, y `core/hotkey.py` corta la grabación
+(`if not (self._ctrl_held and self._alt_held): self._recording = False; self.released.emit()`).
+El mismo Ctrl+V invalida una secuencia de triple-tap de Shift si cae entre dos taps. Salida literal
+del banco: `tras Ctrl+V sintetico: recording= False ... events= ['pressed', 'released']`.
+
+**Cuándo ocurre.** El usuario ya empezó a sostener Ctrl+Alt para el dictado SIGUIENTE mientras se
+pega el anterior. No es frecuente, pero el fallo es silencioso: la grabación termina sin aviso y el
+usuario sigue hablando.
+
+**PREEXISTENTE, no lo introdujo la Ola 3.** Para el camino de Transform ya está cerrado (su pegado
+comprueba los modificadores antes de inyectar, `main.py::_paste_worker` con `hwnd` explícito). Lo
+que queda abierto es el camino del DICTADO, que se dejó a propósito: tocar el pegado del dictado
+tiene mucho más blast radius que el de Transform y merece su propia unidad.
+
+**Por qué SIN DISEÑAR.** Hay al menos dos enfoques y elegir exige medir, no opinar: (a) esperar a
+que los modificadores estén libres antes de pegar (barato, pero si el usuario los sostiene hay que
+decidir entre pegar igual (y matar la grabación) o abortar dejando el texto en el portapapeles);
+(b) que el listener IGNORE las teclas que el propio Vflow inyecta, que arregla la clase entera
+(incluye el Ctrl+C de la captura) pero toca `core/hotkey.py`, que es el corazón del dictado. La
+vía (b) por el flag `injected` de pynput además apagaría los atajos para quien use AutoHotkey o
+remapeos, así que necesita medirse contra el uso real de Johann antes de elegirla.
+
+**Origen:** auditoría de la Ola 3, 2026-08-01. Aprobado por Johann que quedara registrado aquí en
+vez de arreglarse en caliente.
+
 ## Decisiones de diseño que NO revisar sin motivo
 
 - En modo local nada sale a internet; el fallback a Groq es opt-in explícito (`GROQ_FALLBACK`, default false).
