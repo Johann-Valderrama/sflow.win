@@ -271,12 +271,14 @@ un ojo; el estado computado sí se verificó.
     (`venv\Scripts\python.exe test_transform_e2e.py command`) y así se verificó el escenario nuevo
     con su Vflow vivo. **El escenario nuevo PASA con teclas, ventanas y portapapeles reales**:
     Windows consumió AltGr+V sin que llegara a la aplicación, y el panel recibió los dos Enter.
-  - **🙋 SIN OJO HUMANO todavía (async, no bloquea nada):** falta que Johann use Command Mode en su
-    app real. Los dos verificadores y el E2E cubren el mecanismo; lo que ninguno puede juzgar es si
-    Whisper entiende bien una instrucción corta dicha rápido, y si el toggle se siente natural
-    frente a un mantener-pulsado. Nota: para probarlo hay que REINICIAR Vflow (el atajo se registra
-    al arrancar). Pasos: selecciona un párrafo → AltGr+V → di "ponlo más corto" → Enter → revisa lo
-    que dice que entendió → Enter para aplicar, o Esc.
+  - **✅ CON OJO HUMANO: Johann lo probó en su app real el 2026-08-01 y confirmó que funciona**
+    ("funcionó"). Con eso la ola no deja ninguna pieza sin verificar por un humano, a diferencia
+    de las Olas 2, 3 y 4, que sí lo dejaron. Nota para quien lo pruebe de nuevo: hay que REINICIAR
+    Vflow, porque el atajo se registra al arrancar.
+  - **Lo que sigue sin juzgarse (uso continuado, no bloquea nada):** si Whisper entiende bien una
+    instrucción corta dicha rápido, y si el toggle se siente natural frente a un mantener-pulsado.
+    Lo segundo importa porque mantener-pulsado NO es construible con `RegisterHotKey`: cambiarlo
+    exigiría cambiar de mecanismo y reabriría el bug que destruía la selección.
   - **Next action:** el plan PLAN-DICTADO no tiene más olas ejecutables. Lo que queda vivo en el
     repo son las **pruebas físicas pendientes** de la sección de arriba, la decisión abierta de
     `LOCAL_WHISPER_MODEL` (`docs/PENDIENTES.md` §3), y el pendiente **SIN DISEÑAR** del Ctrl+V del
