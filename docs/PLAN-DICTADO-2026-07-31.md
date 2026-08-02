@@ -725,6 +725,44 @@ Ola 3 (captura de selección, delimitadores, el control de G1) y solo agrega tra
 hablada en crudo. Si la Ola 3 quedó bien, esta ola es pequeña; si la Ola 3 no se hizo, esta no
 existe. Una sola unidad, `Sonnet.M`, con la misma verificación de dos lentes de la Ola 3.
 
+**Kickoff Ola 5 (copy-paste):**
+
+```
+Auto-check: declara tu modelo. Lee, en este orden: PROGRESS.md (la entrada de la OLA 3,
+completa, incluidos sus cinco arreglos y la lección del E2E), docs/PLAN-DICTADO-2026-07-31.md
+(secciones "Ola 3", su "3z EJECUTADA", "Lo que costó el PRIMER USO REAL" y esta "Ola 5"), y
+CLAUDE.md sección 23. Implementa la Ola 5, Command Mode.
+
+Command Mode = seleccionas texto, HABLAS una instrucción, y se transforma con ella. Reusa lo que
+ya existe y NO lo reconstruyas: core/clipboard.capture_selection (3a), core/transform.py con sus
+delimitadores de nonce (3b), ui/transform_panel.py (3c) y core/global_hotkey.py (3d). Lo único
+nuevo es transcribir la orden hablada y pasarla como instrucción.
+
+CINCO COSAS QUE ESTA OLA YA PAGÓ Y NO SE RE-APRENDEN. Las cinco salieron de que Johann usara la
+app, no de los tests:
+
+1. VERIFICA CON EL E2E, no solo con la suite: `venv\Scripts\python.exe test_transform_e2e.py`.
+   Esta feature vive de inyectar y recibir teclas del sistema, y un doble de esa capa NO
+   VERIFICA NADA: cuatro capas de tests daban verde con los cinco bugs vivos. Si Command Mode
+   agrega un atajo o un estado del panel, EXTIENDE ese script y córrelo.
+2. La instrucción HABLADA es dato del usuario, pero el texto SELECCIONADO sigue siendo dato NO
+   CONFIABLE: van en mensajes distintos y el seleccionado dentro de sus delimitadores con nonce.
+   Nunca concatenes los dos en una sola cadena.
+3. La regla durable de 3z aplica igual: **no se persiste nada**. Ni el texto seleccionado, ni la
+   orden hablada, ni el resultado. Y el `raw_text` del dictado NO es el sitio de esto.
+4. Todo atajo nuevo que actúe sobre una selección va por `core/global_hotkey.py`
+   (`RegisterHotKey`), NUNCA por el listener de pynput: aquel observa las teclas pero no se las
+   queda, y la tecla llega a la app y le destruye la selección al usuario.
+5. Toda ventana que deba leer teclado NO puede llevar `WindowDoesNotAcceptFocus`, y el filtro de
+   eventos nativos NO puede heredar de QObject. Los dos fallan MUDOS.
+
+Reglas: 1 unidad = 1 commit local. Antes de cerrar cualquier unidad, ROMPE el sistema a propósito
+y comprueba que el test cae y que no caen otros veinte; revierte la mutación A MANO (nunca
+`git checkout`, hay trabajo sin commitear) y con la reversión en un `finally` si automatizas.
+Verificación de la ola: la misma de la Ola 3, dos `verificador-qa` read-only con lentes
+ortogonales, más el E2E.
+```
+
 ---
 
 ## La Ola 6 SE ELIMINÓ (G2-C: el dashboard se queda en el navegador)

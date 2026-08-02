@@ -294,7 +294,8 @@ un ojo; el estado computado sí se verificó.
     correcto a un problema que NO era el suyo, y le rompió lo que le funcionaba. **Antes de cambiar
     algo que el usuario ya usa, confirmar que el fallo que se arregla es EL SUYO.**
   - **Next action:** ventana nueva con `Lee docs/PLAN-DICTADO-2026-07-31.md y ejecuta el Kickoff
-    Ola 5.` Modelo: `Opus.H` o `Fable.H`. **Antes de dar por buena cualquier unidad de la Ola 5, correr
+    Ola 5 (esta al final de la seccion "Ola 5").` Modelo: `Opus.H` o `Fable.H`. Ese kickoff ya lleva
+    dentro las CINCO cosas que esta ola pago y que un agente nuevo repetiria. **Antes de dar por buena cualquier unidad de la Ola 5, correr
     `venv\Scripts\python.exe test_transform_e2e.py`**: Command Mode reusa exactamente las piezas que
     fallaron aquí (captura, atajo, panel, pegado). Queda solo la **Ola 5** (Command Mode: voz + selección),
     que reusa TODO lo de la Ola 3 y solo agrega transcribir la orden hablada. Ojo: la regla durable
