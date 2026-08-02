@@ -280,9 +280,12 @@ un ojo; el estado computado sí se verificó.
     Lo segundo importa porque mantener-pulsado NO es construible con `RegisterHotKey`: cambiarlo
     exigiría cambiar de mecanismo y reabriría el bug que destruía la selección.
   - **Next action:** el plan PLAN-DICTADO no tiene más olas ejecutables. Lo que queda vivo en el
-    repo son las **pruebas físicas pendientes** de la sección de arriba, la decisión abierta de
-    `LOCAL_WHISPER_MODEL` (`docs/PENDIENTES.md` §3), y el pendiente **SIN DISEÑAR** del Ctrl+V del
-    dictado (`docs/PENDIENTES.md` §5).
+    repo son las **pruebas físicas pendientes** de la sección de arriba y el pendiente
+    **SIN DISEÑAR** del Ctrl+V del dictado (`docs/PENDIENTES.md` §5).
+    *(Corregido 2026-08-01 20:35: esta línea listaba como abierta la decisión de
+    `LOCAL_WHISPER_MODEL`, y Johann ya la había cerrado horas antes, se queda en `small`, commit
+    `07e676c`. Se escribió a las 20:00 leyendo un estado que ya era falso; es el modo de fallo que
+    describe `re-medir-estado-de-maquina-antes-de-repetirlo`, con dos ventanas trabajando a la vez.)*
 - **OLA 3 COMPLETA (2026-08-01), Transform sobre selección: 6 commits** `9bde38e` (`3z`, diseño) →
   `ea0afb8` (`3a`) → `0cc26e1` (`3b`) → `bd22acc` (`3c`) → `6a07825` (`3d`) → `866af43` (`3d-fix`).
   Suite 1042 → **1125 pass, 0 fail**. Dirigió y ejecutó `Opus.H` inline; verificaron 2
