@@ -618,6 +618,27 @@ class TestCicloDeCommandMode:
         assert app_falsa.recorder.stopped == 1
         assert lanzados == []
 
+    def test_si_falla_al_detener_el_microfono_no_queda_escuchando(self, app_falsa, monkeypatch):
+        """Lo señaló un verificador independiente: había test del fallo al ARRANCAR
+        el micrófono pero no del fallo al DETENERLO. Importa porque el estado se
+        limpia ANTES del `try`: si no fuera así, un fallo aquí dejaría la app
+        creyendo que sigue escuchando y el atajo no volvería a funcionar nunca."""
+        import main
+
+        lanzados = []
+        monkeypatch.setattr(main.threading, "Thread",
+                            lambda **kw: lanzados.append(kw) or _NoOp())
+        app_falsa._start_command_listening("mi seleccion")
+
+        def _explota():
+            raise RuntimeError("el dispositivo desaparecio")
+
+        app_falsa.recorder.stop = _explota
+        app_falsa._stop_command_listening()
+        assert app_falsa._command_listening is False
+        assert lanzados == [], "no hay audio que transformar si no se pudo cerrar"
+        assert app_falsa._command_safety_timer.parado == 1
+
     def test_esc_sin_escucha_activa_no_hace_nada(self, app_falsa):
         app_falsa._on_transform_discarded()
         assert app_falsa.recorder.stopped == 0
