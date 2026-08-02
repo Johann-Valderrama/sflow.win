@@ -567,14 +567,22 @@ uso diario, porque entonces el Undo sí sería la vía de escape natural.
 | Dictado | `main.py:777` (worker de chunk), `main.py:854` (tramo final), `main.py:846` (traducción) |
 | Reunión | `core/meeting.py:961` |
 | URL (YouTube/TikTok/Instagram) | `core/url_transcribe.py:549` y `:553` (reintento) |
+| **Command Mode** (Ola 5, sección 24) | `main.py::_command_worker` (la instrucción hablada) |
 
-| Pasada | Dictado | Traducción | Reunión | URL |
-|---|---|---|---|---|
-| 1. Filtro de alucinaciones | sí | sí | sí | sí |
-| 2. Diccionario personal | sí | sí | sí | sí |
-| 3. Smart commands | **sí** | **no** | **no** | **no** |
-| 4. Snippets | **sí** | **no** | **no** | **no** |
-| 5. Reformateo LLM | sí (opt-in) | no | no | no |
+| Pasada | Dictado | Traducción | Reunión | URL | Command Mode |
+|---|---|---|---|---|---|
+| 1. Filtro de alucinaciones | sí | sí | sí | sí | sí |
+| 2. Diccionario personal | sí | sí | sí | sí | sí |
+| 3. Smart commands | **sí** | **no** | **no** | **no** | **no** |
+| 4. Snippets | **sí** | **no** | **no** | **no** | **no** |
+| 5. Reformateo LLM | sí (opt-in) | no | no | no | **no** |
+
+**El cuarto flujo llegó, y la regla durable de abajo lo resolvió sin discusión** (Ola 5,
+2026-08-01): en Command Mode el hablante SÍ es el usuario, pero el destino de lo que dice NO es
+la ventana en foco: es el mensaje `system` de un modelo. Nadie va a leer esa frase escrita, así
+que puntuarla o expandir un snippet dentro de ella no arregla nada y sí puede cambiar la orden.
+Las pasadas 1 y 2 corren igual porque viven dentro de `Transcriber` y aplican a todo lo que se
+transcribe.
 
 **La regla durable, que es lo que hay que recordar cuando nazca un cuarto flujo y esta tabla
 envejezca:** una pasada que edita el texto según lo que el hablante QUISO ESCRIBIR solo puede correr
@@ -886,6 +894,61 @@ no tenga un deshacer decente.
   dictado: cada uno tiene que poder decir en UNA línea cuándo se usa y no el de al lado. Los edita el
   usuario en `transform_prompts.json` del data dir (JSON roto = los de fábrica, fail-open).
 
+### 24. Command Mode: la misma selección, pero la instrucción se HABLA (Ola 5 de PLAN-DICTADO, 2026-08-01)
+
+Seleccionas texto en cualquier aplicación, pulsas **AltGr+V**, **dices** qué hacer con él
+("ponlo en pasado", "quítale el tono agresivo", "tradúcelo al portugués"), pulsas **Enter** y
+el resultado aparece en el mismo panel de la sección 23: se aplica con Enter y se descarta con
+Esc. Es la sección 23 con una sola pieza nueva, la instrucción hablada, y por eso hereda sus
+tres controles enteros en vez de tener los suyos.
+
+> **CAMBIO DE COMPORTAMIENTO menor:** AltGr+V pasa a estar tomado por Vflow y de forma
+> EXCLUSIVA (`RegisterHotKey`): la aplicación en foco ya no recibe esa combinación. Se anuncia
+> aquí en vez de colarse, mismo criterio que `SMART_COMMANDS_ENABLED` (sección 20),
+> `LOCAL_DEVICE` (sección 22) y AltGr+X (sección 23).
+
+- **El ciclo, con sus tres teclas**: AltGr+V captura la selección y abre el panel escuchando (la
+  pill muestra las barras, como en un dictado); Enter cierra la escucha, o un segundo AltGr+V
+  hace lo mismo (`RegisterHotKey` solo avisa del PRESS, así que no existe un "soltar" que
+  detectar, y por eso es un toggle y no un mantener-pulsado); Esc cancela y suelta el micrófono.
+  El panel muestra la instrucción que se ENTENDIÓ antes de esperar al modelo, para que un
+  "Whisper oyó otra cosa" se descarte en el acto en vez de después de la espera.
+- **La instrucción hablada es dato del usuario; el texto seleccionado NO.** Van en mensajes
+  distintos y el seleccionado dentro de sus delimitadores con nonce
+  (`core/transform.build_command_messages`), exactamente igual que con los 8 prompts. El bloque
+  de delimitadores lo arma **una sola función** (`_wrap_selected_text`) para los dos caminos: con
+  dos copias del formato, un cambio en una dejaría al otro camino con un blindaje distinto y
+  nada lo delataría. `GUARD_RULE` sigue yendo aparte y no se puede quitar.
+- **No se persiste NADA** (regla durable de `3z`, sección 23): ni el texto seleccionado, ni la
+  orden hablada, ni el resultado. La orden hablada es la tentación nueva porque se parece a un
+  dictado: no lo es, no crea fila en `transcriptions` y **no tiene `raw_text`**.
+- **Las pasadas de texto del dictado NO corren aquí** (contrato de la sección 19, eje de
+  ALCANCE): lo hablado es una instrucción para el modelo, no texto que el usuario vaya a ver
+  escrito en una ventana, así que smart commands, snippets y el reformateo por preset no se
+  aplican. El filtro de alucinaciones y el diccionario personal sí, porque viven dentro de
+  `Transcriber` y aplican a todo lo que se transcribe.
+- **Guarda nueva y necesaria: es el MISMO objeto `recorder` que usa el dictado.** Y AltGr ES
+  Ctrl+Alt en Windows, así que el propio atajo puede armar un dictado (`ARMING_DELAY`) encima de
+  la instrucción que el usuario está hablando. `_on_hotkey_pressed` y `_on_translate_pressed` lo
+  rechazan mientras Command Mode escucha; AltGr+X también. Un temporizador de seguridad
+  (`MAX_RECORDING_SECONDS`) cierra una escucha olvidada.
+- **La pill vuelve a IDLE al terminar de hablar, no a PROCESSING.** El que informa de la espera
+  es el panel, que está delante del usuario y con el foco; una pill en PROCESSING se quedaría
+  pegada cuando el usuario descarta con Esc, que es un final legítimo y frecuente de este flujo
+  (es el control de G1-A).
+- **Sin ajustes propios y sin variable de entorno nueva**: reusa `TRANSFORM_TIMEOUT_SECONDS`, las
+  guardas del modo local (fail-closed con `endpoint` + `INSIGHTS_FALLBACK`) y el mismo tope de
+  tamaño, que RECHAZA en vez de truncar. Los 8 prompts del panel de Ajustes siguen siendo los de
+  la sección 23; aquí la instrucción no se guarda en ninguna parte porque se dice cada vez.
+
+**Verificación (2026-08-01):** suite 1136 → 1196 pass, 0 fail (`tests/test_command_mode.py`), más
+el escenario 2 de `test_transform_e2e.py` corrido con teclas, ventanas y portapapeles REALES. Ese
+E2E es la única capa que puede ver las dos cosas que importan aquí (que Windows consuma AltGr+V y
+que el panel reciba el Enter), y por eso se extendió en vez de confiar en los tests herméticos.
+**Con Vflow corriendo, Windows le niega el atajo al script**: por eso acepta un escenario suelto
+(`venv\Scripts\python.exe test_transform_e2e.py command`), para no tener que cerrarle la
+aplicación al usuario.
+
 ## Security & Privacy
 
 ### 1. API Key Encryption (DPAPI)
@@ -932,6 +995,7 @@ Edit `core/hotkey.py`:
 - **AltGr+A (HUD proactivo, Ola 5)**: toggles the floating proactive HUD open/closed (same action as a right-click on the pill). Auto-repeat suppressed.
 - **AltGr+M ("me perdí", Ola 5)**: opens the HUD if closed and triggers an instant summary of the last ~2 minutes via `answer_live` (worker thread, non-blocking). Auto-repeat suppressed.
 - **AltGr+X (Transform sobre selección, Ola 3 de PLAN-DICTADO)**: captura el texto seleccionado en la app en foco y abre el panel para elegir uno de los 8 prompts con su número (1-8); el resultado se previsualiza y se aplica con Enter o se descarta con Esc. Auto-repeat suprimido. Ver la sección 23.
+- **AltGr+V (Command Mode, Ola 5 de PLAN-DICTADO)**: lo mismo, pero la instrucción se HABLA en vez de elegirse de una lista. Primera pulsación: captura la selección y empieza a escuchar. Enter (o un segundo AltGr+V) cierra la escucha; el resultado se previsualiza igual y se aplica con Enter o se descarta con Esc. Registrado con `RegisterHotKey` como AltGr+X, así que Windows lo CONSUME. Ver la sección 24.
 - To customize intervals, edit `DOUBLE_TAP_INTERVAL` in `config.py`.
 - **Arming Delay** — Edit `ARMING_DELAY` in `config.py` (default: 0.15s). Modes 1 and 3 (hold keys) require the hotkey combination to be pressed for this duration *without other keys* before recording starts. This prevents accidental triggers when using IDE shortcuts like Ctrl+Alt+L. Set to 0 for immediate activation (at the cost of possible misfires).
 
